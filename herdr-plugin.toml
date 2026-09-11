@@ -1,0 +1,32 @@
+id = "office.view"
+name = "Herdr Office"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "See your agents as people in an open-plan office. Click a desk for what they are up to; they raise a hand when they need approval."
+platforms = ["macos", "linux"]
+
+[[panes]]
+id = "office"
+title = "Office"
+placement = "zoomed"
+command = ["node", "office.mjs"]
+
+[[panes]]
+id = "office-popup"
+title = "Office (peek)"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["node", "office.mjs"]
+
+[[actions]]
+id = "open"
+title = "Open the office"
+contexts = ["workspace"]
+command = ["node", "scripts/open-office.mjs"]
+
+[[actions]]
+id = "peek"
+title = "Peek at the office"
+contexts = ["workspace"]
+command = ["node", "scripts/open-office.mjs", "--popup"]

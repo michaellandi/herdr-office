@@ -1,0 +1,17 @@
+# Nothing here is built, so this list is short on purpose.
+
+# Editor and OS litter
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# There are no dependencies, but a stray `npm i` should not land in a commit.
+node_modules/
+package-lock.json
+
+# Scratch renders, captured pane dumps, debug output
+*.log
+_sandbox/
+tmp/

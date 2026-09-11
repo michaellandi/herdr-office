@@ -1,0 +1,36 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The marketplace index installs whatever is on the default branch, so main has
+  # to stay installable. A weekly run catches a Node release breaking us before a
+  # stranger does.
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The manifest claims macos and linux, so both get tested. Node 18 is the
+        # floor the README promises.
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # No install step: the plugin has no dependencies, which is the whole point.
+      - name: tests
+        run: node --test test/*.test.mjs
+      - name: render a frame for real
+        # The tests call renderFrame directly, so this is the only thing that
+        # proves the entrypoint boots, parses its flags and writes a frame out.
+        run: COLUMNS=105 LINES=45 node office.mjs --once --demo > /dev/null
+      - name: the demo roster renders at an awkward size too
+        run: COLUMNS=40 LINES=16 node office.mjs --once --demo > /dev/null

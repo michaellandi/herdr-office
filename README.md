@@ -1,5 +1,10 @@
 # Herdr Office
 
+[![check](https://github.com/michaellandi/herdr-office/actions/workflows/check.yml/badge.svg)](https://github.com/michaellandi/herdr-office/actions/workflows/check.yml)
+[![herdr 0.9.0+](https://img.shields.io/badge/herdr-0.9.0%2B-7c3aed.svg)](https://herdr.dev)
+[![node 18+](https://img.shields.io/badge/node-18%2B-brightgreen.svg)](https://nodejs.org)
+[![license MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A [Herdr](https://herdr.dev) plugin that draws your agents as people in an open-plan
 office. Every agent is a person at a desk. They type while they work, doze when they
 are idle, and **raise a hand** when they are blocked on an approval. Click a desk (or
@@ -15,7 +20,14 @@ answers it from right here without walking over to their pane.
 ## Install
 
 ```sh
-git clone <this repo> herdr-office && cd herdr-office
+herdr plugin install michaellandi/herdr-office
+```
+
+Or clone it and link it instead, which is the one you want if you plan to change the
+art:
+
+```sh
+git clone https://github.com/michaellandi/herdr-office.git && cd herdr-office
 herdr plugin link .
 ```
 

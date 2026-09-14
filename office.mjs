@@ -11,7 +11,7 @@
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
-import { renderFrame } from './src/render.mjs';
+import { renderFrame, HIRE_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { width } from './src/text.mjs';
@@ -122,11 +122,12 @@ function view() {
     message,
     drag,
     busy,
+    hire,
   };
 }
 
 let hitboxes = [];
-let grid = { cols: 0, rows: 0, ids: [] };
+let grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
 
 function draw() {
   const rendered = renderFrame(view());
@@ -149,6 +150,9 @@ function draw() {
 /* --------------------------------------------------------------------- data */
 
 function ensureSelection() {
+  // The empty desk is a real place to be standing even though nobody is in the
+  // roster under that id, so a poll must not walk you off it.
+  if (selectedId === HIRE_ID) return;
   if (selectedId && roster.find(selectedId)) return;
   const raised = roster.people.find((p) => p.status === 'blocked');
   selectedId = (raised || roster.people[0])?.id ?? null;
@@ -366,6 +370,10 @@ function move(dx, dy) {
   if (dx) next = idx + dx;
   if (dy) next = idx + dy * cols;
   if (next < 0 || next >= ids.length) {
+    // The empty desk is the last thing on the last floor and is in nobody's
+    // roster, so there is nothing past it to page to. Walking off it stays put
+    // rather than teleporting to whoever happens to be first.
+    if (selectedId === HIRE_ID) return;
     // Walking off the edge of the visible floor moves through the full roster,
     // which is what makes paging work with only arrow keys.
     const all = roster.people.map((p) => p.id);
@@ -420,6 +428,10 @@ async function respond(kind) {
 
 async function jumpToPane() {
   if (!selectedId) return;
+  if (selectedId === HIRE_ID) {
+    note('nobody sits there yet');
+    return;
+  }
   if (DEMO) {
     note('demo mode: nowhere to jump');
     return;
@@ -468,6 +480,112 @@ async function swapDesks(sourceId, targetId) {
   }
 }
 
+/* ------------------------------------------------------------------- hiring */
+
+// The empty desk. Hiring is two calls: open a tab, then start an agent in the
+// pane that tab came with (`agent.start` does not create one, and it wants a pane
+// sitting at an interactive shell prompt, which a fresh tab is).
+//
+// It is the one thing in the office that creates something rather than reporting
+// on it, so it takes two deliberate steps: walk to the empty desk, then pick a
+// kind. Nothing is started by a single stray click on the floor.
+let hire = null;
+
+// Long enough for a cold agent on a slow morning. The server's own default is
+// 30s, which a first-run agent downloading something will blow straight through.
+const HIRE_TIMEOUT_MS = 90000;
+
+async function agentKinds() {
+  if (DEMO) return ['claude', 'codex', 'gemini', 'kiro', 'opencode', 'amp', 'cursor', 'droid'];
+  const res = await api.request('server.agent_manifests', {});
+  // The manifests are what this machine can actually start, which is a different
+  // (usually shorter) list than the kinds the CLI knows the names of.
+  return (res?.manifests || [])
+    .map((m) => m.agent)
+    .filter(Boolean)
+    .sort();
+}
+
+async function openHire() {
+  if (hire) return;
+  selectedId = HIRE_ID;
+  // The menu and a desk's detail share the bottom half of the pane, so opening
+  // one puts the other away.
+  detail = null;
+  hire = { kinds: [], index: 0, pending: null, error: null };
+  prevLines = [];
+  draw();
+  try {
+    const kinds = await agentKinds();
+    if (hire && !hire.pending) hire = { ...hire, kinds };
+  } catch (err) {
+    if (hire) hire = { ...hire, error: `cannot ask herdr who it can start: ${err.code || err.message}` };
+  }
+  draw();
+}
+
+function closeHire() {
+  if (!hire) return;
+  hire = null;
+  prevLines = [];
+  draw();
+}
+
+// The menu is laid out in the same shape it is stored in, so walking it is
+// walking the grid that is on the screen. `menuVisible` is the stop: on a short
+// pane the tail of the list is not drawn, and a cursor you cannot see is worse
+// than a list you cannot reach.
+function moveHire(dx, dy) {
+  if (!hire || hire.pending || !hire.kinds.length) return;
+  const limit = Math.min(hire.kinds.length, grid.menuVisible || hire.kinds.length);
+  const next = hire.index + dx + dy * Math.max(1, grid.menuCols);
+  if (next < 0 || next >= limit) return;
+  hire = { ...hire, index: next };
+}
+
+// `agent.start` waits for the agent to reach its own prompt, which can take the
+// better part of a minute, and every request on the main socket is queued behind
+// the one in front of it. So a hire gets its own connection: the office keeps
+// polling and animating while somebody is being shown to their desk.
+async function startHire(kind) {
+  if (!hire || hire.pending || !kind) return;
+  if (DEMO) {
+    note(`demo mode: would open a tab and start ${kind} in it`);
+    return;
+  }
+  hire = { ...hire, pending: kind, error: null };
+  prevLines = [];
+  draw();
+  // Same project as everyone else, by default: an agent hired into the wrong
+  // directory is worse than no agent, and the focused desk is the best guess at
+  // what you are actually working on.
+  const cwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || undefined;
+  let side = null;
+  try {
+    side = await new ApiClient().open();
+    const tab = await side.request('tab.create', { cwd, label: kind, focus: false });
+    const paneId = tab?.root_pane?.pane_id;
+    if (!paneId) throw new Error('herdr opened a tab with no pane in it');
+    await side.request('agent.start', { name: kind, kind, pane_id: paneId, timeout_ms: HIRE_TIMEOUT_MS }, HIRE_TIMEOUT_MS + 5000);
+    hire = null;
+    selectedId = paneId;
+    note(`${kind} is at a desk now`);
+    prevLines = [];
+    await refresh();
+  } catch (err) {
+    // The tab is left where it is on purpose. It is a pane at a shell prompt,
+    // which is harmless, and closing panes on somebody's behalf because a start
+    // timed out is how you close the one they had just started typing in.
+    const why = `could not hire ${kind}: ${err.code || err.message}. The tab it opened is still there.`;
+    if (hire) hire = { ...hire, pending: null, error: why };
+    else note(why);
+  } finally {
+    side?.close();
+    prevLines = [];
+    draw();
+  }
+}
+
 // Nothing while the button is up. Once it goes down on a desk this holds where
 // it went down, so a press can turn out to have been a drag later without the
 // click handler having had to guess up front.
@@ -488,9 +606,17 @@ function onMouse(ev) {
   drag = next;
   if (!act) return;
   if (act.id) selectedId = act.id;
-  if (act.type === 'answer') respond(act.action);
-  else if (act.type === 'open') loadDetail(act.id, { force: true });
-  else if (act.type === 'swap') {
+  if (act.type === 'answer') {
+    // The empty desk and the menu cells are buttons like [y] and [n] are, so they
+    // arrive here. Neither one starts anything by itself: the desk opens the menu,
+    // and only a cell in the menu is a hire.
+    if (act.action === 'hire') openHire();
+    else if (act.action.startsWith('hire:')) startHire(act.action.slice(5));
+    else respond(act.action);
+  } else if (act.type === 'open') {
+    if (act.id === HIRE_ID) openHire();
+    else loadDetail(act.id, { force: true });
+  } else if (act.type === 'swap') {
     selectedId = act.from;
     swapDesks(act.from, act.to);
   } else if (act.type === 'cancel') note('put it back');
@@ -518,18 +644,36 @@ function onInput(chunk) {
   if (str === '\x1b') {
     // A desk in mid-air outranks the panel: esc puts it down first.
     if (drag) return cancelDrag();
+    if (hire) return closeHire();
     detail = null;
     prevLines = [];
     draw();
     return;
   }
+
+  // While the menu is open the arrows are picking an agent, not walking the floor.
+  // Everything else is swallowed, because a keystroke meant for the menu must not
+  // fall through and answer a prompt at whatever desk was selected before.
+  if (hire) {
+    if (hire.pending) return;
+    if (str === '\x1b[A' || str === 'k') moveHire(0, -1);
+    else if (str === '\x1b[B' || str === 'j') moveHire(0, 1);
+    else if (str === '\x1b[D' || str === 'h') moveHire(-1, 0);
+    else if (str === '\x1b[C' || str === 'l' || str === '\t') moveHire(1, 0);
+    else if (str === '\r' || str === '\n' || str === ' ') startHire(hire.kinds[hire.index]);
+    draw();
+    return;
+  }
+
+  if (str === '+') return openHire();
   if (str === '\x1b[A' || str === 'k') move(0, -1);
   else if (str === '\x1b[B' || str === 'j') move(0, 1);
   else if (str === '\x1b[D' || str === 'h') move(-1, 0);
   else if (str === '\x1b[C' || str === 'l') move(1, 0);
   else if (str === '\t') move(1, 0);
   else if (str === '\r' || str === '\n' || str === ' ') {
-    if (selectedId) loadDetail(selectedId, { force: true });
+    if (selectedId === HIRE_ID) openHire();
+    else if (selectedId) loadDetail(selectedId, { force: true });
   } else if (str === 'y') respond('approve');
   else if (str === 'n') respond('deny');
   else if (str === 'f') jumpToPane();
@@ -540,7 +684,7 @@ function onInput(chunk) {
     note('refreshed');
   } else return;
 
-  if (detail && selectedId && detail.id !== selectedId) loadDetail(selectedId, { force: true });
+  if (detail && selectedId && selectedId !== HIRE_ID && detail.id !== selectedId) loadDetail(selectedId, { force: true });
   draw();
 }
 

@@ -8,9 +8,9 @@
 // cells. No exceptions, no sizes excused, every layout branch.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderFrame } from '../src/render.mjs';
+import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, officeRoster, viewOf } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, officeRoster, viewOf } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -40,10 +40,12 @@ test('with a desk open, in every state the panel can be in', () => {
 });
 
 test('an empty office', () => {
-  // Its own layout: no desks, two lines of prose, and the furniture. The second
-  // line is 63 characters, which is wider than several of these panes.
+  // Two branches, depending on the pane: big enough for one desk and it draws the
+  // empty one, too small and it is two lines of prose plus the furniture. The
+  // prose is 61 characters, which is wider than several of these panes.
   for (const [cols, rows] of SIZES) {
     assertExact(viewOf({ people: [], cols, rows }), `empty ${cols}x${rows}`);
+    assertExact(viewOf({ people: [], cols, rows, selectedId: HIRE_ID }), `empty at the desk ${cols}x${rows}`);
   }
 });
 
@@ -83,6 +85,23 @@ test('dragging a desk, in every drag state', () => {
     // dragged right now.
     assertExact(viewOf({ people, cols, rows, busy: new Set(['w1:p1', 'w1:p3']) }), `busy ${cols}x${rows}`);
     assertExact(viewOf({ people: many, cols, rows, busy: new Set(['w1:p1', 'w1:p3']) }), `busy list ${cols}x${rows}`);
+  }
+});
+
+test('hiring, in every state the menu can be in', () => {
+  // The menu is a grid inside a grid: twenty-one names in fixed cells, laid out in
+  // however many columns fit, with a name in there deliberately far longer than a
+  // cell. Same rule as everything else, no line over.
+  const many = officeRoster(new Array(40).fill('working')).people;
+  for (const [cols, rows] of SIZES) {
+    for (const [name, hire] of HIRES) {
+      assertExact(viewOf({ people, cols, rows, hire, selectedId: HIRE_ID }), `hire=${name} ${cols}x${rows}`);
+      // With nobody in the office, the empty desk is the only thing on the floor.
+      assertExact(viewOf({ people: [], cols, rows, hire, selectedId: HIRE_ID }), `hire=${name} empty ${cols}x${rows}`);
+      // And over the compact list, where there is no empty desk to stand at but
+      // the menu still opens on the key.
+      assertExact(viewOf({ people: many, cols, rows, hire, selectedId: HIRE_ID }), `hire=${name} list ${cols}x${rows}`);
+    }
   }
 });
 

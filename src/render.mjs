@@ -3,7 +3,20 @@
 // navigation. Nothing here talks to a socket or a terminal.
 import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity } from './theme.mjs';
-import { pose, screen, SCREENS, PROPS, POSE_W, SCREEN_W, MON_W, ART_ROWS, HAIR_FROM, HAIR_TO } from './sprites.mjs';
+import {
+  pose,
+  screen,
+  SCREENS,
+  PROPS,
+  VACANT_CHAIR,
+  VACANT_SCREEN,
+  POSE_W,
+  SCREEN_W,
+  MON_W,
+  ART_ROWS,
+  HAIR_FROM,
+  HAIR_TO,
+} from './sprites.mjs';
 
 // A cubicle. Two cells of wall between the border and anything written on it,
 // and one cell of desk between a person and their monitor: a card packed to its
@@ -17,6 +30,11 @@ export const TILE_H = 16;
 const GAP_X = 1; // carpet showing between cubicles
 const GAP_Y = 1;
 const CHROME_ROWS = 4; // header bar + spacer, spacer + key bar
+
+// The empty desk stands where a pane id would, so walking the floor and clicking
+// reach it with no special case. It cannot collide with a real pane id: herdr
+// pane ids are `<workspace>:<pane>`, and none of them start with a plus.
+export const HIRE_ID = '+hire';
 
 const PHRASE = { blocked: 'need you', working: 'working', done: 'done', idle: 'idle', unknown: 'unsure' };
 const ORDER = ['blocked', 'working', 'done', 'idle', 'unknown'];
@@ -283,6 +301,59 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   return rows;
 }
 
+// The empty desk at the end of the row. Same frame, same footprint, nobody in
+// the chair: an office with a spare desk in it invites you to fill it, which is
+// a better affordance than a key nobody knows about.
+function vacantTile({ selected, pending, kind }) {
+  const borderFg = pending ? P.faint : selected ? P.accent : P.wall;
+  const chrome = { borderFg, bold: selected && !pending };
+  const row = (inner, spans, rowBg = P.cubicleAlt) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
+  const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
+  const art = (figure, monitor) => figure + ' '.repeat(MON_X - POSE_W) + monitor;
+  // An off monitor rather than a dark screen with nothing on it: the bezel is
+  // there, the glass is not lit.
+  const mon = [
+    { from: MON_X, to: INNER, fg: P.faint },
+    { from: MON_X + 1, to: INNER - 1, fg: P.faint, bg: P.screenOff },
+    { from: INNER - 1, to: INNER, fg: P.faint },
+  ];
+
+  const plate = cells();
+  plate.add('▌ ', { fg: P.wall });
+  plate.add(pending ? 'HIRING' : 'EMPTY DESK', { fg: P.dim, bold: false });
+  plate.gap(INNER);
+
+  const bar = cells();
+  bar.add('▌ ', { fg: P.accent });
+  bar.add(pending ? `starting ${truncate(kind || 'an agent', 14)}` : 'nobody here yet', { fg: pending ? P.accent : P.dim });
+  bar.gap(INNER);
+
+  const hint = pending ? 'give it a moment' : 'enter or click to hire';
+  const rows = [
+    edge('╭', '╮', TILE_W, chrome),
+    blank(),
+    row(plate.out().text, plate.out().spans),
+    blank(),
+    blank(),
+    blank(),
+    row(art(VACANT_CHAIR[0], BEZEL_TOP), [{ from: MON_X, to: INNER, fg: P.faint }]),
+    row(art(VACANT_CHAIR[1], '│' + VACANT_SCREEN[0] + '│'), [{ from: 0, to: POSE_W, fg: P.wall }, ...mon]),
+    row(art(VACANT_CHAIR[2], '│' + VACANT_SCREEN[1] + '│'), [{ from: 0, to: POSE_W, fg: P.wall }, ...mon]),
+    row(art(VACANT_CHAIR[ART_ROWS - 1], BEZEL_BOT), [
+      { from: 0, to: POSE_W, fg: P.wall },
+      { from: MON_X, to: INNER, fg: P.faint },
+    ]),
+    row(DESK_TOP, [{ from: KEYS_X, to: KEYS_X + 10, fg: P.keys }], P.deskTop),
+    row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
+    blank(),
+    row(bar.out().text, bar.out().spans),
+    row(padEnd(hint, INNER), [{ from: 0, to: Infinity, fg: selected && !pending ? P.soft : P.faint }]),
+    edge('╰', '╯', TILE_W, chrome),
+  ];
+  if (rows.length !== TILE_H) throw new Error(`the empty desk is ${rows.length} rows, want TILE_H ${TILE_H}`);
+  return rows;
+}
+
 /* -------------------------------------------------------------------- chrome */
 
 function headerLines(view) {
@@ -319,10 +390,22 @@ function keyHints(view) {
   // the footer says that and nothing else rather than listing keys that are on
   // hold until the mouse button comes back up.
   if (view.drag?.active) return [['drop', 'on a desk to swap the panes'], ['esc', 'put it back']];
+  // Same reasoning while the hire menu is open: the arrows are picking an agent,
+  // not walking the floor, and saying otherwise would be a lie.
+  if (view.hire) {
+    return view.hire.pending
+      ? [['esc', 'stop watching']]
+      : [['hjkl', 'pick an agent'], ['enter', 'hire them'], ['esc', 'never mind']];
+  }
+  // Standing at the empty desk, enter means hire, so the footer says that and
+  // does not also offer the two hints it would have meant at anybody else's desk.
+  const vacant = view.selectedId === HIRE_ID;
   return [
+    ...(vacant ? [['enter', 'hire somebody for this desk']] : []),
     ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
     ['hjkl', 'walk'],
-    view.detail ? ['esc', 'close'] : ['enter', 'what are you up to?'],
+    ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
+    ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
     ['f', 'jump to pane'],
     ['r', 'refresh'],
@@ -458,7 +541,9 @@ function emptyFloor(view, floorRows) {
     lines[y] = fill(left, P.carpet) + paint(text, [{ from: 0, to: Infinity, ...style }], { bg: P.carpet }) + fill(cols - left - width(text), P.carpet);
   };
   say('An empty office. Eerie.', { fg: P.soft }, mid);
-  say('Start an agent in a Herdr pane and they will turn up at a desk.', { fg: P.dim }, mid + 2);
+  // This is the pane too small to draw a single desk in, so there is no empty
+  // desk to click: the key is the only way in, and it has to be said out loud.
+  say('Press + to hire, or start an agent in a Herdr pane.', { fg: P.dim }, mid + 2);
   // The plants keep working even when nobody else does.
   decorate(lines, cols, floorRows, mid + 4);
   return lines;
@@ -531,6 +616,88 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     hitboxes.push({ id: person.id, x: 0, y: startRow + i, w: cols, h: 1 });
   }
   return lines;
+}
+
+/* ---------------------------------------------------------------- hire panel */
+
+// How wide one name in the menu gets. The longest kind herdr ships is nine
+// characters, and a fixed cell means the grid the arrow keys walk is the grid you
+// can see, which is the whole trick to making a menu navigable.
+const MENU_CELL = 12;
+
+// Who you can hire. One cell per agent kind, laid out in as many columns as fit,
+// so the arrow keys move through it the same way they move through the floor.
+// Returns the menu's own shape (columns, and how many cells actually fit) so the
+// caller can walk exactly the grid that is on the screen and no further.
+function hirePanel(view, panelRows, hitboxes, startRow) {
+  const { hire, size } = view;
+  const PW = Math.min(size.cols, Math.max(24, size.cols - 4));
+  const TEXT = PW - 4;
+  const left = Math.max(0, Math.floor((size.cols - PW) / 2));
+  const chrome = { borderFg: hire.error ? STATUS.blocked.fg : P.accent, bold: false };
+  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const body = [];
+
+  const head = cells();
+  head.add('╭─ ');
+  head.add('hire', { fg: P.ink, bold: true });
+  head.add(truncate(hire.pending ? ` · starting ${hire.pending}` : ' · who do you want at that desk?', Math.max(0, PW - head.w - 2)), { fg: P.dim });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
+  head.add('╮');
+  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  const menuCols = Math.max(1, Math.floor(TEXT / MENU_CELL));
+  let menuVisible = 0;
+  if (hire.error) {
+    body.push(row(truncate(hire.error, TEXT), [{ from: 0, to: Infinity, fg: STATUS.blocked.fg }]));
+  } else if (hire.pending) {
+    body.push(row(`opening a tab and waiting for ${truncate(hire.pending, Math.max(0, TEXT - 32))} to come up`, [{ from: 0, to: Infinity, fg: P.soft }]));
+  } else if (!hire.kinds.length) {
+    // No manifests means herdr has not been told about any agent it can start,
+    // which is worth saying out loud rather than drawing an empty grid.
+    body.push(row('no agent kinds available on this machine', [{ from: 0, to: Infinity, fg: P.dim }]));
+  } else {
+    // Every row of the menu, clipped to whatever the panel has left after the
+    // title and the footer hint.
+    const menuRows = Math.max(1, Math.min(Math.ceil(hire.kinds.length / menuCols), panelRows - 3));
+    menuVisible = Math.min(hire.kinds.length, menuRows * menuCols);
+    for (let r = 0; r < menuRows; r += 1) {
+      const b = cells();
+      for (let c = 0; c < menuCols; c += 1) {
+        const i = r * menuCols + c;
+        const kind = hire.kinds[i];
+        if (!kind) break;
+        const on = i === hire.index;
+        const from = b.w;
+        b.add(on ? '▌' : ' ', { fg: P.accent });
+        b.add(padEnd(truncate(kind, MENU_CELL - 2), MENU_CELL - 1), { fg: on ? P.ink : P.soft, bold: on });
+        // Every cell is clickable, so the menu does not need the keyboard.
+        hitboxes.push({ id: HIRE_ID, action: `hire:${kind}`, x: left + 2 + from, y: startRow + body.length, w: MENU_CELL, h: 1 });
+      }
+      body.push(row(b.out().text, b.out().spans));
+    }
+    const more = hire.kinds.length - menuRows * menuCols;
+    if (more > 0 && body.length < panelRows - 2) {
+      body.push(row(`and ${more} more, if you make the pane taller`, [{ from: 0, to: Infinity, fg: P.faint }]));
+    }
+  }
+
+  if (body.length < panelRows - 1) {
+    const hint = hire.pending ? 'esc to stop watching (the agent keeps starting)' : 'enter to hire · esc to change your mind';
+    body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: P.faint }]));
+  }
+  body.push(edge('╰', '╯', PW, chrome));
+
+  const lines = [];
+  for (let i = 0; i < panelRows; i += 1) {
+    if (i >= body.length) {
+      lines.push(fill(size.cols, P.carpet));
+      continue;
+    }
+    lines.push(fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return { lines, menuCols, menuVisible };
 }
 
 /* -------------------------------------------------------------- detail panel */
@@ -688,11 +855,14 @@ export function renderFrame(view) {
   // bottom half and the floor keeps the top, so the desk you are reading about
   // stays in sight next to everyone else. A short pane gives the panel a floor
   // of eight rows, which is the least that still shows the answer keys.
-  const detailRows = view.detail ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
+  // The hire menu and a desk's detail are the same slot: you are either reading
+  // about somebody or deciding who to hire, never both.
+  const panel = view.hire ? 'hire' : view.detail ? 'detail' : null;
+  const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
   const hitboxes = [];
-  const grid = { cols: 0, rows: 0, ids: [] };
+  const grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
 
   const stepX = TILE_W + GAP_X;
   const stepY = TILE_H + GAP_Y;
@@ -702,18 +872,31 @@ export function renderFrame(view) {
   // slideshow, and then the dense list tells you more per keystroke.
   const roomForDesks = cols >= TILE_W + 2 && floorRows >= TILE_H && view.people.length <= perPage * 2;
 
-  if (!view.people.length) {
+  // An office with nobody in it still gets a desk drawn, so "hire somebody" is a
+  // thing on the screen rather than a key you have to already know about. Only
+  // when there is room for a desk at all; below that it is the old prose.
+  if (!view.people.length && !roomForDesks) {
     out.push(...emptyFloor(view, floorRows));
   } else if (!roomForDesks) {
     out.push(...compactFloor(view, floorRows, hitboxes, startRow));
   } else {
     grid.cols = Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX));
     grid.rows = Math.max(1, Math.floor((floorRows + GAP_Y) / stepY));
-    const page = Math.floor(Math.max(0, view.people.findIndex((p) => p.id === view.selectedId)) / perPage);
+    const lastPage = Math.max(0, Math.ceil(view.people.length / perPage) - 1);
+    // Standing at the empty desk means standing on the last floor, where it is;
+    // it is not in `people`, so findIndex would otherwise send you to floor one.
+    const page =
+      view.selectedId === HIRE_ID
+        ? lastPage
+        : Math.floor(Math.max(0, view.people.findIndex((p) => p.id === view.selectedId)) / perPage);
     const shown = view.people.slice(page * perPage, page * perPage + perPage);
-    grid.ids = shown.map((p) => p.id);
+    // One spare desk, on the last floor, only when there is a slot going free.
+    // Paging for a desk nobody sits at would be worse than not offering it.
+    const vacancy = page === lastPage && shown.length < perPage;
+    const slots = [...shown.map((person) => ({ person })), ...(vacancy ? [{ vacancy: true }] : [])];
+    grid.ids = slots.map((s) => (s.vacancy ? HIRE_ID : s.person.id));
 
-    const usedRows = Math.ceil(shown.length / grid.cols);
+    const usedRows = Math.ceil(slots.length / grid.cols);
     const blockW = grid.cols * TILE_W + (grid.cols - 1) * GAP_X;
     const left = Math.max(1, Math.floor((cols - blockW) / 2));
     // Desks start at the top of the floor. Centering them vertically looks tidy
@@ -731,10 +914,15 @@ export function renderFrame(view) {
       if (y >= 0 && y < floorRows) lines[y] = fill(cols, P.aisle);
     }
     for (let r = 0; r < usedRows; r += 1) {
-      const rowTiles = shown.slice(r * grid.cols, r * grid.cols + grid.cols);
-      const rendered = rowTiles.map((person, c) => {
+      const rowTiles = slots.slice(r * grid.cols, r * grid.cols + grid.cols);
+      const rendered = rowTiles.map((slot, c) => {
         const x = left + c * stepX;
         const y = startRow + top + r * stepY;
+        if (slot.vacancy) {
+          hitboxes.push({ id: HIRE_ID, action: 'hire', x, y, w: TILE_W, h: TILE_H });
+          return vacantTile({ selected: view.selectedId === HIRE_ID, pending: Boolean(view.hire?.pending), kind: view.hire?.pending });
+        }
+        const person = slot.person;
         hitboxes.push({ id: person.id, x, y, w: TILE_W, h: TILE_H });
         // The [y] and [n] on their monitor take clicks in their own right, so a
         // raised hand can be dealt with without opening anything.
@@ -777,7 +965,12 @@ export function renderFrame(view) {
     out.push(...lines);
   }
 
-  if (detailRows) out.push(...detailPanel(view, detailRows, hitboxes, out.length));
+  if (panel === 'hire') {
+    const drawn = hirePanel(view, detailRows, hitboxes, out.length);
+    grid.menuCols = drawn.menuCols;
+    grid.menuVisible = drawn.menuVisible;
+    out.push(...drawn.lines);
+  } else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid };
 }

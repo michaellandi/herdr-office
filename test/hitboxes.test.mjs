@@ -4,12 +4,17 @@
 // looked at. These tests read the glyphs actually rendered underneath.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderFrame } from '../src/render.mjs';
+import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, KINDS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
 
 const roster = officeRoster();
 const people = roster.people;
+
+// The approval buttons, specifically. The empty desk and the hire menu are
+// clickable too, but they are the only boxes in here that do not send a keystroke
+// to a running agent, so the tests about buttons are not about them.
+const answers = (hitboxes) => hitboxes.filter((b) => b.action === 'approve' || b.action === 'deny');
 
 // Every frame worth checking, once, so each test can walk the same list.
 function* frames() {
@@ -27,7 +32,7 @@ test('every button sits on the glyph it claims', () => {
   let seen = 0;
   for (const { label, lines, hitboxes } of frames()) {
     const plain = lines.map(stripAnsi);
-    for (const box of hitboxes.filter((b) => b.action)) {
+    for (const box of answers(hitboxes)) {
       seen += 1;
       const under = (plain[box.y] || '').slice(box.x, box.x + box.w);
       const want = box.action === 'approve' ? /^\[y\]( approve)?$/ : /^\[n\]( deny)?$/;
@@ -39,7 +44,7 @@ test('every button sits on the glyph it claims', () => {
 
 test('only a desk that is actually waiting on you carries a button', () => {
   for (const { label, hitboxes } of frames()) {
-    for (const box of hitboxes.filter((b) => b.action)) {
+    for (const box of answers(hitboxes)) {
       const person = roster.find(box.id);
       assert.ok(person, `${label}: button on ${box.id}, who does not work here`);
       assert.equal(person.status, 'blocked', `${label}: button on ${box.id}, who is ${person.status}`);
@@ -65,7 +70,7 @@ test('no two buttons overlap', () => {
   // unambiguous while they are disjoint.
   const hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   for (const { label, hitboxes } of frames()) {
-    const buttons = hitboxes.filter((b) => b.action);
+    const buttons = answers(hitboxes);
     for (let i = 0; i < buttons.length; i += 1) {
       for (let j = i + 1; j < buttons.length; j += 1) {
         assert.ok(!hits(buttons[i], buttons[j]), `${label}: ${buttons[i].action} and ${buttons[j].action} overlap`);
@@ -74,11 +79,72 @@ test('no two buttons overlap', () => {
   }
 });
 
-test('every hitbox belongs to somebody real', () => {
+test('every hitbox belongs to somebody real, or to the empty desk', () => {
   for (const { label, hitboxes } of frames()) {
     for (const box of hitboxes) {
+      if (box.id === HIRE_ID) continue;
       assert.ok(roster.find(box.id), `${label}: hitbox for ${box.id}, who is not on the roster`);
     }
+  }
+});
+
+test('the empty desk is the sentinel id, which no real pane can be', () => {
+  // It stands where a pane id stands, in grid.ids and in the hitboxes, so office.mjs
+  // reaches it through the walk and click paths with no special case. That only
+  // works while it cannot collide with a real pane id, and herdr's are
+  // `<workspace>:<pane>`.
+  assert.equal(HIRE_ID, '+hire');
+  assert.ok(!HIRE_ID.includes(':'));
+  for (const person of people) assert.notEqual(person.id, HIRE_ID);
+});
+
+test('the empty desk is clickable, and only where there is room for it', () => {
+  const [cols, rows] = [140, 46];
+  const vacancy = (view) => renderFrame(view).hitboxes.find((b) => b.id === HIRE_ID && b.action === 'hire');
+
+  const { lines } = renderFrame(viewOf({ people, cols, rows }));
+  const box = vacancy(viewOf({ people, cols, rows }));
+  assert.ok(box, 'seven desks on a floor that holds eight should leave a spare');
+  const plain = stripAnsi(lines[box.y]).slice(box.x, box.x + box.w);
+  assert.equal(width(plain), box.w);
+  assert.ok(plain.startsWith('╭') && plain.endsWith('╮'), `the empty desk is not over a cubicle: ${plain}`);
+
+  // Nobody in at all: the empty desk is the whole office.
+  assert.ok(vacancy(viewOf({ people: [], cols, rows })), 'an empty office should still offer a desk');
+  // A floor with no slot going free must not offer one, because that would mean
+  // paging to a desk nobody sits at.
+  const eight = officeRoster(new Array(8).fill('working')).people;
+  assert.equal(vacancy(viewOf({ people: eight, cols, rows })), undefined);
+});
+
+test('every hire menu cell sits on the name it would start', () => {
+  // These cells start a real agent, so a cell in the wrong place hires somebody
+  // the user did not point at.
+  const [cols, rows] = [140, 46];
+  let seen = 0;
+  for (const [name, hire] of HIRES) {
+    if (!hire) continue;
+    const { lines, hitboxes } = renderFrame(viewOf({ people, cols, rows, hire, selectedId: HIRE_ID }));
+    const plain = lines.map(stripAnsi);
+    for (const box of hitboxes.filter((b) => b.action?.startsWith('hire:'))) {
+      seen += 1;
+      const kind = box.action.slice('hire:'.length);
+      const under = (plain[box.y] || '').slice(box.x, box.x + box.w);
+      assert.equal(width(under), box.w, `hire=${name}: cell for ${kind} is ${width(under)} cells`);
+      assert.ok(under.includes(kind.slice(0, 9)), `hire=${name}: cell for ${kind} is over ${JSON.stringify(under)}`);
+    }
+  }
+  assert.ok(seen >= KINDS.length, `only ${seen} menu cells were drawn, so this test proved nothing`);
+});
+
+test('a menu that cannot be shown offers nothing to click', () => {
+  // Pending, failed, and still-loading menus draw prose instead of cells. A stale
+  // hitbox left behind there would hire somebody off a click on a sentence.
+  const [cols, rows] = [140, 46];
+  for (const label of ['still asking', 'starting somebody', 'it went wrong']) {
+    const hire = HIRES.find(([n]) => n === label)[1];
+    const { hitboxes } = renderFrame(viewOf({ people, cols, rows, hire, selectedId: HIRE_ID }));
+    assert.equal(hitboxes.filter((b) => b.action?.startsWith('hire:')).length, 0, `${label} should have no menu cells`);
   }
 });
 

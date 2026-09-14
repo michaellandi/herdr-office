@@ -92,7 +92,47 @@ export const DRAGS = [
   ['over a desk that has gone', { id: 'w1:p1', start: { x: 2, y: 2 }, overId: 'w1:pGONE', active: true }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set() }) {
+// The real list off a live machine, because a menu of twenty-one names is what
+// actually has to wrap, clip and overflow.
+export const KINDS = [
+  'pi',
+  'claude',
+  'codex',
+  'gemini',
+  'cursor',
+  'devin',
+  'agy',
+  'cline',
+  'opencode',
+  'copilot',
+  'kimi',
+  'kiro',
+  'droid',
+  'amp',
+  'grok',
+  'hermes',
+  'kilo',
+  'qodercli',
+  'qwen',
+  'maki',
+  'muse',
+];
+
+// Every shape the hire menu can be in: still asking herdr who it can start, the
+// full list, the cursor on the last name, an agent coming up, and the two ways it
+// can have nothing to offer.
+export const HIRES = [
+  ['none', null],
+  ['still asking', { kinds: [], index: 0, pending: null, error: null }],
+  ['a menu', { kinds: KINDS, index: 0, pending: null, error: null }],
+  ['cursor at the end', { kinds: KINDS, index: KINDS.length - 1, pending: null, error: null }],
+  ['one kind only', { kinds: ['claude'], index: 0, pending: null, error: null }],
+  ['starting somebody', { kinds: KINDS, index: 1, pending: 'claude', error: null }],
+  ['a very long kind name', { kinds: ['a-locally-overridden-agent-with-a-silly-name', 'claude'], index: 0, pending: null, error: null }],
+  ['it went wrong', { kinds: KINDS, index: 0, pending: null, error: 'could not hire claude: timed out waiting for it to come up. The tab it opened is still there.' }],
+];
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -106,5 +146,6 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     message,
     drag,
     busy,
+    hire,
   };
 }

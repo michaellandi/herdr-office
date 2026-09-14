@@ -4,7 +4,7 @@
 // module does not assert for itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { POSES, SCREENS, PROPS, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
+import { POSES, SCREENS, PROPS, VACANT_CHAIR, VACANT_SCREEN, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
 import { P } from '../src/theme.mjs';
 import { width } from '../src/text.mjs';
 
@@ -48,6 +48,14 @@ test('hair sits inside the top row of every pose', () => {
   }
 });
 
+test('the empty chair fits the same footprint as a person', () => {
+  // It is drawn into the same tile rows as a pose and a screen, so it has to be
+  // the same size, even though it lives outside POSES.
+  assert.equal(VACANT_CHAIR.length, ART_ROWS);
+  VACANT_CHAIR.forEach((row, i) => assert.equal(width(row), POSE_W, `the vacant chair row ${i} is ${width(row)} cells`));
+  VACANT_SCREEN.forEach((row, i) => assert.equal(width(row), SCREEN_W, `the vacant screen row ${i} is ${width(row)} cells`));
+});
+
 test('every prop is a rectangle of single-cell glyphs', () => {
   // propRow() maps columns straight onto array indices, so a two-cell glyph in a
   // plant would shift every prop to its right by one and skew the whole band.
@@ -77,6 +85,8 @@ test('nothing in the art is an ambiguous-width glyph', () => {
     ...Object.values(POSES).flatMap((p) => p.frames.flat()),
     ...Object.values(SCREENS).flat(2),
     ...Object.values(PROPS).flatMap((p) => p.rows),
+    ...VACANT_CHAIR,
+    ...VACANT_SCREEN,
   ];
   for (const row of art) {
     for (const ch of row) {

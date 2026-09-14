@@ -65,6 +65,7 @@ would rather not.
 | arrows / `hjkl` | walk around the floor (walking off the edge pages to the next floor) |
 | `enter` / click | ask that person what they are up to |
 | drag a desk onto another | swap the two real panes |
+| `+` / click the empty desk | hire somebody: opens a tab and starts an agent in it |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
 | `b` | jump to the next raised hand |
@@ -79,6 +80,28 @@ only do anything if that person is actually waiting on you.
 The `[y]` and `[n]` drawn on a stuck person's monitor are real buttons: click either
 one to answer that desk without selecting it first or opening anything. The same
 choices in the detail panel's **answer them** row are clickable too.
+
+## Hiring somebody
+
+When there is a free slot on the last floor, the office draws **an empty desk**: a
+chair nobody is in and a monitor that is off. Walk to it and press enter, or click
+it, and the bottom half of the pane becomes a menu of every agent this machine can
+actually start (that list comes from herdr's own manifests, so it is what will
+work here rather than every name the CLI knows). Pick one and the office opens a
+tab and starts that agent in its pane, in the same directory as the desk you had
+focused, so a hire lands in the project you are already working on.
+
+`+` opens the same menu from anywhere, which is the only way in on a pane too
+small to draw a desk in.
+
+Starting an agent means waiting for it to reach its own prompt, which can take
+most of a minute, so the hire runs on its own connection: the floor keeps
+animating and polling while somebody is being shown to their desk, and the empty
+desk says who it is waiting for. If the agent never comes up, the office says so
+and **leaves the tab where it is** rather than closing a pane on your behalf.
+
+Nothing about this fires on a stray click. The empty desk only opens the menu; the
+only thing that starts an agent is a name in that menu.
 
 ## Moving people around
 
@@ -136,6 +159,11 @@ it was entered, so the first sighting of an agent starts the clock.
   the seating comes from: `panes[].rect` is the real geometry, so the desks are in
   the same order as the panes and a swap is visible instead of being a change you
   have to take on faith.
+- Hiring is `server.agent_manifests` for the menu, then `tab.create` and
+  `agent.start` into the pane that tab came with (`agent.start` does not make one,
+  and it wants a pane sitting at a shell prompt, which a fresh tab is). It runs on
+  its own short-lived socket, because requests on the main one are queued and a
+  90s start would otherwise stop the clock on the whole office.
 - Dragging is one `pane.swap` with an explicit source and target. Mouse mode is
   `1002` rather than `1000`, because press-and-release alone cannot tell you where
   a desk went on the way.

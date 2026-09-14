@@ -102,6 +102,13 @@ export const screen = (statusName, frame) => {
 export const HAIR_FROM = 4;
 export const HAIR_TO = 9;
 
+// The empty desk: a chair with nobody in it, and a monitor that is off. Same
+// footprint as a pose and a screen, because it is drawn into the same tile.
+// Deliberately NOT in POSES: it has no hair, no emote and no animation, and
+// putting it there would mean teaching every pose rule about the exception.
+export const VACANT_CHAIR = ['            ', '    ╭───╮   ', '    │   │   ', '    ╰─┬─╯   '];
+export const VACANT_SCREEN = ['            ', '            '];
+
 // Furniture. None of it means anything, which is the point: an office with only
 // desks in it reads as a spreadsheet. Each piece is a small block of rows plus
 // the colour of its parts, and the floor drops them into leftover carpet where
@@ -196,3 +203,10 @@ for (const [name, frames] of Object.entries(SCREENS)) {
     }),
   );
 }
+if (VACANT_CHAIR.length !== ART_ROWS) throw new Error(`the vacant chair has ${VACANT_CHAIR.length} rows, want ${ART_ROWS}`);
+VACANT_CHAIR.forEach((r, j) => {
+  if ([...r].length !== POSE_W) throw new Error(`the vacant chair row ${j} is ${[...r].length} wide, want ${POSE_W}`);
+});
+VACANT_SCREEN.forEach((r, j) => {
+  if ([...r].length !== SCREEN_W) throw new Error(`the vacant screen row ${j} is ${[...r].length} wide, want ${SCREEN_W}`);
+});

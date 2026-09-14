@@ -23,6 +23,7 @@ import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
+import { follow } from './src/follow.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -36,6 +37,7 @@ const NOTIFY = !argv.has('--quiet');
 // exactly why it is opt-out: it is somebody else's window, and a title is a
 // shared surface that other things may also care about.
 const TITLE = !argv.has('--no-title');
+const FOLLOW = argv.has('--follow');
 // Which pane the office itself is in, when herdr started it. Used for one thing:
 // knowing whether you are looking at the floor right now, so a nudge about a hand
 // you can already see is never sent.
@@ -83,6 +85,11 @@ let selectedId = null;
 // typing, which is the whole point of it.
 let filter = '';
 let filtering = false;
+// Shepherd mode, off until you ask for it. `handsSeen` is null rather than empty so
+// the first pass after switching it on treats a hand that is already up as news:
+// being taken to somebody is the reason you pressed the key.
+let following = FOLLOW;
+let handsSeen = null;
 let detail = null;
 let message = '';
 let messageUntil = 0;
@@ -173,6 +180,7 @@ function view() {
     total: roster.people.length,
     filter,
     filtering,
+    following,
     selectedId,
     detail,
     frame,
@@ -225,6 +233,27 @@ function ensureSelection() {
   if (selectedId && floor.some((p) => p.id === selectedId)) return;
   const raised = floor.find((p) => p.status === 'blocked');
   selectedId = (raised || floor[0])?.id ?? null;
+}
+
+// Shepherd mode's one move per poll. The decision lives in src/follow.mjs; this
+// only hands it the floor and takes the selection back. It runs off the filtered
+// floor, so a filter still means what it says: shepherd will not walk you to a desk
+// the filter is hiding.
+function shepherd() {
+  const out = follow({
+    people: floorPeople(),
+    selectedId,
+    seen: handsSeen,
+    active: following,
+    state: { compose, hire, drag, filtering },
+  });
+  handsSeen = out.seen;
+  if (!out.moved) return;
+  selectedId = out.selectedId;
+  // Said out loud, because a highlight that moved on its own needs a reason
+  // attached to it. Not a toast: the notification for this already went out.
+  note(`${out.person.name} has a hand up`);
+  if (detail) loadDetail(selectedId, { force: true });
 }
 
 // Ask every stuck desk what it wants, so the floor plan can put it in a bubble
@@ -322,6 +351,7 @@ async function refresh() {
     roster.update(demoAgents());
     demoExtras();
     ensureSelection();
+    shepherd();
     draw();
     return;
   }
@@ -334,6 +364,7 @@ async function refresh() {
     seat(snapshot, tabs);
     const newlyBlocked = roster.update(agentList.agents || []);
     ensureSelection();
+    shepherd();
     syncSubscriptions();
     refreshAsks();
     refreshCommands();
@@ -570,6 +601,16 @@ function nextRaisedHand() {
   }
   const idx = raised.findIndex((p) => p.id === selectedId);
   selectedId = raised[(idx + 1) % raised.length].id;
+}
+
+// Switching shepherd mode on takes effect now rather than on the next poll, because
+// a key that visibly does nothing for two seconds reads as a key that did not work.
+function toggleFollow() {
+  following = !following;
+  handsSeen = null;
+  if (!following) return note('not following hands');
+  note('following hands');
+  shepherd();
 }
 
 // Answer an approval prompt without walking over to the pane. The keys come
@@ -1133,6 +1174,7 @@ function onInput(chunk) {
   else if (str === 'n') respond('deny');
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
+  else if (str === 'F') toggleFollow();
   else if (str === 'r') {
     refresh();
     if (detail) loadDetail(detail.id, { force: true });

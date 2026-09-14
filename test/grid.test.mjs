@@ -135,6 +135,25 @@ test('a filter, in every state the field can be in', () => {
   }
 });
 
+test('shepherd mode wears a badge without shoving the clock off', () => {
+  // The header is the one row where three things compete for the width: the counts,
+  // the filter chip and this. It is also the row with the clock pinned to its right
+  // edge, so a badge that did not fit would push the whole line over.
+  for (const [cols, rows] of SIZES) {
+    for (const frame of FRAMES) {
+      assertExact(viewOf({ people, cols, rows, frame, following: true }), `following ${cols}x${rows} f${frame}`);
+      // And with everything on at once, which is the actual worst case.
+      assertExact(viewOf({
+        people, cols, rows, frame, following: true, filtering: true,
+        filter: 'a-filter-nobody-would-ever-type-but-here-we-are', total: people.length,
+      }), `following+filter ${cols}x${rows} f${frame}`);
+    }
+  }
+  const head = stripAnsi(renderFrame(viewOf({ people, cols: 140, rows: 46, following: true })).lines[0]);
+  assert.match(head, /following hands/);
+  assert.equal(head.indexOf('following hands'), head.lastIndexOf('following hands'), 'once is enough');
+});
+
 test('a filter that matches nobody says so, and offers no empty desk', () => {
   // The failure this guards against is quiet: with no desks left, the floor would
   // fall through to the "hire somebody" empty state, and a filter typo would read

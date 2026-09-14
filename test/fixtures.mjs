@@ -204,7 +204,7 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'group resolver', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, total = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, total = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -222,6 +222,7 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     compose,
     filter,
     filtering,
+    following,
     total: total ?? people.length,
   };
 }

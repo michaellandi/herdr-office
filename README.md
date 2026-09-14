@@ -45,6 +45,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
+| `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 
 Bind it to a key in `~/.config/herdr/config.toml`:
 
@@ -74,6 +75,7 @@ would rather not.
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
 | `/` | filter the floor: names, kinds, tabs, directories, statuses |
+| `F` | shepherd mode: walk to hands as they go up |
 | `b` | jump to the next raised hand |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
@@ -285,6 +287,32 @@ A filter matching nobody says so in as many words rather than falling through to
 the empty-office state, and **it never offers you an empty desk to hire into** for
 the same reason: a chair that appeared because you typed three letters reads as
 somebody having left.
+
+## Following the hands around
+
+`F` turns on shepherd mode, and the office walks you to a hand as it goes up: the
+selection is already standing at whoever got stuck, so `y` is live and the card is
+theirs. The header says `» following hands` while it is on, because a highlight
+that moves on its own is alarming when you do not know why, and this is the kind of
+mode you leave on and forget about. `--follow` starts with it on.
+
+Three things it deliberately does not do, which is most of the feature:
+
+- **It moves on a hand going up, not on every poll.** The same hand still being up
+  two seconds later is not an event. So if you walk away from somebody, you stay
+  walked away; a mode that re-decided where you should be looking twice a second
+  would be one you fight rather than use.
+- **It never moves you off somebody who needs you.** Standing at a raised hand
+  means you are dealing with that person, and the second one can wait as long as it
+  takes to press `y`. Use `b` to cycle the rest deliberately.
+- **It never touches your real terminal focus.** `f` yanks your foreground pane
+  because you asked it to; a background mode doing the same would move your cursor
+  out from under your hands while you were typing somewhere else. All shepherd mode
+  moves is a highlight inside the office.
+
+It also leaves you alone while a panel has the keyboard (assigning, hiring, a drag
+in the air, the filter field), and it respects a filter: it will not walk you to a
+desk the filter is hiding.
 
 ## Moving people around
 

@@ -404,6 +404,14 @@ function headerLines(view) {
     b.add(truncate(String(view.filter || ''), 24), { fg: P.soft, bold: true });
     if (view.filtering) b.add('_', { fg: P.accent, bold: true });
   }
+  // Shepherd mode moves the selection on its own, so it has to be visible from the
+  // header: a highlight that walks by itself is alarming when you do not know why,
+  // and it is exactly the kind of mode you leave on and forget. Amber, because it is
+  // about raised hands and it should read as the same concern as the count is.
+  if (view.following) {
+    b.add('   ');
+    b.add('» following hands', { fg: status('blocked').fg, bold: true });
+  }
   const budget = size.cols - width(clock) - 4;
   for (const key of ORDER) {
     if (!counts[key]) continue;
@@ -489,6 +497,7 @@ function keyHints(view) {
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
+    ...(view.following ? [['F', 'stop following']] : [['F', 'follow hands']]),
     ...(terms(view.filter).length ? [] : [['/', 'filter']]),
     ['f', 'jump to pane'],
     ['r', 'refresh'],

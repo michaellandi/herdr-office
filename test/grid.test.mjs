@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, officeRoster, viewOf } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, officeRoster, viewOf } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -83,6 +83,33 @@ test('a monitor showing a real command, at every size and frame', () => {
   for (const [cols, rows] of SIZES) {
     for (const frame of FRAMES) assertExact(viewOf({ people: wordy, cols, rows, frame }), `wordy ${cols}x${rows} f${frame}`);
   }
+});
+
+test('news over a desk, in every kind and at every size', () => {
+  // The slab hangs on the same wall as the speech bubble and in the same columns,
+  // so the sizes that matter are the ones where the wall is barely there at all.
+  // A blocked desk is included on purpose: the ask owns that row, and news must
+  // not appear alongside it or fight it for the space.
+  for (const news of NEWS) {
+    const floor = officeRoster().people.map((p) => ({ ...p, event: { ...news } }));
+    for (const [cols, rows] of SIZES) {
+      for (const frame of FRAMES) {
+        assertExact(viewOf({ people: floor, cols, rows, frame }), `news=${news.kind}/${news.label.length} ${cols}x${rows} f${frame}`);
+      }
+      // And the compact list, where news takes over the pane title for a moment.
+      const many = officeRoster(new Array(40).fill('working')).people.map((p) => ({ ...p, event: { ...news } }));
+      assertExact(viewOf({ people: many, cols, rows }), `news list ${cols}x${rows}`);
+    }
+  }
+  // A stuck desk keeps saying what it needs: the ask wins the wall.
+  const { lines } = renderFrame(viewOf({
+    people: officeRoster(['blocked']).people.map((p) => ({ ...p, event: { label: 'tests passed', kind: 'good' } })),
+    cols: 105,
+    rows: 45,
+  }));
+  const text = lines.join('\n');
+  assert.ok(text.includes('shell requires approval'), 'the ask should still be on the wall');
+  assert.ok(!text.includes('tests passed'), 'news must not push the ask off a stuck desk');
 });
 
 test('a footer message never pushes a line over', () => {

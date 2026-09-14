@@ -3,7 +3,7 @@
 // looking identical, which reads as a bug in the swap rather than in the sort.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Roster } from '../src/roster.mjs';
+import { Roster, EVENT_MS } from '../src/roster.mjs';
 
 const agent = (pane_id, extra = {}) => ({
   pane_id,
@@ -139,4 +139,36 @@ test('a command lives on a desk only while that desk is working', () => {
   roster.update([agent('w1:p1', { agent_status: 'idle' })]);
   assert.equal(roster.find('w1:p1').command, null, 'an idle desk is not running anything');
   assert.equal(roster.commandAge('w1:p1'), Infinity);
+});
+
+test('news over a desk puts itself away', () => {
+  // News is not state: nothing downstream will ever tell us the tests stopped
+  // having passed, so the only thing that clears it is the clock. A fake one here,
+  // because the alternative is a test that sleeps for twelve seconds.
+  let now = 1000;
+  const roster = new Roster(() => now);
+  roster.update([agent('w1:p1')]);
+  assert.equal(roster.find('w1:p1').event, null);
+
+  roster.setEvent('w1:p1', 'tests passed', 'good');
+  assert.deepEqual(roster.find('w1:p1').event, { label: 'tests passed', kind: 'good' });
+  // A poll in between must not wipe it, the same as a command.
+  roster.update([agent('w1:p1')]);
+  assert.deepEqual(roster.find('w1:p1').event, { label: 'tests passed', kind: 'good' });
+
+  // An empty label is not news and must not blank real news either.
+  roster.setEvent('w1:p1', '', 'broke');
+  assert.deepEqual(roster.find('w1:p1').event, { label: 'tests passed', kind: 'good' });
+  // A kind nobody defined still draws: the theme falls back rather than throwing.
+  roster.setEvent('w1:p2', 'committed');
+  assert.equal(roster.events.get('w1:p2').kind, 'good');
+
+  assert.equal(roster.expireEvents(), false, 'nothing is stale yet');
+  now += EVENT_MS - 1;
+  assert.equal(roster.expireEvents(), false, 'not stale until it is');
+  now += 2;
+  assert.equal(roster.expireEvents(), true, 'and then it goes');
+  assert.equal(roster.find('w1:p1').event, null);
+  assert.equal(roster.events.size, 0);
+  assert.equal(roster.expireEvents(), false, 'an empty wall reports no change');
 });

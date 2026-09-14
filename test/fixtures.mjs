@@ -179,6 +179,17 @@ export const COMPOSES = [
   ['a very long name', { scope: 'one', id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', text: 'go', to: [{ id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
 ];
 
+// News over a desk: every kind, plus the two that are only a rendering problem (a
+// label far wider than the wall it hangs on, and an empty one).
+export const NEWS = [
+  { label: 'tests passed', kind: 'good' },
+  { label: 'the build broke', kind: 'broke' },
+  { label: 'merge conflict', kind: 'snag' },
+  { label: 'a label nobody would ever write that is far too long for the wall', kind: 'good' },
+  { label: '', kind: 'good' },
+  { label: 'committed', kind: 'nonsense-kind' },
+];
+
 export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;

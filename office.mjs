@@ -18,6 +18,7 @@ import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.
 import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
 import { width } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
+import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -276,17 +277,55 @@ function syncSubscriptions() {
   subscribedTo = key;
   events?.close();
   events = new EventStream();
-  const subs = [...GLOBAL_EVENTS, ...ids.map((pane_id) => ({ type: 'pane.agent_status_changed', pane_id }))];
+  // Two subscriptions per desk: the status change, and one watch for everything
+  // in the office's watchlist at once. One pattern rather than one per phrase,
+  // because the subscription list is rebuilt every time the roster changes shape
+  // and eight patterns a desk would make that a hundred descriptors on a busy
+  // session. `visible` is the safe source (the `recent` ones can drop the
+  // connection), and a handful of lines is all a summary line ever needs.
+  const subs = [
+    ...GLOBAL_EVENTS,
+    ...ids.flatMap((pane_id) => [
+      { type: 'pane.agent_status_changed', pane_id },
+      {
+        type: 'pane.output_matched',
+        pane_id,
+        source: 'visible',
+        match: { type: 'regex', value: WATCH_PATTERN },
+        lines: 8,
+        strip_ansi: true,
+      },
+    ]),
+  ];
   events
     .open(
       subs,
-      () => scheduleRefresh(),
+      (msg) => onServerEvent(msg),
       () => {
         // Force a resubscribe on the next poll if the stream dies.
         subscribedTo = '';
       },
     )
     .catch((err) => note(`events: ${err.message}`));
+}
+
+// An event off the stream. Everything gets a poll scheduled, because the roster is
+// the source of truth for state; an output match additionally puts a line of news
+// over the desk it came from.
+//
+// The matched output is never drawn. eventFromMatch turns it into one of the
+// office's own fixed labels or into nothing at all, so an error message with a
+// path or a token in it cannot end up on the wall (see src/events.mjs).
+function onServerEvent(msg) {
+  const payload = msg?.result || msg?.event || msg;
+  if (payload?.type === 'output_matched' && payload.pane_id) {
+    const news = eventFromMatch(payload);
+    if (news && roster.find(payload.pane_id)) {
+      roster.setEvent(payload.pane_id, news.label, news.kind);
+      draw();
+    }
+  }
+  scheduleRefresh();
 }
 
 function scheduleRefresh() {
@@ -992,10 +1031,22 @@ function demoAgents() {
 // monitor has, because that is the case worth being able to look at.
 const DEMO_COMMANDS = ['npm test', 'cargo build', 'git rebase', 'pytest -x --last-failed', 'tsc', 'make'];
 
+// News is normally driven by `pane.output_matched`, which the demo has no server
+// for, so a couple of lines are fed through the real classifier rather than
+// having their labels written out here. That way the demo cannot show a label the
+// live office could not produce.
+const DEMO_OUTPUT = ['42 passed, 0 failed', '1 failed, 41 passed', 'CONFLICT (content): merge conflict in src/render.mjs', '3 files changed, 41 insertions(+)'];
+
 function demoExtras() {
   roster.people.forEach((person, i) => {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
+    // Every third desk has just had some news, so the demo shows the slab without
+    // the whole floor shouting at once.
+    if (person.status !== 'blocked' && i % 3 === 1) {
+      const news = eventFromMatch({ matched_line: DEMO_OUTPUT[i % DEMO_OUTPUT.length] });
+      if (news) roster.setEvent(person.id, news.label, news.kind);
+    }
   });
 }
 
@@ -1004,6 +1055,10 @@ function demoExtras() {
 const anim = setInterval(() => {
   frame += 1;
   if (detail) loadDetail(detail.id);
+  // News puts itself away. It expires on a clock rather than on the next poll,
+  // because a quiet office might not poll anything into a different state for
+  // minutes and a stale "tests passed" would sit there the whole time.
+  roster.expireEvents();
   draw();
 }, ANIM_MS);
 

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
 
 const roster = officeRoster();
 const people = roster.people;
@@ -253,5 +253,30 @@ test('a desk is clickable wherever it is drawn', () => {
     const plain = stripAnsi(lines[box.y]).slice(box.x, box.x + box.w);
     assert.equal(width(plain), box.w);
     assert.ok(plain.startsWith('╭') && plain.endsWith('╮'), `desk hitbox for ${box.id} is not over a cubicle: ${plain}`);
+  }
+});
+
+test('news is scenery, not a control', () => {
+  // The slab hangs where the speech bubble hangs, and a blocked desk's bubble is
+  // the one place [y] and [n] live. So the question is not whether news is
+  // clickable (it is not meant to be) but whether adding it ever moves or removes
+  // a button that was already there. Same floor, twice, boxes compared.
+  for (const news of NEWS) {
+    for (const [cols, rows] of SIZES) {
+      for (const frame of FRAMES) {
+        const quiet = renderFrame(viewOf({ people, cols, rows, frame }));
+        const loud = renderFrame(viewOf({
+          people: people.map((p) => ({ ...p, event: { ...news } })),
+          cols,
+          rows,
+          frame,
+        }));
+        assert.deepEqual(
+          loud.hitboxes,
+          quiet.hitboxes,
+          `news=${news.kind}/${news.label.length} ${cols}x${rows} f${frame}: news changed what is clickable`,
+        );
+      }
+    }
   }
 });

@@ -182,6 +182,30 @@ Shells, the agents themselves, the toolbox wrappers and the MCP servers every
 agent permanently carries are all filtered out, so a busy desk says what the job
 is instead of saying `zsh` all day.
 
+## News from a desk
+
+When something notable comes out of an agent's terminal, a small slab appears over
+that desk for twelve seconds: green for tests passing, a build going green, a
+commit or a push; red for a failing suite, a broken build or a panic; purple for a
+merge conflict. It is news rather than status, so it expires on its own clock
+instead of waiting for the agent to change state, and **somebody with their hand up
+keeps the wall**: an ask always outranks news, because a raised hand is the only
+thing in the room you have to act on.
+
+**The matched output line is never drawn.** Herdr matches one regex per pane and
+hands back the line that fired, and the office uses it only to pick which of its
+own seven fixed labels to show. The same patterns do the matching server-side and
+the labelling locally, so the two cannot drift apart. A failing assertion full of
+your file paths, a URL with a token in it, a stack trace out of a private
+repository: none of it reaches the screen, all it can ever do is decide whether
+the slab says "the build broke".
+
+The suite that matters here asserts exactly that, by feeding the classifier lines
+carrying paths, credentials and home directories and checking the label that comes
+back is one of the fixed strings. One caveat worth knowing: `0 failed` is the happy
+path, so the failure patterns require a non-zero count. An office that read every
+green test run as a disaster would be worse than one that said nothing.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then
@@ -256,6 +280,13 @@ it was entered, so the first sighting of an agent starts the clock.
 - Subscriptions: the global pane/workspace/tab events, plus one
   `pane.agent_status_changed` descriptor per pane (that event is per-pane only, so the
   subscription is rebuilt whenever the set of desks changes).
+- News is one `pane.output_matched` descriptor per pane, carrying a single joined
+  regex rather than one subscription per phrase, because the whole subscription list
+  is rebuilt whenever the roster changes shape and seven phrases per pane would mean
+  fifty descriptors on a small session. The pattern is written for Rust's `regex`
+  crate, so no lookaround and no backreferences, which is why "a non-zero count of
+  failures" is spelled `[1-9]\d*` instead of `(?!0)\d+`. The event's `matched_line`
+  only selects a label; see "News from a desk".
 - The command on a monitor is one `pane.process_info` per *working* desk, at most
   every 5s and at most four desks per pass. That response is the whole foreground
   process tree, which is about fifteen kilobytes a pane on a real machine, so a busy

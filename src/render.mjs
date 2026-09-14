@@ -2,7 +2,7 @@
 // an array of lines plus the hitboxes needed for mouse clicks and arrow-key
 // navigation. Nothing here talks to a socket or a terminal.
 import { padEnd, truncate, width, formatDuration } from './text.mjs';
-import { P, STATUS, paint, fill, status, identity } from './theme.mjs';
+import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import {
   pose,
@@ -203,6 +203,21 @@ function speechBubble(text) {
   };
 }
 
+// News, on the same wall and in the same columns as the speech bubble, because it
+// is the same idea: something this desk wants you to know. A different tint and
+// no tail, so it reads as a notice rather than as the person talking, and it can
+// never appear at the same time as an ask (a raised hand owns that row).
+function eventSlab(label, kind) {
+  const tint = eventTint(kind);
+  return {
+    text: ' '.repeat(BUBBLE_X) + ' ' + padEnd(truncate(label, BUBBLE_W - 2), BUBBLE_W - 2) + ' ',
+    spans: [
+      { from: BUBBLE_X, to: INNER, bg: tint.bg },
+      { from: BUBBLE_X + 1, to: INNER - 1, fg: tint.ink, bold: true },
+    ],
+  };
+}
+
 function tile(person, { selected, frame, now, lifted = false, dropTarget = false }) {
   const st = status(person.status);
   const who = identity(person.id);
@@ -263,6 +278,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // The bubble only exists while they are stuck, and its tail lands on the row
   // below, which is the hair row.
   const bubble = person.status === 'blocked' ? speechBubble(person.ask || 'needs your OK') : null;
+  // The same row carries news when nobody has their hand up. An ask always wins
+  // it: whatever just happened at this desk matters less than the fact that this
+  // desk is waiting on you.
+  const slab = !bubble && person.event?.label ? eventSlab(person.event.label, person.event.kind) : null;
   const hair = bubble ? over(body.rows[0], '▘', TAIL_X) : body.rows[0];
 
   // Rows, top to bottom, with a blank line wherever two things that mean
@@ -274,7 +293,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     row(plate.out().text, plate.out().spans),
     blank(),
     card ? row(card.text, card.spans) : blank(),
-    bubble ? row(bubble.text, bubble.spans) : blank(),
+    bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : blank(),
     row(art(hair, BEZEL_TOP), [
       { from: 0, to: POSE_W, fg: emoteFg },
       { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
@@ -624,7 +643,11 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // Stuck people say what they need here; everyone else gets their pane title.
     // Whichever it is, it outranks the tab and the agent name for space: a row
     // that has squeezed out the ask has squeezed out the only thing you needed.
-    const tail = person.status === 'blocked' ? person.ask || 'needs your OK' : person.title || person.id;
+    // News takes the tail from the pane title while it lasts, for the same reason
+    // it takes the wall on a desk: for the next few seconds it is the most
+    // informative thing about this row, and it puts itself away again afterwards.
+    const news = person.status !== 'blocked' && person.event?.label ? person.event : null;
+    const tail = person.status === 'blocked' ? person.ask || 'needs your OK' : news ? news.label : person.title || person.id;
     // The tab name says which job this is, so it beats the agent's brand name to
     // the remaining space even though it is drawn after it. Both tests reserve a
     // fixed 16 cells for the tail rather than measuring this row's, so every row
@@ -635,7 +658,10 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
       b.add(padEnd(truncate(person.tabName, tabCol), tabCol), { fg: P.ink });
       b.add('  ');
     }
-    b.add(truncate(tail, Math.max(0, cols - b.w - 2)), { fg: person.status === 'blocked' ? st.fg : P.soft });
+    b.add(truncate(tail, Math.max(0, cols - b.w - 2)), {
+      fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
+      bold: Boolean(news),
+    });
     const { text, spans } = b.fit(cols);
     // Drag feedback in the list is the row background only, for the same reason
     // it is border colour only on a desk: it cannot change how wide the row is.

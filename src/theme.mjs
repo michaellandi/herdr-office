@@ -62,6 +62,19 @@ export const P = {
   accent: '#5ec8f5',
 };
 
+// News over a desk: the tests went green, the build broke, a rebase hit a
+// conflict. Deliberately not the status colours. A raised hand is the one thing
+// in this room that must always win the eye, so an event slab is a darker,
+// flatter wash than a status bar, and even the failure colour is duller than the
+// amber of somebody waiting on you.
+export const EVENT = {
+  good: { bg: '#173322', ink: '#8ee0a8' },
+  broke: { bg: '#3a1c1c', ink: '#f09a9a' },
+  snag: { bg: '#2f2340', ink: '#c9a8f0' },
+};
+
+export const eventTint = (kind) => EVENT[kind] || EVENT.good;
+
 export const STATUS = {
   working: { label: 'WORKING', fg: '#5ce08a', screen: '#7cf0a6' },
   blocked: { label: 'NEEDS YOU', fg: '#ffc14d', screen: '#ffd67a', hot: '#fff0c2' },

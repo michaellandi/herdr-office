@@ -29,6 +29,13 @@ function paneSortKey(paneId) {
 
 // Sorts high, so anything we have no number for lands after everything we do
 // rather than jumping to the front of the office.
+// How long a piece of news stays over somebody's head. Long enough to read from
+// across the floor, short enough that a room full of stale announcements never
+// builds up: "tests passed" from two minutes ago is not news, it is clutter.
+export const EVENT_MS = 12000;
+
+const eventOf = (entry, now) => (entry && now - entry.at < EVENT_MS ? { label: entry.label, kind: entry.kind } : null);
+
 const UNKNOWN = 9999;
 const pad = (n) => String(Math.max(0, Math.min(UNKNOWN, Math.round(n)))).padStart(4, '0');
 
@@ -57,6 +64,7 @@ export class Roster {
     this.states = new Map(); // pane_id -> { status, since, seq }
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
     this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
+    this.events = new Map(); // pane_id -> { label, kind, at }, news, and short-lived
   }
 
   setWorkspaces(workspaces = []) {
@@ -122,6 +130,32 @@ export class Roster {
     if (person) person.command = label || null;
   }
 
+  // Something that just happened at this desk (see src/events.mjs): the tests
+  // went green, the build broke, a rebase hit a conflict. It is news rather than
+  // state, so it expires on its own after EVENT_MS instead of waiting for the
+  // agent's status to change, and the label is always one of the office's own
+  // fixed strings, never anything the agent printed.
+  setEvent(id, label, kind) {
+    if (!label) return;
+    this.events.set(id, { label, kind: kind || 'good', at: this.clock() });
+    const person = this.find(id);
+    if (person) person.event = { label, kind: kind || 'good' };
+  }
+
+  // Drops anything that has gone stale, and reports whether the floor changed, so
+  // the caller only repaints when there is a reason to.
+  expireEvents(now = this.clock()) {
+    let changed = false;
+    for (const [id, entry] of [...this.events]) {
+      if (now - entry.at < EVENT_MS) continue;
+      this.events.delete(id);
+      const person = this.find(id);
+      if (person) person.event = null;
+      changed = true;
+    }
+    return changed;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -175,6 +209,7 @@ export class Roster {
           tabName: this.tabNames.get(a.tab_id) || '',
           ask: this.asks.get(id)?.text || '',
           command: this.commands.get(id)?.label || null,
+          event: eventOf(this.events.get(id), now),
           choice: this.asks.get(id)?.choice || null,
           focused: Boolean(a.focused),
           cwd: a.cwd || '',

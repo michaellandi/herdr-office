@@ -8,6 +8,7 @@
 //   node office.mjs --demo     fake roster, no server needed
 //   node office.mjs --once     render one frame and exit (handy for diffing art)
 //   node office.mjs --quiet    no toast when somebody starts waiting on you
+//   node office.mjs --no-title leave the window title alone
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -19,6 +20,7 @@ import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mj
 import { width } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
 import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
+import { windowTitle } from './src/title.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -28,6 +30,10 @@ const ONCE = argv.has('--once');
 // editing an installed plugin's manifest is a default nobody ever gets.
 // `--notify` still parses, because it used to be the way to ask for this.
 const NOTIFY = !argv.has('--quiet');
+// The window title is the office's only presence outside its own pane, which is
+// exactly why it is opt-out: it is somebody else's window, and a title is a
+// shared surface that other things may also care about.
+const TITLE = !argv.has('--no-title');
 
 const ANIM_MS = 320;
 const POLL_MS = 2000;
@@ -113,10 +119,23 @@ function quit(code = 0, msg) {
   clearInterval(anim);
   clearInterval(poll);
   events?.close();
-  api?.close();
   leaveTerminal();
   if (msg) process.stderr.write(`${msg}\n`);
-  process.exit(code);
+  // The socket stays open just long enough to give the window title back, then
+  // goes regardless. Half a second is the whole budget: an office that would not
+  // quit because a title would not clear is worse than a stale title.
+  const done = () => {
+    api?.close();
+    process.exit(code);
+  };
+  const bail = setTimeout(done, 500);
+  bail.unref?.();
+  clearTitle()
+    .catch(() => {})
+    .then(() => {
+      clearTimeout(bail);
+      done();
+    });
 }
 
 /* ------------------------------------------------------------------ drawing */
@@ -212,6 +231,38 @@ async function refreshCommands() {
   if (!ONCE) draw();
 }
 
+// Puts the headline count on the window itself, so the office is legible from a
+// tab bar or an alt-tab list with its pane nowhere in sight. Only ever sent when
+// the string actually changes: a title set twenty times a minute to the same
+// eighteen characters is pure noise on the socket.
+let lastTitle = '';
+function syncTitle() {
+  if (!TITLE || DEMO || ONCE) return;
+  const title = windowTitle(roster.counts());
+  if (title === lastTitle) return;
+  api
+    ?.request('client.window_title.set', { title })
+    .then((res) => {
+      // `no_foreground_client` means there is no window listening right now, so
+      // nothing was set and nothing should be remembered as set: the title has to
+      // go out again when a window comes back. Anything else counts as landed.
+      lastTitle = res?.reason === 'no_foreground_client' ? '' : title;
+    })
+    .catch(() => {
+      // A title is the least important thing on this socket. If it will not take,
+      // it will be retried on the next state change and never mentioned.
+      lastTitle = '';
+    });
+}
+
+// Hands the window back on the way out. Bounded by the caller, because a hung
+// socket must never be the reason ctrl-c does not work.
+function clearTitle() {
+  if (!TITLE || DEMO || ONCE || !lastTitle) return Promise.resolve();
+  lastTitle = '';
+  return api?.request('client.window_title.clear', {}, 400) ?? Promise.resolve();
+}
+
 // Feeds the roster everything it needs to seat people where their panes really
 // are. Order matters: the layouts refer to workspaces and tabs by id, so the
 // numbers have to be in hand before the geometry is read.
@@ -246,6 +297,7 @@ async function refresh() {
     syncSubscriptions();
     refreshAsks();
     refreshCommands();
+    syncTitle();
     if (NOTIFY) {
       for (const id of newlyBlocked) {
         const person = roster.find(id);

@@ -44,6 +44,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --demo` | Fake roster, no server needed (good for hacking on the art) |
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
+| `node office.mjs --no-title` | Same, leaving the window title alone |
 
 Bind it to a key in `~/.config/herdr/config.toml`:
 
@@ -206,6 +207,22 @@ back is one of the fixed strings. One caveat worth knowing: `0 failed` is the ha
 path, so the failure patterns require a non-zero count. An office that read every
 green test run as a disaster would be worse than one that said nothing.
 
+## On the window itself
+
+The office also writes the headline count to the window title, so it is legible
+from a tab bar or an alt-tab list with the office pane nowhere on screen: `2
+waiting - 3 working - office`. The number you have to act on comes first, because
+every window list in every OS truncates from the right. A room with people in it
+but nothing happening reads `all quiet`, an empty one reads `nobody in`, and the
+whole string is capped at 48 characters.
+
+It is somebody else's window, so: the title only goes out when the string actually
+changes, and **it is handed back with `client.window_title.clear` on the way out**,
+including on ctrl-c and on a crash. A stale "2 waiting on you" outliving the
+process that wrote it would be worse than no title at all. If herdr reports there
+is no foreground window to title, nothing is remembered as set, so it goes out
+again when a window comes back. `--no-title` switches the whole thing off.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then
@@ -292,6 +309,12 @@ it was entered, so the first sighting of an agent starts the clock.
   process tree, which is about fifteen kilobytes a pane on a real machine, so a busy
   floor is read a few desks at a time rather than all of it every two seconds. Only
   the process names and argv are looked at, never `cmdline`.
+- The window title is `client.window_title.set`, sent only when the string changes,
+  and `client.window_title.clear` on the way out with a 500ms budget: an office that
+  would not quit because a title would not clear is worse than a stale title. Note
+  that this server returns `changed: true` on every call including a redundant one,
+  so the deduplication has to happen on this side; `reason` is the field that means
+  anything.
 - Speech bubbles cost one `agent.read --source visible` per *stuck* desk, refreshed at
   most every 6s. Nobody else is read until you open their desk, so a quiet office is
   three calls every two seconds no matter how many agents you are running.

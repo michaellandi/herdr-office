@@ -197,6 +197,9 @@ function wallCard(label) {
 // name longer than twelve is nearly always a ticket id with a slug hanging off it,
 // and a job cut below ten words is not a job any more.
 const BRANCH_W = 12;
+
+// `[y] [n]`: the answer buttons as they appear on a one-line row.
+const ANSWER = '[y] [n]';
 const TASK_MIN = 10;
 
 const BUBBLE_X = SLAB_X;
@@ -846,6 +849,13 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     b.add(padEnd(st.label, 11), { fg: st.fg, bold: person.status === 'blocked' });
     if (room(9)) b.add(padEnd(truncate(person.name, 8), 9), { fg: P.ink, bold: selected });
     if (room(8)) b.add(padEnd(dur, 8), { fg: P.faint });
+    // Room for the answer buttons is claimed here, before the agent name and the tab
+    // are given theirs, so that on a narrow pane a row which is asking you something
+    // keeps the two things you need (the question and the buttons) and gives up the
+    // two you can read off the card (which agent, which tab). It makes a blocked row
+    // look different from the rows around it, which is not a defect: it is the row
+    // that wants something from you.
+    const answerRoom = person.status === 'blocked' && cols - b.w - 2 >= 16 + width(ANSWER) + 2 ? width(ANSWER) + 2 : 0;
     // Stuck people say what they need here; everyone else gets their pane title.
     // Whichever it is, it outranks the tab and the agent name for space: a row
     // that has squeezed out the ask has squeezed out the only thing you needed.
@@ -858,9 +868,19 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // the remaining space even though it is drawn after it. Both tests reserve a
     // fixed 16 cells for the tail rather than measuring this row's, so every row
     // makes the same choice and the columns stay square.
-    const wantTab = tabCol > 0 && room(tabCol + 2 + 16);
-    if (room(10 + 16 + (wantTab ? tabCol + 2 : 0))) b.add(padEnd(truncate(person.kind, 9), 10), { fg: P.dim });
-    if (wantTab) {
+    let showTab = tabCol > 0 && room(tabCol + 2 + 16 + answerRoom);
+    let showKind = room(10 + 16 + answerRoom + (showTab ? tabCol + 2 : 0));
+    // On a row carrying buttons those two middle columns go together. Keeping the tab
+    // while the agent name is squeezed out leaves the tab sitting in the agent's
+    // column, which reads as a misprint rather than as a narrow pane, so the row is
+    // either the same shape as its neighbours or the short shape: the question and
+    // the buttons, and nothing in between.
+    if (answerRoom && !(showKind && (showTab || tabCol === 0))) {
+      showKind = false;
+      showTab = false;
+    }
+    if (showKind) b.add(padEnd(truncate(person.kind, 9), 10), { fg: P.dim });
+    if (showTab) {
       b.add(padEnd(truncate(person.tabName, tabCol), tabCol), { fg: P.ink });
       b.add('  ');
     }
@@ -869,15 +889,37 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // appears on a wide pane and quietly does not on a narrow one. Right-aligned so
     // that with twenty rows on the screen it forms a column you can read down, which
     // is the whole reason to want it in the list.
-    const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    // A raised hand can be answered from here, which is the one thing this view
+    // could not do and needed most: the compact list exists for the floor with
+    // twenty people on it, and the whole reason to be looking at twenty people is
+    // that one of them is waiting on you.
+    //
+    // Its own right-hand column rather than trailing the ask, because a button that
+    // moved with the length of the question would be a moving target for a mouse.
+    // On a blocked row it takes the column the branch would have had: the branch is
+    // on the card as well, and this is the only place in the list you can answer
+    // from. The gap in the branch column reads as "this row is asking you something",
+    // which is the right thing for it to say.
+    const ref = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
     const refRoom = ref && cols - b.w - 2 >= 16 + width(ref) + 2 ? width(ref) + 2 : 0;
-    b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom)), {
+    b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom - answerRoom)), {
       fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
       bold: Boolean(news),
     });
     if (refRoom) {
       b.gap(cols - 1 - width(ref));
       b.add(ref, { fg: P.faint });
+    }
+    // Bracketed and accent-coloured like the buttons on a monitor and the ones on
+    // the card, so the same thing looks the same in all three places.
+    const answers = [];
+    if (answerRoom && b.w <= cols - 1 - width(ANSWER)) {
+      b.gap(cols - 1 - width(ANSWER));
+      const from = b.w;
+      b.add('[y]', { fg: P.accent, bold: true });
+      b.add(' ');
+      b.add('[n]', { fg: P.accent, bold: true });
+      answers.push({ action: 'approve', x: from, w: 3 }, { action: 'deny', x: from + 4, w: 3 });
     }
     const { text, spans } = b.fit(cols);
     // Drag feedback in the list is the row background only, for the same reason
@@ -894,6 +936,10 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
             : P.carpet;
     lines.push(paint(text, spans, { bg: rowBg }));
     hitboxes.push({ id: person.id, x: 0, y: startRow + i, w: cols, h: 1 });
+    // After the row's own box, which is fine: hitTest prefers a box with an action
+    // over the one it is drawn on, and deskAt ignores actions outright, so dropping
+    // a dragged desk on somebody's [y] still means their row and not their prompt.
+    for (const btn of answers) hitboxes.push({ id: person.id, action: btn.action, x: btn.x, y: startRow + i, w: btn.w, h: 1 });
   }
   return lines;
 }

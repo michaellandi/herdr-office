@@ -478,6 +478,17 @@ Opening a desk splits the room instead of taking it over: the panel takes the bo
 half and the floor keeps the top, so you can read one agent while watching the rest.
 Arrow keys still walk the floor with the panel open, and it follows you.
 
+The `[y]` and `[n]` are real buttons in all three places they appear: on the desk's
+monitor, on the card, and now on a list row too. That last one was the gap that
+mattered, since the list is what you are looking at when there are twenty agents and
+one of them is waiting on you, and until now answering meant walking to the desk
+first. They sit in their own right-hand column rather than trailing the question,
+because a button that moved with the length of the ask would be a moving target for a
+mouse, and on a row that is asking you something they take the column the branch
+would have had. On a pane too narrow for them nothing is drawn and nothing is
+clickable there: `y` and `n` still work, and a hitbox with no button under it would
+be an approval sent from a blank patch of screen.
+
 ## Who is who
 
 | State | Desk |

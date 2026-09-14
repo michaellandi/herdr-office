@@ -9,6 +9,7 @@ import { width } from '../src/text.mjs';
 import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
 import { assignRooms } from '../src/rooms.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
+import { hitTest, deskAt } from '../src/mouse.mjs';
 
 const roster = officeRoster();
 const people = roster.people;
@@ -352,4 +353,117 @@ test('rooms are paint, so nothing moves under the mouse', () => {
       assert.deepEqual(at(true), at(false), `${cols}x${rows} ${zoom}`);
     }
   }
+});
+
+test('a raised hand can be answered from the list, not just from a desk', () => {
+  // The gap this closes: the compact list exists for the floor with twenty people
+  // on it, and the reason to be looking at twenty people is that one of them is
+  // waiting on you. Until now that meant walking to the desk or opening the card.
+  const [cols, rows] = [140, 46];
+  const view = viewOf({ people, cols, rows, zoom: 'list' });
+  const { lines, hitboxes } = renderFrame(view);
+  const plain = lines.map(stripAnsi);
+  const buttons = answers(hitboxes);
+  const blocked = people.filter((p) => p.status === 'blocked');
+  assert.equal(buttons.length, blocked.length * 2, 'one pair per raised hand');
+  for (const box of buttons) {
+    // One row tall: this is a list row, not a monitor in a tile.
+    assert.equal(box.h, 1);
+    assert.equal(box.w, 3);
+    const row = plain[box.y];
+    assert.equal(row.slice(box.x, box.x + 3), box.action === 'approve' ? '[y]' : '[n]');
+    // On the right row, which is the whole point: the box has to answer for the
+    // person whose name is on the line it is drawn on.
+    const person = roster.find(box.id);
+    assert.ok(row.includes(person.name), `${box.action} for ${person.name} is on ${JSON.stringify(row)}`);
+  }
+  // In its own column, so twenty rows of hands are twenty buttons in a line rather
+  // than a scatter that has to be aimed at individually.
+  assert.equal(new Set(buttons.map((b) => b.x)).size, 2);
+});
+
+test('a list row too narrow to show the buttons does not take clicks for them', () => {
+  // The invariant that matters more than having them: a hitbox is a promise that
+  // something is drawn there, and these send a real keystroke to a real agent.
+  let drawn = 0;
+  let bare = 0;
+  for (const cols of [31, 40, 46, 60, 70, 80, 95, 120, 140, 200]) {
+    const view = viewOf({ people, cols, rows: 12, zoom: 'list' });
+    const { lines, hitboxes } = renderFrame(view);
+    const plain = lines.map(stripAnsi);
+    const buttons = answers(hitboxes);
+    if (buttons.length) drawn += 1;
+    else bare += 1;
+    for (const box of buttons) {
+      assert.ok(box.x + box.w <= cols, `${cols} cols: a button ends at ${box.x + box.w}`);
+      assert.match(plain[box.y].slice(box.x, box.x + box.w), /^\[[yn]\]$/, `${cols} cols`);
+    }
+    // And the row is still exactly the pane wide, buttons or not.
+    for (const line of lines) assert.equal(width(line), cols, `${cols} cols`);
+  }
+  assert.ok(drawn > 0 && bare > 0, `${drawn} wide and ${bare} narrow: this test needs both`);
+});
+
+test('the buttons on a list row do not swallow the row', () => {
+  // Two separate promises. hitTest prefers an action box, so a click on [y]
+  // answers; deskAt ignores actions outright, so a desk dragged onto somebody's
+  // [y] is dropped on their row and swaps seats rather than approving anything.
+  const [cols, rows] = [140, 46];
+  const view = viewOf({ people, cols, rows, zoom: 'list' });
+  const { hitboxes } = renderFrame(view);
+  const box = answers(hitboxes)[0];
+  assert.ok(box, 'no button to test with');
+  assert.equal(hitTest(hitboxes, box.x + 1, box.y).action, box.action);
+  const desk = deskAt(hitboxes, box.x + 1, box.y);
+  assert.equal(desk.id, box.id);
+  assert.equal(desk.action, undefined);
+  assert.equal(desk.w, cols, 'the row is clickable across its whole width');
+});
+
+test('a narrow row gives up the columns you can read elsewhere, not the buttons', () => {
+  // The priority on a row that wants something from you: the question, then the
+  // buttons, then which agent and which tab, both of which are on the card. The two
+  // middle columns go together, so the row is either the same shape as its
+  // neighbours or the short shape, never a tab sitting in the agent's column.
+  const blocked = people.find((p) => p.status === 'blocked');
+  const working = people.find((p) => p.status === 'working');
+  const pairs = people.filter((p) => p.status === 'blocked').length * 2;
+  const at = (cols) => {
+    const view = viewOf({ people, cols, rows: 12, zoom: 'list' });
+    const { lines, hitboxes } = renderFrame(view);
+    const plain = lines.map(stripAnsi);
+    const row = (person) => plain.find((l) => l.includes(person.name)) || '';
+    return { buttons: answers(hitboxes).length, blocked: row(blocked), working: row(working) };
+  };
+
+  // Wide: every row is the same shape, and the blocked one has buttons where its
+  // branch would have been.
+  const wide = at(140);
+  assert.equal(wide.buttons, pairs);
+  assert.ok(wide.blocked.includes(blocked.kind), wide.blocked);
+  assert.ok(wide.blocked.includes(blocked.tabName), wide.blocked);
+  assert.ok(wide.blocked.includes('[y] [n]'), wide.blocked);
+  // (What happens to the branch column on a row with buttons is pinned in
+  // branches.test.mjs, where the roster actually has branches on it.)
+
+  // Narrow: the buttons are still there, and the agent and the tab have gone
+  // together while the rows around it keep both.
+  const tight = at(80);
+  assert.equal(tight.buttons, pairs);
+  assert.ok(tight.blocked.includes('[y] [n]'), tight.blocked);
+  assert.ok(!tight.blocked.includes(blocked.kind), tight.blocked);
+  assert.ok(!tight.blocked.includes(blocked.tabName), tight.blocked);
+  // A row changing its own shape changes nobody else's: the same floor with nobody
+  // waiting on you draws the neighbouring row identically, cell for cell.
+  const calm = viewOf({
+    people: people.map((p) => ({ ...p, status: p.status === 'blocked' ? 'working' : p.status })),
+    cols: 80,
+    rows: 12,
+    zoom: 'list',
+  });
+  const calmRow = renderFrame(calm).lines.map(stripAnsi).find((l) => l.includes(working.name));
+  assert.equal(tight.working, calmRow);
+  assert.ok(!tight.working.includes('[y]'), tight.working);
+  // The question itself never goes: it is the reason the row is lit up.
+  assert.ok(tight.blocked.includes(blocked.ask.slice(0, 12)), tight.blocked);
 });

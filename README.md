@@ -339,6 +339,33 @@ that way, and an unknown value is the floor plan rather than an error: this is a
 wall display as often as it is a tool, and a typo in a plugin action's arguments
 should not leave somebody staring at a blank pane.
 
+## Which branch they are on
+
+The bottom line of a desk is "what, and where": the job on the left and the branch
+on the right, as `@feature/sso`. It is the other half of the question you have
+looking at a floor of agents, because two desks in the same repo, one on `main` and
+one on a throwaway, are otherwise identical. The `@` is there so a short branch
+cannot be read as the tail of the job.
+
+The branch gives up its space before the job does. On a line with room for only one
+of them the job wins and the branch simply is not drawn, because half a branch name
+next to half a sentence is two lies where there could have been one truth. Same rule
+in the list view, where it takes only what is spare after the ask has its room, and
+lands in a column you can read down.
+
+It comes from `worktree.list`, asked per working directory (two desks in one
+checkout are one question) and cached for thirty seconds, a couple of directories
+per pass. **`trust_repository` is never sent**, the same rule as hiring into a
+worktree: prompting somebody to trust a repository is a decision for them to make in
+front of the repository, not one a wall display makes on their behalf. An untrusted
+repo has no branch on its desks, and that is the right outcome rather than a prompt.
+
+A detached HEAD gets nothing rather than a commit hash: a desk labelled `a3f19c2`
+tells you less than a blank one, because at least the blank one does not look like a
+branch. A ref name is author-controlled text, so it is put through the same wash as
+tab names and terminal titles: one line, no control characters, thirty-two
+characters at the outside.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then

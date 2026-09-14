@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, BRANCHES, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -133,6 +133,40 @@ test('a filter, in every state the field can be in', () => {
       assertExact(viewOf({ people: [], cols, rows, total: 0, ...filter }), `filter=${name} empty ${cols}x${rows}`);
     }
   }
+});
+
+test('a branch on the desk, at every length and every size', () => {
+  // The branch shares the bottom line of a desk with the job, and the bottom row of
+  // the compact list with the ask, so a name that did not give ground would push a
+  // line over. Every zoom level, because each of the three draws it differently.
+  for (const branch of BRANCHES) {
+    const floor = officeRoster().people.map((p) => ({ ...p, branch, repo: 'herdr-office' }));
+    for (const [cols, rows] of SIZES) {
+      for (const zoom of ['auto', 'list', 'cubicle']) {
+        assertExact(viewOf({ people: floor, cols, rows, zoom }), `branch=${branch} zoom=${zoom} ${cols}x${rows}`);
+      }
+      assertExact(viewOf({ people: floor, cols, rows, detail: { id: floor[0].id, read: null } }), `branch=${branch} +card ${cols}x${rows}`);
+      const many = officeRoster(new Array(40).fill('working')).people.map((p) => ({ ...p, branch, repo: 'herdr-office' }));
+      assertExact(viewOf({ people: many, cols, rows }), `branch=${branch} 40 ${cols}x${rows}`);
+    }
+  }
+});
+
+test('the branch gives up its space before the job does', () => {
+  // The rule the widths encode: on a line with room for one of them, the job wins.
+  // Half a branch name next to half a sentence is two lies where there could have
+  // been one truth.
+  const long = officeRoster().people.map((p) => ({
+    ...p,
+    title: 'refactor the socket client so it stops hanging up on us',
+    branch: 'renovate/bump-everything-all-at-once-please',
+  }));
+  const wide = renderFrame(viewOf({ people: long, cols: 140, rows: 46 })).lines.map(stripAnsi).join('\n');
+  assert.match(wide, /@renovate/, 'a wide desk shows both');
+  // And a raised hand keeps its ask whatever the branch is doing.
+  const stuck = officeRoster(['blocked']).people.map((p) => ({ ...p, branch: 'renovate/bump-everything-all-at-once-please' }));
+  const text = renderFrame(viewOf({ people: stuck, cols: 105, rows: 45 })).lines.map(stripAnsi).join('\n');
+  assert.match(text, /shell requires approval/);
 });
 
 test('every zoom level, at every size, still fills the pane exactly', () => {

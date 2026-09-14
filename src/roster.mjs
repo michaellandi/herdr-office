@@ -65,6 +65,10 @@ export class Roster {
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
     this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
     this.events = new Map(); // pane_id -> { label, kind, at }, news, and short-lived
+    // Keyed by working directory rather than by pane, because that is the question
+    // `worktree.list` answers: two desks in the same checkout share one answer and
+    // therefore one call.
+    this.branches = new Map(); // cwd -> { branch, repo, at }
   }
 
   setWorkspaces(workspaces = []) {
@@ -156,6 +160,25 @@ export class Roster {
     return changed;
   }
 
+  // Which branch a working directory is on (see src/branches.mjs). A null branch is
+  // stored the same way a null command is: "asked, nothing to say" has to be
+  // distinguishable from "not asked yet", or a detached checkout gets re-asked on
+  // every single pass forever.
+  setBranch(cwd, { branch = null, repo = null } = {}) {
+    if (!cwd) return;
+    this.branches.set(cwd, { branch: branch || null, repo: repo || null, at: this.clock() });
+    for (const person of this.people) {
+      if (person.cwd !== cwd) continue;
+      person.branch = branch || null;
+      person.repo = repo || null;
+    }
+  }
+
+  branchAge(cwd) {
+    const entry = this.branches.get(cwd);
+    return entry ? this.clock() - entry.at : Infinity;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -213,6 +236,8 @@ export class Roster {
           choice: this.asks.get(id)?.choice || null,
           focused: Boolean(a.focused),
           cwd: a.cwd || '',
+          branch: this.branches.get(a.cwd || '')?.branch || null,
+          repo: this.branches.get(a.cwd || '')?.repo || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
         };

@@ -191,6 +191,13 @@ function wallCard(label) {
 
 // What a stuck person is saying, as a slab of colour over their head. A tail is
 // dropped onto the hair row underneath so it reads as speech, not as signage.
+// The branch gets at most twelve of the twenty-seven cells on a desk's bottom line,
+// and the job keeps at least ten. Both numbers are the same kind of judgement: a
+// name longer than twelve is nearly always a ticket id with a slug hanging off it,
+// and a job cut below ten words is not a job any more.
+const BRANCH_W = 12;
+const TASK_MIN = 10;
+
 const BUBBLE_X = SLAB_X;
 const BUBBLE_W = INNER - BUBBLE_X;
 const TAIL_X = 3;
@@ -275,6 +282,25 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   bar.gap(INNER);
 
   const task = person.title || person.cwd.split('/').pop() || person.id;
+  // The bottom line of a desk is "what, and where": the job on the left and the
+  // branch on the right. Which branch a desk is on is the other half of the question
+  // you have looking at a floor of agents, because two desks in the same repo, one on
+  // main and one on a throwaway, are otherwise identical. The `@` is there so a short
+  // branch cannot be mistaken for the tail of the job.
+  //
+  // The job gets whatever the branch does not need, and the branch is dropped
+  // entirely rather than squeezed when that would leave the job unreadable: on a
+  // twenty-seven cell line, half a branch name and half a sentence is two lies where
+  // there could have been one truth.
+  const foot = cells();
+  const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+  const roomForRef = ref && INNER - width(ref) - 1 >= TASK_MIN;
+  foot.add(truncate(task, roomForRef ? INNER - width(ref) - 1 : INNER), { fg: P.dim });
+  if (roomForRef) {
+    foot.gap(INNER - width(ref));
+    foot.add(ref, { fg: P.soft });
+  }
+  foot.gap(INNER);
   const card = wallCard(person.tabName);
   // The bubble only exists while they are stuck, and its tail lands on the row
   // below, which is the hair row.
@@ -319,7 +345,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
     blank(),
     row(bar.out().text, bar.out().spans),
-    row(padEnd(task, INNER), [{ from: 0, to: Infinity, fg: P.dim }]),
+    row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
   ];
   // ART_Y and BUTTON_Y are indexes into the list above, so a row added or removed
@@ -735,10 +761,21 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
       b.add(padEnd(truncate(person.tabName, tabCol), tabCol), { fg: P.ink });
       b.add('  ');
     }
-    b.add(truncate(tail, Math.max(0, cols - b.w - 2)), {
+    // The branch is last in the queue for space and it takes only what is spare:
+    // the tail keeps the same sixteen cells it is promised above, and the branch
+    // appears on a wide pane and quietly does not on a narrow one. Right-aligned so
+    // that with twenty rows on the screen it forms a column you can read down, which
+    // is the whole reason to want it in the list.
+    const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    const refRoom = ref && cols - b.w - 2 >= 16 + width(ref) + 2 ? width(ref) + 2 : 0;
+    b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom)), {
       fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
       bold: Boolean(news),
     });
+    if (refRoom) {
+      b.gap(cols - 1 - width(ref));
+      b.add(ref, { fg: P.faint });
+    }
     const { text, spans } = b.fit(cols);
     // Drag feedback in the list is the row background only, for the same reason
     // it is border colour only on a desk: it cannot change how wide the row is.
@@ -1038,6 +1075,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     fields.push(['doing', person.title || '(no pane title)', P.soft]);
     fields.push(['where', [person.workspaceName, person.tabId, person.id].filter(Boolean).join(' · '), P.soft]);
     fields.push(['cwd', person.cwd, P.soft]);
+    // Only when there is one. A `branch: (none)` row on every desk in an untrusted
+    // repo would be a permanent apology for a thing nobody asked about.
+    if (person.branch) fields.push(['branch', person.repo ? `${person.branch} · ${person.repo}` : person.branch, P.ink]);
     if (person.sessionId) fields.push(['session', person.sessionId, P.soft]);
   }
 

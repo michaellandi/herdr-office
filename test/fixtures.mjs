@@ -193,6 +193,16 @@ export const NEWS = [
 // Every state the filter can be in: off, a field just opened with nothing in it,
 // a filter that matches, one that matches nobody, and one long enough to need
 // cutting in the header chip.
+// Branches, as they arrive: ordinary, long enough to crowd the line, one that is
+// only just a name at all, and none.
+export const BRANCHES = [
+  'main',
+  'feature/sso',
+  'renovate/bump-everything-all-at-once-please',
+  'x',
+  null,
+];
+
 export const FILTERS = [
   ['off', { filter: '', filtering: false }],
   ['field open, empty', { filter: '', filtering: true }],

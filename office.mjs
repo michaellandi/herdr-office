@@ -24,6 +24,7 @@ import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
+import { branchFromList } from './src/branches.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -61,6 +62,13 @@ const ASK_MS = 6000;
 // all of them every two seconds.
 const CMD_MS = 5000;
 const CMD_PER_PASS = 4;
+// Branches move a lot less often than a foreground process does, so they are asked
+// for far less often, and the answer is cached per working directory rather than per
+// desk: twelve panes in one checkout are one question. A checkout somebody is
+// actively switching branches in catches up within half a minute, which is the right
+// trade for a wall display.
+const BRANCH_MS = 30000;
+const BRANCH_PER_PASS = 2;
 
 // Global subscriptions: these need no pane_id. pane.agent_status_changed is
 // per-pane, so it gets added for every desk we know about and re-subscribed
@@ -305,6 +313,32 @@ async function refreshCommands() {
   if (!ONCE) draw();
 }
 
+// Which branch each desk is on, via `worktree.list`. Asked per distinct working
+// directory, stalest first, a couple at a time, so a floor spread across eight repos
+// fills in over a few passes instead of firing eight calls at once. **`trust_repository`
+// is never sent** (see src/branches.mjs): an untrusted repo has no branch on its
+// desks, and that is the correct outcome rather than a prompt this pane has no
+// business raising on somebody's behalf.
+async function refreshBranches() {
+  const dirs = [...new Set(roster.people.map((p) => p.cwd).filter(Boolean))]
+    .filter((cwd) => roster.branchAge(cwd) >= BRANCH_MS)
+    .sort((a, b) => roster.branchAge(b) - roster.branchAge(a))
+    .slice(0, BRANCH_PER_PASS);
+  if (!dirs.length) return;
+  for (const cwd of dirs) {
+    try {
+      const res = await api.request('worktree.list', { cwd });
+      roster.setBranch(cwd, branchFromList(res, cwd));
+    } catch {
+      // Not a repo, not trusted, or the server would rather not say. Recorded as an
+      // answer all the same, so the office does not ask the same directory again
+      // every two seconds for the rest of the afternoon.
+      roster.setBranch(cwd, {});
+    }
+  }
+  if (!ONCE) draw();
+}
+
 // Puts the headline count on the window itself, so the office is legible from a
 // tab bar or an alt-tab list with its pane nowhere in sight. Only ever sent when
 // the string actually changes: a title set twenty times a minute to the same
@@ -376,6 +410,7 @@ async function refresh() {
     syncSubscriptions();
     refreshAsks();
     refreshCommands();
+    refreshBranches();
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -1223,7 +1258,15 @@ function demoAgents() {
     agent_status: cycle[(i + Math.floor(demoTick / 6)) % cycle.length],
     workspace_id: 'w1',
     tab_id: `w1:t${i + 1}`,
-    cwd: '/Users/you/Desktop/projects/herdr-office',
+    // A checkout each, because that is how a floor of agents on different branches
+    // actually looks: one desk in the repo itself and the rest in linked worktrees.
+    cwd: DEMO_BRANCHES[i]
+      ? `/Users/you/Desktop/projects/herdr-office${i ? `/.worktrees/${DEMO_BRANCHES[i].replace(/\//g, '-')}` : ''}`
+      // The one desk with no branch is somewhere that is not a repository at all,
+      // which has to be its own directory: a branch is a fact about a checkout, so
+      // two desks in the same checkout cannot disagree about it, and the cache is
+      // keyed that way on purpose.
+      : '/Users/you',
     terminal_title_stripped: title,
     focused: i === 0,
     state_change_seq: 1,
@@ -1236,6 +1279,10 @@ function demoAgents() {
 // deterministically, so the recorded GIF and the --once render are the same
 // office every time. One command is deliberately longer than the twelve cells a
 // monitor has, because that is the case worth being able to look at.
+// One desk on main and the rest on their own branches, which is the arrangement the
+// feature exists for: telling those two apart from across the room.
+const DEMO_BRANCHES = ['main', 'feature/sso', 'fix/flaky-tests', 'renovate/deps', 'office-plugin', 'triage', null];
+
 const DEMO_COMMANDS = ['npm test', 'cargo build', 'git rebase', 'pytest -x --last-failed', 'tsc', 'make'];
 
 // News is normally driven by `pane.output_matched`, which the demo has no server
@@ -1248,6 +1295,7 @@ function demoExtras() {
   roster.people.forEach((person, i) => {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
+    roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: 'herdr-office' });
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {

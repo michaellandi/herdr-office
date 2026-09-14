@@ -246,7 +246,7 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'group resolver', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -271,5 +271,10 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // rooms at all: every test written before rooms existed keeps rendering exactly
     // the office it was written against.
     rooms: rooms || assignRooms(people),
+    // The punch clock's numbers. Null by default: an office nobody has watched for
+    // any length of time has an empty whiteboard, which is what the pre-punch-clock
+    // tests were all written against.
+    stats,
+    shift,
   };
 }

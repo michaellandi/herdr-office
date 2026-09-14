@@ -25,6 +25,7 @@ import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
+import { Clocks } from './src/punchclock.mjs';
 import { branchFromList } from './src/branches.mjs';
 
 const argv = new Set(process.argv.slice(2));
@@ -90,6 +91,9 @@ const GLOBAL_EVENTS = [
 ];
 
 const roster = new Roster();
+// Where the office's time went. Fed from the same status changes the roster is
+// already tracking, so it costs nothing on the wire.
+const clocks = new Clocks();
 let api = null;
 let events = null;
 let selectedId = null;
@@ -195,6 +199,10 @@ function view() {
     // Room colours come from the WHOLE roster rather than the filtered floor, so a
     // filter narrows who is on screen without repainting the walls behind them.
     rooms: assignRooms(roster.people),
+    // Plain numbers, read once per frame, so the renderer stays a pure function of
+    // its view rather than holding a clock it can ask questions of.
+    shift: detail ? clocks.desk(detail.id) : null,
+    stats: clocks.office(),
     counts: countOf(people),
     total: roster.people.length,
     filter,
@@ -396,6 +404,7 @@ async function refresh() {
   if (DEMO) {
     roster.update(demoAgents());
     demoExtras();
+    clocks.observe(roster.people);
     ensureSelection();
     shepherd();
     draw();
@@ -409,6 +418,7 @@ async function refresh() {
     ]);
     seat(snapshot, tabs);
     const newlyBlocked = roster.update(agentList.agents || []);
+    clocks.observe(roster.people);
     ensureSelection();
     shepherd();
     syncSubscriptions();
@@ -682,6 +692,9 @@ async function respond(kind) {
   }
   try {
     await api.request('agent.send_keys', { target: person.id, keys });
+    // Counted only once the keys are actually away, so the whiteboard's tally is
+    // answers the office really sent rather than answers it tried to send.
+    clocks.answer();
     note(`sent ${keys.join(' ')} to ${person.name}`);
     // The prompt is gone but herdr has not noticed yet, so ask again shortly
     // rather than leaving a hand up that has already been dealt with.
@@ -1359,12 +1372,14 @@ async function main() {
     if (DEMO) {
       roster.update(demoAgents());
       demoExtras();
+      clocks.observe(roster.people);
     } else {
       const snapshot = await api.request('session.snapshot', {}).catch(() => null);
       const tabs = await api.request('tab.list', {}).catch(() => null);
       seat(snapshot, tabs);
       const list = await api.request('agent.list', {});
       roster.update(list.agents || []);
+      clocks.observe(roster.people);
       await refreshAsks();
       await refreshCommands();
     }

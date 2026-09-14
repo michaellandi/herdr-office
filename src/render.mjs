@@ -611,7 +611,70 @@ const PROP_GAP = 3;
 const BAND_H = 6;
 const MARGIN = 2;
 
-function furnish(cols, y0, rowsLeft) {
+// The whiteboard on the back wall, and what somebody wrote on it.
+//
+// The office already tells you what is happening right now. This is the only thing
+// in it that tells you what happened: how much of the morning was actually spent
+// working, how much of it was spent waiting on a human, how many hands went up and
+// how many of them you answered from here. Every number comes off the punch clock
+// (src/punchclock.mjs), which is derived from status changes the office was polling
+// for anyway, so a wall of statistics costs nothing on the wire.
+//
+// It is furniture, which is the right status for it: it hangs on the back wall in
+// the strip under the desks, it appears when the room has a wall to hang it on, and
+// it is the first thing the band gives up when the pane gets small. Nothing about
+// the office's state is ONLY on the whiteboard.
+// Four rows, which is the height of a pot plant: the tallest thing that still
+// hangs on a five-row strip of wall, so the board is up in most panes rather than
+// only in a maximised one. Two lines of writing is also about as much as anybody
+// reads off a wall in passing.
+const WB_W = 40; // the whole board, borders included
+const WB_TEXT = WB_W - 4;
+
+export function whiteboard(stats, now) {
+  if (!stats) return null;
+  // A blank board until there is something true to write on it. A fresh office
+  // reading "worked 0s, hands 0" would be furniture pretending to be information.
+  // A second is the floor for the same reason it is on the card: a millisecond of
+  // anything is the poll interval, not a morning's work.
+  if (!(stats.worked >= 1000 || stats.waiting >= 1000 || stats.hands > 0)) return null;
+  const line = (text) => `\u2502 ${padEnd(truncate(text, WB_TEXT), WB_TEXT)} \u2502`;
+  // When the session started, as a wall-clock time, because "open since 09:41" is
+  // what says these numbers are of a morning rather than of all time. Elapsed would
+  // have read as one more statistic.
+  const since = new Date(Math.max(0, now - stats.open)).toTimeString().slice(0, 5);
+  const title = `open since ${since}`;
+  // Time first, because the split between working and waiting on a human is the one
+  // number here that says something about how the office is being run rather than
+  // about how the agents are doing.
+  const spent = `worked ${formatDuration(stats.worked)} \u00b7 waiting ${formatDuration(stats.waiting)}`;
+  const hands = [`hands ${stats.hands}`];
+  if (stats.answers > 0) hands.push(`${stats.answers} from here`);
+  // A second, not a millisecond: on the first frame of a session the worst wait is
+  // however long ago the last poll was, and "worst 0s" is not a statistic.
+  if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest)}`);
+  const rows = [
+    `\u250c ${title} ` + '\u2500'.repeat(Math.max(0, WB_W - 4 - width(title))) + '\u2510',
+    line(spent),
+    line(hands.join(' \u00b7 ')),
+    '\u2514' + '\u2500'.repeat(WB_W - 2) + '\u2518',
+  ];
+  // Every row is one prop-shaped box, and a box whose rows disagree about their
+  // width would shear the wall. The numbers in here are formatted at runtime, so
+  // this is a check rather than a comment.
+  for (const row of rows) if (width(row) !== WB_W) throw new Error(`whiteboard row is ${width(row)} cells, want ${WB_W}`);
+  return {
+    w: WB_W,
+    h: rows.length,
+    rows,
+    rowFg: ['plastic', 'soft', 'soft', 'plastic'],
+    // A surface, rather than writing directly on the wall: the spaces inside the
+    // frame are part of the board, which is what makes it read as one.
+    bg: 'paper',
+  };
+}
+
+function furnish(cols, y0, rowsLeft, board = null) {
   const bandH = Math.min(rowsLeft, BAND_H);
   const room = cols - MARGIN * 2;
   if (bandH < 3 || room < 12) return [];
@@ -619,7 +682,17 @@ function furnish(cols, y0, rowsLeft) {
   // Pick what fits at the minimum spacing...
   const fits = [];
   let used = 0;
+  // The whiteboard goes up first, but only if it can hang there without crowding
+  // out the whole rest of the room: on a wall with no space for anything else, an
+  // office of statistics and no plants is not the office this is.
+  const hung = board && board.h <= bandH && board.w + 10 <= room;
+  if (hung) {
+    fits.push(board);
+    used += board.w;
+  }
   for (const name of PROP_ORDER) {
+    // One board on the wall is plenty, and the small one is the stand-in for this.
+    if (hung && name === 'board') continue;
     const p = PROPS[name];
     if (p.h > bandH) continue;
     if (used + p.w + fits.length * PROP_GAP > room) break;
@@ -644,22 +717,29 @@ function furnish(cols, y0, rowsLeft) {
 function propRow(placed, y, cols) {
   const chars = new Array(cols).fill(' ');
   const colours = new Array(cols).fill(null);
+  const backs = new Array(cols).fill(null);
   for (const { p, x, y: py } of placed) {
     const r = y - py;
     if (r < 0 || r >= p.h) continue;
     const hex = P[p.rowFg[r]];
+    // A prop with a surface (the whiteboard) owns every cell of its box, spaces
+    // included, or the wall would show through between its words.
+    const back = p.bg ? P[p.bg] : null;
     [...p.rows[r]].forEach((ch, i) => {
-      if (ch === ' ' || x + i >= cols) return;
+      if (x + i >= cols) return;
+      if (back) backs[x + i] = back;
+      if (ch === ' ') return;
       chars[x + i] = ch;
       colours[x + i] = hex;
     });
   }
   const spans = [];
+  const key = (i) => `${colours[i] || ''}|${backs[i] || ''}`;
   for (let i = 0; i < cols; i += 1) {
-    if (!colours[i]) continue;
+    if (!colours[i] && !backs[i]) continue;
     let j = i;
-    while (j < cols && colours[j] === colours[i]) j += 1;
-    spans.push({ from: i, to: j, fg: colours[i] });
+    while (j < cols && key(j) === key(i)) j += 1;
+    spans.push({ from: i, to: j, ...(colours[i] ? { fg: colours[i] } : {}), ...(backs[i] ? { bg: backs[i] } : {}) });
     i = j - 1;
   }
   return paint(chars.join(''), spans, { bg: P.backWall });
@@ -674,10 +754,10 @@ function propRow(placed, y, cols) {
 // join between the two and the furniture has something to stand against. The top
 // row of the band is the trim along that join, which is why the furniture starts
 // one row lower.
-function decorate(lines, cols, floorRows, minY) {
+function decorate(lines, cols, floorRows, minY, board = null) {
   const bandTop = Math.max(minY, floorRows - BAND_H);
   const bandH = Math.min(floorRows - bandTop, BAND_H);
-  const placed = furnish(cols, bandTop + 1, bandH - 1);
+  const placed = furnish(cols, bandTop + 1, bandH - 1, board);
   if (!placed.length) return;
   const trim = paint('▔'.repeat(cols), [], { fg: P.trim, bg: P.backWall });
   for (let y = bandTop; y < floorRows; y += 1) lines[y] = y === bandTop ? trim : propRow(placed, y, cols);
@@ -702,7 +782,9 @@ function emptyFloor(view, floorRows) {
   // This is the pane too small to draw a single desk in, so there is no empty
   // desk to click: the key is the only way in, and it has to be said out loud.
   say('Press + to hire, or start an agent in a Herdr pane.', { fg: P.dim }, mid + 2);
-  // The plants keep working even when nobody else does.
+  // The plants keep working even when nobody else does. No whiteboard: an empty
+  // office has nothing to report, and a board reading all zeros in a room with
+  // nobody in it would be rubbing it in.
   decorate(lines, cols, floorRows, mid + 4);
   return lines;
 }
@@ -1092,6 +1174,23 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     const held = view.now - person.since;
     const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
     fields.push(['status', st.label + dwell, st.fg]);
+    // The punch clock. The status line above says what is true right now; this says
+    // where the shift went, which is the question you actually have about a desk
+    // that has been up since this morning.
+    //
+    // Every clause is worth a second before it is worth saying. A desk the office
+    // met on this frame would otherwise read "0s on shift · 0s working", which is
+    // three zeros where a real number is about to be, and the first thing anybody
+    // opening a card would see.
+    if (view.shift && view.shift.onShift >= 1000) {
+      const shift = view.shift;
+      const parts = [`${formatDuration(shift.onShift)} on shift`];
+      if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked)} working`);
+      if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting)} waiting on you`);
+      // One hand is the hand you are looking at. Two is a pattern.
+      if (shift.hands > 1) parts.push(`${shift.hands} hands`);
+      fields.push(['clock', parts.join(' · '), P.soft]);
+    }
     fields.push(['tab', person.tabName || '(unnamed tab)', P.ink]);
     fields.push(['doing', person.title || '(no pane title)', P.soft]);
     // In the room's own colour, which is what ties a wall you can see to a workspace
@@ -1334,7 +1433,7 @@ export function renderFrame(view) {
     const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
-    decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom);
+    decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, whiteboard(view.stats, view.now));
     if (pages > 1 && floorRows > 0) {
       // One desk to a floor is a desk, not a floor, and saying "floor 3 of 7" while
       // exactly one person is on the screen reads as six missing colleagues.

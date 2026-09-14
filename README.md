@@ -399,6 +399,53 @@ on every frame. The colours also come from the whole office rather than from the
 desks currently on screen, so putting a filter on narrows who you can see without
 repainting the walls behind them.
 
+## What the day actually looked like
+
+Everything else in the office is about right now. The punch clock is the one part
+that remembers: how long a desk has been up, how much of that it spent working, and
+how much of it it spent waiting on you.
+
+Open a desk's card and there is a `clock` line under its status:
+
+```
+status   NEEDS YOU for 4m12s
+clock    2h05m on shift · 1h48m working · 14m30s waiting on you · 3 hands
+```
+
+The office total goes on a whiteboard on the back wall, in among the plants:
+
+```
+┌ open since 09:41 ──────────────────────┐
+│ worked 3h40m · waiting 12m30s          │
+│ hands 6 · 4 from here · worst 6m20s    │
+└────────────────────────────────────────┘
+```
+
+`4 from here` is answers this office sent, not prompts that resolved: if you walked
+over to the pane and typed `y` yourself, that hand went up and came down without
+the office taking any credit for it. `worst` is the longest any one desk sat waiting
+on a human, including a wait still going, because the answer to "how bad has it
+been" must never be smaller than what is on the screen in front of you.
+
+None of it costs a request. Every number is derived from the status changes the
+office was already polling for, and each interval is closed with herdr's own
+timestamp for the change that ended it rather than by counting poll ticks, so the
+totals come out the same whether the refresh was on time or late. Time belonging to
+a desk that has since closed is kept, so the office totals only ever go up: a total
+that dropped when somebody tidied up a tab would read as a bug rather than as a
+closed tab.
+
+Nothing is written to disk. The clock starts when you open the office and the
+numbers are about this session, which is what `open since 09:41` is there to say. A
+"today" that quietly reset whenever the office was reopened, or that spanned
+midnight, would be a worse lie than a smaller true number.
+
+The whiteboard is furniture, so it hangs there only when the floor has a strip of
+wall to spare, and it is the first thing given up when there are more people than
+room. That is the right priority: a desk you cannot see is a problem, a statistic
+you cannot see is not, and nothing about the office's state is only written on the
+wall.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then

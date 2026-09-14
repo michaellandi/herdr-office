@@ -412,6 +412,13 @@ function headerLines(view) {
     b.add('   ');
     b.add('» following hands', { fg: status('blocked').fg, bold: true });
   }
+  // A zoom level is sticky and it changes what the whole pane looks like, so it says
+  // which one you are in. Nothing at all for `auto`, because that is not a mode you
+  // chose and a badge reading "automatic" on every normal frame is just noise.
+  if (view.zoom === 'cubicle' || view.zoom === 'list') {
+    b.add('   ');
+    b.add(view.zoom === 'cubicle' ? 'one desk' : 'list view', { fg: P.faint });
+  }
   const budget = size.cols - width(clock) - 4;
   for (const key of ORDER) {
     if (!counts[key]) continue;
@@ -428,6 +435,15 @@ function headerLines(view) {
   const { text, spans } = b.fit(size.cols);
   return [paint(text, spans, { bg: P.bar, fg: P.soft }), fill(size.cols, P.carpet)];
 }
+
+// The zoom levels, ordered the way the key walks them: in, normal, out. `auto` is
+// the middle because it IS the floor plan, it just decides for itself when the floor
+// plan has stopped being readable.
+export const ZOOMS = ['cubicle', 'auto', 'list'];
+const zoomOf = (view) => (ZOOMS.includes(view?.zoom) ? view.zoom : 'auto');
+export const nextZoom = (zoom) => ZOOMS[(Math.max(0, ZOOMS.indexOf(zoom)) + 1) % ZOOMS.length];
+// What the key does next, by where you are now, so the footer can say it.
+const ZOOM_HINT = { auto: 'list view', list: 'one desk', cubicle: 'the floor plan' };
 
 // One key list, because the panel no longer replaces the floor: everything that
 // worked on the floor still works with a desk open. Answering only shows up when
@@ -498,6 +514,9 @@ function keyHints(view) {
     ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
     ...(view.following ? [['F', 'stop following']] : [['F', 'follow hands']]),
+    // The hint names what the key will do next rather than where you are, because
+    // one key cycling three states is only learnable if it tells you the next one.
+    ['z', ZOOM_HINT[zoomOf(view)]],
     ...(terms(view.filter).length ? [] : [['/', 'filter']]),
     ['f', 'jump to pane'],
     ['r', 'refresh'],
@@ -1144,11 +1163,22 @@ export function renderFrame(view) {
 
   const stepX = TILE_W + GAP_X;
   const stepY = TILE_H + GAP_Y;
+  // Zoom is a preference, not a layout: `auto` is the old behaviour untouched, and
+  // the other two only override the one decision the office was making for you.
+  // `cubicle` is a floor with room for exactly one desk on it, which means the
+  // paging, the walking, the walkway and the furniture all keep working as they are
+  // rather than needing a third rendering path invented for them.
+  const zoom = view.zoom === 'list' || view.zoom === 'cubicle' ? view.zoom : 'auto';
+  const fits = cols >= TILE_W + 2 && floorRows >= TILE_H;
   const perPage =
-    Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX)) * Math.max(1, Math.floor((floorRows + GAP_Y) / stepY));
+    zoom === 'cubicle'
+      ? 1
+      : Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX)) * Math.max(1, Math.floor((floorRows + GAP_Y) / stepY));
   // Desks are the point, but past a couple of floors the paging turns into a
-  // slideshow, and then the dense list tells you more per keystroke.
-  const roomForDesks = cols >= TILE_W + 2 && floorRows >= TILE_H && view.people.length <= perPage * 2;
+  // slideshow, and then the dense list tells you more per keystroke. Asking for one
+  // desk on a pane too small to draw one still gets you the list: the alternative is
+  // a zoom level that shows nothing at all.
+  const roomForDesks = zoom === 'list' ? false : zoom === 'cubicle' ? fits : fits && view.people.length <= perPage * 2;
 
   // An office with nobody in it still gets a desk drawn, so "hire somebody" is a
   // thing on the screen rather than a key you have to already know about. Only
@@ -1163,7 +1193,7 @@ export function renderFrame(view) {
   } else if (!roomForDesks) {
     out.push(...compactFloor(view, floorRows, hitboxes, startRow));
   } else {
-    grid.cols = Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX));
+    grid.cols = zoom === 'cubicle' ? 1 : Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX));
     grid.rows = Math.max(1, Math.floor((floorRows + GAP_Y) / stepY));
     const lastPage = Math.max(0, Math.ceil(view.people.length / perPage) - 1);
     // Standing at the empty desk means standing on the last floor, where it is;
@@ -1242,7 +1272,11 @@ export function renderFrame(view) {
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
     decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom);
     if (pages > 1 && floorRows > 0) {
-      const note = `floor ${page + 1} of ${pages} · keep walking for the rest`;
+      // One desk to a floor is a desk, not a floor, and saying "floor 3 of 7" while
+      // exactly one person is on the screen reads as six missing colleagues.
+      const note = zoom === 'cubicle'
+        ? `desk ${page + 1} of ${pages} · keep walking for the rest`
+        : `floor ${page + 1} of ${pages} · keep walking for the rest`;
       const l = Math.max(0, Math.floor((cols - width(note)) / 2));
       lines[floorRows - 1] =
         fill(l, P.carpet) + paint(note, [{ from: 0, to: Infinity, fg: P.faint }], { bg: P.carpet }) + fill(cols - l - width(note), P.carpet);

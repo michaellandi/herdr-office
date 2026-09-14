@@ -135,6 +135,45 @@ test('a filter, in every state the field can be in', () => {
   }
 });
 
+test('every zoom level, at every size, still fills the pane exactly', () => {
+  // Zoom changes how many desks are on the floor, which is the number every other
+  // measurement in the renderer is derived from, so this is the suite that would
+  // catch a cubicle spilling a row or a forced list on a pane with room for desks.
+  const many = officeRoster(new Array(40).fill('working')).people;
+  for (const zoom of ['auto', 'list', 'cubicle']) {
+    for (const [cols, rows] of SIZES) {
+      for (const frame of FRAMES) {
+        assertExact(viewOf({ people, cols, rows, frame, zoom }), `zoom=${zoom} ${cols}x${rows} f${frame}`);
+      }
+      assertExact(viewOf({ people: many, cols, rows, zoom }), `zoom=${zoom} 40 desks ${cols}x${rows}`);
+      assertExact(viewOf({ people: [], cols, rows, zoom }), `zoom=${zoom} empty ${cols}x${rows}`);
+      assertExact(viewOf({ people, cols, rows, zoom, detail: DETAILS[3][1] }), `zoom=${zoom} +panel ${cols}x${rows}`);
+      // The header's worst case: two badges, a long filter and a clock, all at once.
+      assertExact(viewOf({
+        people, cols, rows, zoom, following: true, filtering: true,
+        filter: 'a-filter-nobody-would-ever-type-but-here-we-are', total: people.length,
+      }), `zoom=${zoom} loaded header ${cols}x${rows}`);
+    }
+  }
+});
+
+test('one desk means one desk, and it says which one', () => {
+  // The cubicle is the grid with room for a single tile, so the thing worth checking
+  // is that the paging note counts people rather than floors: "floor 3 of 7" with one
+  // person on the screen reads as six colleagues who have gone missing.
+  const view = viewOf({ people, cols: 140, rows: 46, zoom: 'cubicle', selectedId: people[2].id });
+  const text = renderFrame(view).lines.map(stripAnsi).join('\n');
+  assert.match(text, /desk 3 of 7/);
+  assert.ok(!text.includes('floor 3 of 7'), 'a floor with one desk on it is a desk');
+  // Exactly one nameplate is drawn, and it is the selected person's.
+  const named = people.filter((p) => text.includes(p.name));
+  assert.deepEqual(named.map((p) => p.id), [people[2].id]);
+  // And a pane too small to draw a desk at all falls back to the list rather than
+  // showing an empty room.
+  const tiny = renderFrame(viewOf({ people, cols: 60, rows: 12, zoom: 'cubicle' })).lines.map(stripAnsi).join('\n');
+  assert.ok(people.filter((p) => tiny.includes(p.name)).length > 1, tiny);
+});
+
 test('shepherd mode wears a badge without shoving the clock off', () => {
   // The header is the one row where three things compete for the width: the counts,
   // the filter chip and this. It is also the row with the clock pinned to its right

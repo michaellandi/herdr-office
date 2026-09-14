@@ -12,7 +12,7 @@
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
-import { renderFrame, HIRE_ID } from './src/render.mjs';
+import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
@@ -38,6 +38,10 @@ const NOTIFY = !argv.has('--quiet');
 // shared surface that other things may also care about.
 const TITLE = !argv.has('--no-title');
 const FOLLOW = argv.has('--follow');
+// --zoom picks the level to open at. An unknown value is the floor plan rather than
+// an error: this is a wall display as often as it is a tool, and a typo in a plugin
+// action's arguments should not leave somebody with a blank pane and no explanation.
+const ZOOM_ARG = ([...argv].find((a) => a.startsWith('--zoom=')) || '').slice(7);
 // Which pane the office itself is in, when herdr started it. Used for one thing:
 // knowing whether you are looking at the floor right now, so a nudge about a hand
 // you can already see is never sent.
@@ -90,6 +94,9 @@ let filtering = false;
 // being taken to somebody is the reason you pressed the key.
 let following = FOLLOW;
 let handsSeen = null;
+// The zoom level: 'auto' is the floor plan deciding for itself when it has stopped
+// being readable, which is what the office has always done.
+let zoom = ZOOMS.includes(ZOOM_ARG) ? ZOOM_ARG : 'auto';
 let detail = null;
 let message = '';
 let messageUntil = 0;
@@ -181,6 +188,7 @@ function view() {
     filter,
     filtering,
     following,
+    zoom,
     selectedId,
     detail,
     frame,
@@ -1175,6 +1183,14 @@ function onInput(chunk) {
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
   else if (str === 'F') toggleFollow();
+  else if (str === 'z') {
+    zoom = nextZoom(zoom);
+    // Said out loud, because on a small pane 'auto' and 'list' can look identical:
+    // the floor plan degrades to the list on its own when there is no room for desks,
+    // and without the message the key would look broken on exactly the panes where
+    // somebody is most likely to reach for it.
+    note(zoom === 'auto' ? 'floor plan' : zoom === 'list' ? 'list view' : 'one desk');
+  }
   else if (str === 'r') {
     refresh();
     if (detail) loadDetail(detail.id, { force: true });

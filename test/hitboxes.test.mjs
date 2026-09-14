@@ -314,3 +314,26 @@ test('a filter offers no empty desk to hire into', () => {
     assert.equal(hitboxes.filter((b) => b.id === HIRE_ID).length, 0, `${cols}x${rows}`);
   }
 });
+
+test('a zoom level cannot leave a button on empty carpet', () => {
+  // Same hazard as the filter: fewer desks drawn must mean fewer things clickable,
+  // and in the cubicle it must mean exactly one desk's worth.
+  for (const zoom of ['auto', 'list', 'cubicle']) {
+    for (const [cols, rows] of SIZES) {
+      const view = viewOf({ people, cols, rows, zoom, selectedId: people[2].id });
+      const { lines, hitboxes } = renderFrame(view);
+      const plain = lines.map(stripAnsi);
+      for (const box of answers(hitboxes)) {
+        const under = (plain[box.y] || '').slice(box.x, box.x + box.w);
+        assert.match(under, /^\[[yn]\]( (approve|deny))?$/, `zoom=${zoom} ${cols}x${rows}: button over ${JSON.stringify(under)}`);
+      }
+      if (zoom !== 'cubicle') continue;
+      // A desk tile is many rows tall and a list row is one, which is how this tells
+      // the two apart: on a pane too small for a single tile the cubicle falls back
+      // to the list on purpose, and the whole roster being clickable is correct there.
+      const tiles = hitboxes.filter((b) => !b.action && b.h > 1);
+      assert.ok(tiles.length <= 1, `zoom=cubicle ${cols}x${rows}: ${tiles.length} desks are clickable`);
+      if (tiles.length) assert.equal(tiles[0].id, people[2].id);
+    }
+  }
+});

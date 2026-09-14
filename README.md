@@ -46,6 +46,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
+| `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
 Bind it to a key in `~/.config/herdr/config.toml`:
 
@@ -76,6 +77,7 @@ would rather not.
 | `n` / click `[n]` | deny it |
 | `/` | filter the floor: names, kinds, tabs, directories, statuses |
 | `F` | shepherd mode: walk to hands as they go up |
+| `z` | zoom: floor plan, list view, one desk |
 | `b` | jump to the next raised hand |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
@@ -313,6 +315,29 @@ Three things it deliberately does not do, which is most of the feature:
 It also leaves you alone while a panel has the keyboard (assigning, hiring, a drag
 in the air, the filter field), and it respects a filter: it will not walk you to a
 desk the filter is hiding.
+
+## How close you want to stand
+
+`z` cycles three zoom levels, and the footer names the next one so a single key
+cycling three states is still learnable:
+
+| Level | What you get |
+|---|---|
+| floor plan | the default: desks, as many as fit, paged. It already drops to the list on its own when the pane is too small to draw a desk |
+| list view | one line per agent, forced, even on a pane with room for desks. Everybody at once, which is what you want at twenty agents |
+| one desk | the cubicle: the selected desk on its own, with the rest of the office behind it. `hjkl` walks person to person and the note under the desk counts people rather than floors |
+
+The cubicle is not a fourth rendering path, it is the floor plan with room for
+exactly one desk on it, which is why the paging, the walking, the walkway and the
+furniture all keep working without knowing about it. Ask for one desk on a pane too
+small to draw one and you get the list instead, because a zoom level that shows
+nothing at all is not a zoom level.
+
+The level is sticky and the header says which one you are in (nothing for the floor
+plan, since that is not a mode you chose). `--zoom=list` or `--zoom=cubicle` opens
+that way, and an unknown value is the floor plan rather than an error: this is a
+wall display as often as it is a tool, and a typo in a plugin action's arguments
+should not leave somebody staring at a blank pane.
 
 ## Moving people around
 

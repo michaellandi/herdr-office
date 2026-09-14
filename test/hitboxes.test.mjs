@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { matches as matchFilter } from '../src/filter.mjs';
 
 const roster = officeRoster();
 const people = roster.people;
@@ -278,5 +279,38 @@ test('news is scenery, not a control', () => {
         );
       }
     }
+  }
+});
+
+test('a filtered floor is only clickable where somebody is standing', () => {
+  // Every hitbox has to belong to a desk that is actually drawn. The hazard is the
+  // approval buttons: a [y] left over from an unfiltered layout would sit on carpet
+  // and answer for somebody who is not even on the screen.
+  for (const [name, filter] of FILTERS) {
+    const shown = people.filter((p) => matchFilter(p, filter.filter));
+    for (const [cols, rows] of SIZES) {
+      const view = viewOf({ people: shown, cols, rows, total: people.length, ...filter });
+      const { lines, hitboxes } = renderFrame(view);
+      const ids = new Set(shown.map((p) => p.id));
+      for (const box of hitboxes) {
+        if (box.id === HIRE_ID) continue;
+        assert.ok(ids.has(box.id), `filter=${name} ${cols}x${rows}: a hitbox for ${box.id}, who is filtered out`);
+      }
+      const plain = lines.map(stripAnsi);
+      for (const box of answers(hitboxes)) {
+        const under = (plain[box.y] || '').slice(box.x, box.x + box.w);
+        assert.match(under, /^\[[yn]\]( (approve|deny))?$/, `filter=${name} ${cols}x${rows}: button over ${JSON.stringify(under)}`);
+      }
+    }
+  }
+});
+
+test('a filter offers no empty desk to hire into', () => {
+  // Hiring while filtered is not wrong, but a chair that appeared because you typed
+  // three letters reads as somebody having left, so the vacancy is suppressed and
+  // its hitbox has to go with it.
+  for (const [cols, rows] of SIZES) {
+    const { hitboxes } = renderFrame(viewOf({ people: people.slice(0, 1), cols, rows, total: people.length, filter: 'ada' }));
+    assert.equal(hitboxes.filter((b) => b.id === HIRE_ID).length, 0, `${cols}x${rows}`);
   }
 });

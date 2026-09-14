@@ -22,6 +22,7 @@ import { runningCommand } from './src/process.mjs';
 import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
+import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -77,6 +78,11 @@ const roster = new Roster();
 let api = null;
 let events = null;
 let selectedId = null;
+// The filter. `text` is what is typed, `editing` is whether the field has the
+// keyboard: an accepted filter keeps narrowing the floor after you have stopped
+// typing, which is the whole point of it.
+let filter = '';
+let filtering = false;
 let detail = null;
 let message = '';
 let messageUntil = 0;
@@ -145,11 +151,28 @@ function quit(code = 0, msg) {
 
 /* ------------------------------------------------------------------ drawing */
 
+// The header counts what is on the floor, which with a filter on is the filtered
+// set. Counting the whole room under a filtered floor plan would have the header
+// and the desks under it disagreeing about how many people are stuck.
+function countOf(people) {
+  const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
+  for (const p of people) tally[p.status] = (tally[p.status] ?? 0) + 1;
+  return tally;
+}
+
 function view() {
   if (message && Date.now() > messageUntil) message = '';
+  // Filtering happens here, once, and everything downstream (paging, the compact
+  // list, hitboxes, the counts in the header) just sees a shorter floor. A filter
+  // that reached into the layout would have needed every one of those to learn
+  // about it.
+  const people = filterPeople(roster.people, filter);
   return {
-    people: roster.people,
-    counts: roster.counts(),
+    people,
+    counts: countOf(people),
+    total: roster.people.length,
+    filter,
+    filtering,
     selectedId,
     detail,
     frame,
@@ -186,13 +209,22 @@ function draw() {
 
 /* --------------------------------------------------------------------- data */
 
+// Who is actually on the floor: the roster, minus anybody the filter is hiding.
+// Walking, the next-raised-hand key and the selection all work off this rather
+// than the full roster, because a filter you can walk out of the side of is not a
+// filter, it is a decoration.
+function floorPeople() {
+  return filterPeople(roster.people, filter);
+}
+
 function ensureSelection() {
   // The empty desk is a real place to be standing even though nobody is in the
   // roster under that id, so a poll must not walk you off it.
   if (selectedId === HIRE_ID) return;
-  if (selectedId && roster.find(selectedId)) return;
-  const raised = roster.people.find((p) => p.status === 'blocked');
-  selectedId = (raised || roster.people[0])?.id ?? null;
+  const floor = floorPeople();
+  if (selectedId && floor.some((p) => p.id === selectedId)) return;
+  const raised = floor.find((p) => p.status === 'blocked');
+  selectedId = (raised || floor[0])?.id ?? null;
 }
 
 // Ask every stuck desk what it wants, so the floor plan can put it in a bubble
@@ -505,7 +537,7 @@ async function loadDetail(id, { force = false } = {}) {
 /* ---------------------------------------------------------------- interaction */
 
 function move(dx, dy) {
-  const ids = grid.ids.length ? grid.ids : roster.people.map((p) => p.id);
+  const ids = grid.ids.length ? grid.ids : floorPeople().map((p) => p.id);
   const idx = ids.indexOf(selectedId);
   if (idx < 0) {
     ensureSelection();
@@ -522,7 +554,7 @@ function move(dx, dy) {
     if (selectedId === HIRE_ID) return;
     // Walking off the edge of the visible floor moves through the full roster,
     // which is what makes paging work with only arrow keys.
-    const all = roster.people.map((p) => p.id);
+    const all = floorPeople().map((p) => p.id);
     const globalIdx = all.indexOf(selectedId) + (dx || dy * cols);
     if (globalIdx >= 0 && globalIdx < all.length) selectedId = all[globalIdx];
     return;
@@ -531,9 +563,9 @@ function move(dx, dy) {
 }
 
 function nextRaisedHand() {
-  const raised = roster.people.filter((p) => p.status === 'blocked');
+  const raised = floorPeople().filter((p) => p.status === 'blocked');
   if (!raised.length) {
-    note('nobody has a hand up');
+    note(terms(filter).length ? 'nobody matching that has a hand up' : 'nobody has a hand up');
     return;
   }
   const idx = raised.findIndex((p) => p.id === selectedId);
@@ -948,6 +980,22 @@ function onMouse(ev) {
   draw();
 }
 
+// `/` gives the keyboard to the filter field. Reopening keeps what is already
+// there, because narrowing "waiting" to "waiting sso" is the common second thought.
+function openFilter() {
+  filtering = true;
+  prevLines = [];
+  draw();
+}
+
+function closeFilter(clear) {
+  filtering = false;
+  if (clear) filter = '';
+  ensureSelection();
+  prevLines = [];
+  draw();
+}
+
 function onInput(chunk) {
   const str = chunk.toString('utf8');
 
@@ -984,7 +1032,17 @@ function onInput(chunk) {
       return;
     }
     if (hire) return closeHire();
-    detail = null;
+    // The field, then whatever panel is open, then the filter itself. So esc walks
+    // back out the way you came in rather than throwing away a filter you are
+    // still using because a panel happened to be open.
+    if (filtering) return closeFilter(true);
+    if (detail) {
+      detail = null;
+      prevLines = [];
+      draw();
+      return;
+    }
+    if (terms(filter).length) return closeFilter(true);
     prevLines = [];
     draw();
     return;
@@ -1043,6 +1101,23 @@ function onInput(chunk) {
     return;
   }
 
+  // Same bargain as the assign field: while the filter has the keyboard every
+  // printable key is a letter in it, so a `y` typed into a filter cannot answer
+  // somebody's approval prompt.
+  if (filtering) {
+    const { text, done } = typeFilterChunk(filter, str);
+    filter = text;
+    // Selection has to keep up with the field: typing a letter that hides the desk
+    // you were standing at should walk you to the first one that is left, not leave
+    // the cursor on somebody who is no longer in the room.
+    ensureSelection();
+    if (done) return closeFilter(false);
+    prevLines = [];
+    draw();
+    return;
+  }
+
+  if (str === '/') return openFilter();
   if (str === '+') return openHire();
   if (str === 'a') return openCompose('one');
   if (str === 'A') return openCompose('all');

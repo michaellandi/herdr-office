@@ -10,7 +10,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, officeRoster, viewOf } from './fixtures.mjs';
+import { matches as matchFilter } from '../src/filter.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -110,6 +111,40 @@ test('news over a desk, in every kind and at every size', () => {
   const text = lines.join('\n');
   assert.ok(text.includes('shell requires approval'), 'the ask should still be on the wall');
   assert.ok(!text.includes('tests passed'), 'news must not push the ask off a stuck desk');
+});
+
+test('a filter, in every state the field can be in', () => {
+  // The filter adds a chip to the header, changes the footer hints and can empty
+  // the floor entirely, so it touches all three bands of the screen. The one that
+  // catches things is a filter matching nobody: that is a code path with no desks
+  // in it at all, on a pane with room for plenty.
+  const many = officeRoster(new Array(40).fill('working')).people;
+  for (const [name, filter] of FILTERS) {
+    for (const [cols, rows] of SIZES) {
+      const shown = people.filter((p) => matchFilter(p, filter.filter));
+      assertExact(viewOf({ people: shown, cols, rows, total: people.length, ...filter }), `filter=${name} ${cols}x${rows}`);
+      // With a panel open, since the header chip and the panel share the width.
+      assertExact(viewOf({ people: shown, cols, rows, total: people.length, detail: DETAILS[3][1], ...filter }), `filter=${name} +panel ${cols}x${rows}`);
+      // And over the compact list, where forty desks are filtered down to a few.
+      const shownMany = many.filter((p) => matchFilter(p, filter.filter));
+      assertExact(viewOf({ people: shownMany, cols, rows, total: many.length, ...filter }), `filter=${name} list ${cols}x${rows}`);
+      // An office that is empty for the ordinary reason, with a filter typed into
+      // it, must still say the ordinary thing rather than both at once.
+      assertExact(viewOf({ people: [], cols, rows, total: 0, ...filter }), `filter=${name} empty ${cols}x${rows}`);
+    }
+  }
+});
+
+test('a filter that matches nobody says so, and offers no empty desk', () => {
+  // The failure this guards against is quiet: with no desks left, the floor would
+  // fall through to the "hire somebody" empty state, and a filter typo would read
+  // as every agent having died.
+  const { lines } = renderFrame(viewOf({ people: [], cols: 140, rows: 46, total: 7, filter: 'zzzz' }));
+  const text = lines.map(stripAnsi).join('\n');
+  assert.ok(text.includes('Nobody here matches "zzzz"'), text.slice(0, 400));
+  assert.ok(!/hire/i.test(text.split('\n').slice(2, -2).join('\n')), 'no hiring prompt on a filtered floor');
+  // The header still says how many people are really in the room.
+  assert.match(stripAnsi(lines[0]), /0 of 7 desks/);
 });
 
 test('a footer message never pushes a line over', () => {

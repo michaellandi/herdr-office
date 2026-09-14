@@ -73,6 +73,7 @@ would rather not.
 | `^w` / `^u` (typing) | delete the last word / clear the field |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
+| `/` | filter the floor: names, kinds, tabs, directories, statuses |
 | `b` | jump to the next raised hand |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
@@ -248,6 +249,42 @@ including on ctrl-c and on a crash. A stale "2 waiting on you" outliving the
 process that wrote it would be worse than no title at all. If herdr reports there
 is no foreground window to title, nothing is remembered as set, so it goes out
 again when a window comes back. `--no-title` switches the whole thing off.
+
+## Finding one desk in twenty
+
+`/` opens a filter and the floor simply has fewer people on it: `2 of 20 desks` in
+the header, everything else (paging, the compact list, clicking, the counts, `b`)
+working exactly as before because it is all downstream of the same list. It is a
+filter, not a search: there is no result list and no cursor jumping around.
+
+It matches on names, agent kinds, tab and workspace names, what they are working
+on, the command on the monitor, the last news off their wall, and the directory
+they are in (the repo name on its own as well as the whole path, since "the desks
+in that repo" and "the desks under that tree" are both things people mean).
+
+Status words mean the status, and they include what is actually printed on the
+nameplate: `waiting`, `stuck`, `blocked` and `hand` all find raised hands, so do
+`needs` and `need you`; `working` and `busy`, `idle` and `quiet`, `done` and
+`finished`, `unsure` and `unknown`. Half a word narrows too, so `/wai` is already
+on its way there rather than telling you the office is empty. But a complete status
+word is exact: typing `done` finds the finished desks and does *not* also drag in
+somebody whose tab is called `done-migration`.
+
+Two more rules worth knowing, both of them "it means what it looks like":
+
+- **Every word has to match.** `waiting sso` is the raised hands in the sso tab,
+  not the union of the two.
+- **Nothing is a pattern.** No regex, no globs, no negation: `.*` finds nobody,
+  and it says so. A filter box that quietly means something clever is one you have
+  to run experiments against, and this one is for when you are in a hurry.
+
+`enter` keeps the filter and gives the keyboard back to the floor. `esc` shows
+everyone again, and while a filter is on that hint gets a high seat in the footer,
+because a filtered office looks exactly like an office where everybody went home.
+A filter matching nobody says so in as many words rather than falling through to
+the empty-office state, and **it never offers you an empty desk to hire into** for
+the same reason: a chair that appeared because you typed three letters reads as
+somebody having left.
 
 ## Moving people around
 

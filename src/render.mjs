@@ -4,6 +4,7 @@
 import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
+import { terms } from './filter.mjs';
 import {
   pose,
   screen,
@@ -389,7 +390,20 @@ function headerLines(view) {
   b.add('  ');
   b.add('HERDR OFFICE', { fg: P.accent, bold: true });
   b.add('   ');
-  b.add(`${people.length} ${people.length === 1 ? 'desk' : 'desks'}`, { fg: P.dim });
+  // With a filter on, the count says what it is a count *of*. "3 desks" while
+  // twelve people are in the room is the single most misleading thing this header
+  // could say, and the whole floor below it is filtered too.
+  const on = terms(view.filter).length > 0;
+  b.add(on ? `${people.length} of ${view.total ?? people.length} desks` : `${people.length} ${people.length === 1 ? 'desk' : 'desks'}`, { fg: P.dim });
+  if (on || view.filtering) {
+    b.add('   ');
+    b.add('/', { fg: P.accent, bold: true });
+    // The field is live, so the text is shown as typed rather than as parsed. A
+    // cursor only while it has the keyboard: an accepted filter is a state the
+    // office is in, not something you are in the middle of.
+    b.add(truncate(String(view.filter || ''), 24), { fg: P.soft, bold: true });
+    if (view.filtering) b.add('_', { fg: P.accent, bold: true });
+  }
   const budget = size.cols - width(clock) - 4;
   for (const key of ORDER) {
     if (!counts[key]) continue;
@@ -447,17 +461,35 @@ function keyHints(view) {
       ['esc', 'never mind'],
     ];
   }
+  // While the filter field has the keyboard every printable key is a letter in it,
+  // the same as the assign field, so the footer must stop advertising the floor.
+  if (view.filtering) {
+    return [
+      ['type', 'to narrow the floor'],
+      ['enter', 'keep it'],
+      ['^u', 'clear'],
+      ['esc', 'show everyone'],
+    ];
+  }
   // Standing at the empty desk, enter means hire, so the footer says that and
   // does not also offer the two hints it would have meant at anybody else's desk.
   const vacant = view.selectedId === HIRE_ID;
+  // A standing filter earns a high seat in the footer, because it is the one piece
+  // of state you can forget you switched on: the floor looks like an office where
+  // everybody went home, and the way out has to be visible rather than crowded off
+  // the end of the row by the walking hints. Not while the card is open, though,
+  // since esc closes that first and the footer would be promising the wrong thing.
+  const filtered = terms(view.filter).length > 0 && !view.detail;
   return [
     ...(vacant ? [['enter', 'hire somebody for this desk']] : []),
     ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
+    ...(filtered ? [['esc', 'show everyone']] : []),
     ['hjkl', 'walk'],
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
+    ...(terms(view.filter).length ? [] : [['/', 'filter']]),
     ['f', 'jump to pane'],
     ['r', 'refresh'],
     ['q', 'leave'],
@@ -602,6 +634,23 @@ function emptyFloor(view, floorRows) {
   say('Press + to hire, or start an agent in a Herdr pane.', { fg: P.dim }, mid + 2);
   // The plants keep working even when nobody else does.
   decorate(lines, cols, floorRows, mid + 4);
+  return lines;
+}
+
+// A filter that matched nobody. Says what it filtered on, because the alternative
+// is an empty room and a moment of thinking every agent has crashed.
+function noMatchFloor(view, floorRows) {
+  const { cols } = view.size;
+  const lines = new Array(floorRows).fill(fill(cols, P.carpet));
+  const mid = Math.max(0, Math.floor(floorRows / 2) - 1);
+  const say = (raw, style, y) => {
+    if (y < 0 || y >= floorRows) return;
+    const text = truncate(raw, cols);
+    const left = Math.max(0, Math.floor((cols - width(text)) / 2));
+    lines[y] = fill(left, P.carpet) + paint(text, [{ from: 0, to: Infinity, ...style }], { bg: P.carpet }) + fill(cols - left - width(text), P.carpet);
+  };
+  say(`Nobody here matches "${String(view.filter || '').trim()}".`, { fg: P.soft }, mid);
+  say('esc shows everyone again.', { fg: P.dim }, mid + 2);
   return lines;
 }
 
@@ -1095,7 +1144,12 @@ export function renderFrame(view) {
   // An office with nobody in it still gets a desk drawn, so "hire somebody" is a
   // thing on the screen rather than a key you have to already know about. Only
   // when there is room for a desk at all; below that it is the old prose.
-  if (!view.people.length && !roomForDesks) {
+  const filtered = terms(view.filter).length > 0;
+  if (!view.people.length && filtered) {
+    // Not an empty office: a filter with nothing behind it. Offering to hire
+    // somebody here would be answering a question nobody asked.
+    out.push(...noMatchFloor(view, floorRows));
+  } else if (!view.people.length && !roomForDesks) {
     out.push(...emptyFloor(view, floorRows));
   } else if (!roomForDesks) {
     out.push(...compactFloor(view, floorRows, hitboxes, startRow));
@@ -1112,7 +1166,9 @@ export function renderFrame(view) {
     const shown = view.people.slice(page * perPage, page * perPage + perPage);
     // One spare desk, on the last floor, only when there is a slot going free.
     // Paging for a desk nobody sits at would be worse than not offering it.
-    const vacancy = page === lastPage && shown.length < perPage;
+    // No spare desk while a filter is on: an empty chair that appeared because you
+    // typed three letters reads as somebody having left.
+    const vacancy = page === lastPage && shown.length < perPage && !filtered;
     const slots = [...shown.map((person) => ({ person })), ...(vacancy ? [{ vacancy: true }] : [])];
     grid.ids = slots.map((s) => (s.vacancy ? HIRE_ID : s.person.id));
 

@@ -190,7 +190,21 @@ export const NEWS = [
   { label: 'committed', kind: 'nonsense-kind' },
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null }) {
+// Every state the filter can be in: off, a field just opened with nothing in it,
+// a filter that matches, one that matches nobody, and one long enough to need
+// cutting in the header chip.
+export const FILTERS = [
+  ['off', { filter: '', filtering: false }],
+  ['field open, empty', { filter: '', filtering: true }],
+  ['typing', { filter: 'wait', filtering: true }],
+  ['accepted', { filter: 'waiting', filtering: false }],
+  ['matches nobody', { filter: 'zzzz', filtering: false }],
+  ['matches nobody, still typing', { filter: 'zzzz', filtering: true }],
+  ['a silly long filter', { filter: 'a-filter-nobody-would-ever-type-but-here-we-are', filtering: true }],
+  ['a filter with spaces', { filter: 'group resolver', filtering: false }],
+];
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, total = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -206,5 +220,8 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     busy,
     hire,
     compose,
+    filter,
+    filtering,
+    total: total ?? people.length,
   };
 }

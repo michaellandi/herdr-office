@@ -56,6 +56,7 @@ export class Roster {
     this.focusedPaneId = null;
     this.states = new Map(); // pane_id -> { status, since, seq }
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
+    this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
   }
 
   setWorkspaces(workspaces = []) {
@@ -111,6 +112,21 @@ export class Roster {
     }
   }
 
+  // What the pane's foreground process is, in as many words as it is safe to put
+  // on a screen (see src/process.mjs). A null label is stored as well as a real
+  // one: it is the difference between "nothing running" and "not asked yet",
+  // which is what stops the poll asking the same quiet desk twice a second.
+  setCommand(id, label) {
+    this.commands.set(id, { label: label || null, at: this.clock() });
+    const person = this.find(id);
+    if (person) person.command = label || null;
+  }
+
+  commandAge(id) {
+    const entry = this.commands.get(id);
+    return entry ? this.clock() - entry.at : Infinity;
+  }
+
   askAge(id) {
     const entry = this.asks.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -140,6 +156,9 @@ export class Roster {
         this.states.set(id, { status, since, seq, assumed });
         // Once they are unstuck the question is gone, so the bubble goes too.
         if (status !== 'blocked') this.asks.delete(id);
+        // A desk that has stopped working is no longer running anything, and a
+        // stale "npm test" on an idle monitor would be a lie the office told.
+        if (status !== 'working') this.commands.delete(id);
 
         return {
           id,
@@ -155,6 +174,7 @@ export class Roster {
           tabId: a.tab_id || '',
           tabName: this.tabNames.get(a.tab_id) || '',
           ask: this.asks.get(id)?.text || '',
+          command: this.commands.get(id)?.label || null,
           choice: this.asks.get(id)?.choice || null,
           focused: Boolean(a.focused),
           cwd: a.cwd || '',

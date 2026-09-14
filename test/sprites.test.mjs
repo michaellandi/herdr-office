@@ -4,7 +4,7 @@
 // module does not assert for itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { POSES, SCREENS, PROPS, VACANT_CHAIR, VACANT_SCREEN, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
+import { POSES, SCREENS, PROPS, VACANT_CHAIR, VACANT_SCREEN, runningScreen, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
 import { P } from '../src/theme.mjs';
 import { width } from '../src/text.mjs';
 
@@ -87,6 +87,8 @@ test('nothing in the art is an ambiguous-width glyph', () => {
     ...Object.values(PROPS).flatMap((p) => p.rows),
     ...VACANT_CHAIR,
     ...VACANT_SCREEN,
+    // The chugging bar is generated rather than tabled, so it has to be swept too.
+    ...[0, 1, 2, 3, 4, 11, 12].flatMap((f) => runningScreen('npm test', f)),
   ];
   for (const row of art) {
     for (const ch of row) {
@@ -95,4 +97,24 @@ test('nothing in the art is an ambiguous-width glyph', () => {
       assert.ok(cp < 0x25a0, `art contains U+${cp.toString(16).toUpperCase()} (${ch}), whose width depends on the terminal`);
     }
   }
+});
+
+test('the running monitor is the same twelve cells whatever it is told', () => {
+  // Generated art, so the width rule is not something a table can be eyeballed
+  // for: a command label comes off a real process on somebody's machine, and the
+  // grid does not care how long that was.
+  const labels = ['', 'npm test', 'x', 'cargo build --release --all-features', 'gradlew assembleRelease', null, undefined];
+  for (const label of labels) {
+    for (let frame = 0; frame < 24; frame += 1) {
+      const rows = runningScreen(label, frame);
+      assert.equal(rows.length, 2, `${label} f${frame} gave ${rows.length} rows`);
+      for (const r of rows) {
+        assert.equal([...r].length, SCREEN_W, `${JSON.stringify(label)} f${frame}: "${r}" is ${[...r].length} cells`);
+        assert.equal(width(r), SCREEN_W, `${JSON.stringify(label)} f${frame}: "${r}" is ${width(r)} wide`);
+      }
+    }
+  }
+  // The label is centred, and the bar under it actually moves.
+  assert.equal(runningScreen('npm test', 0)[0], '  npm test  ');
+  assert.notEqual(runningScreen('npm test', 0)[1], runningScreen('npm test', 1)[1]);
 });

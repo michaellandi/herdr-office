@@ -11,6 +11,7 @@ import {
   PROPS,
   VACANT_CHAIR,
   VACANT_SCREEN,
+  runningScreen,
   POSE_W,
   SCREEN_W,
   MON_W,
@@ -206,7 +207,12 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   const st = status(person.status);
   const who = identity(person.id);
   const body = pose(person.status, frame);
-  const scr = screen(person.status, frame);
+  // A working desk whose foreground command herdr could name shows the command
+  // instead of the generic scrolling code: same two rows, same twelve cells, but
+  // now the monitor says `npm test` and the bar underneath chugs.
+  const scr = person.status === 'working' && person.command
+    ? runningScreen(person.command, frame)
+    : screen(person.status, frame);
   // Amber pulse so a raised hand catches the eye from across the room.
   const alert = person.status === 'blocked' && frame % 4 < 2;
   // Drag feedback is colour only, never a different glyph or an extra cell: the

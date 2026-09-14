@@ -87,6 +87,27 @@ export const SCREENS = {
   ],
 };
 
+// The monitor when herdr can tell us what the pane is actually running. The top
+// row is the command, centred, and the bottom row chugs: a bar graph of block
+// elements rotating one cell a frame, which reads as work happening without
+// pretending to be a progress bar for something whose progress nobody knows.
+//
+// Every glyph here is U+2581 to U+2587, inside the block-elements range the grid
+// allows. The light/medium/dark shades everybody reaches for first (U+2591 to
+// U+2593) are just outside it and are ambiguous width in some terminals.
+const CHUG = '▁▂▃▄▅▆▇▆▅▄▃▂';
+
+export function runningScreen(label, frame) {
+  const text = String(label ?? '').slice(0, SCREEN_W);
+  const pad = SCREEN_W - text.length;
+  const left = Math.floor(pad / 2);
+  const shift = (frame * 3) % CHUG.length;
+  return [
+    ' '.repeat(left) + text + ' '.repeat(pad - left),
+    CHUG.slice(shift) + CHUG.slice(0, shift),
+  ];
+}
+
 export const pose = (statusName, frame) => {
   const p = POSES[statusName] || POSES.unknown;
   return { rows: p.frames[frame % p.frames.length], emote: p.emote };

@@ -61,6 +61,30 @@ test('one desk, and enough desks to page', () => {
   }
 });
 
+test('a monitor showing a real command, at every size and frame', () => {
+  // The running monitor is generated rather than drawn from a table: the command
+  // is centred in the twelve cells a screen has and the bar under it rotates every
+  // frame. So the sizes matter (the label has to be cut, not wrapped) and so do
+  // more frames than usual, because the bar's rotation is what changes.
+  const busyFloor = officeRoster(new Array(5).fill('working')).people;
+  assert.ok(
+    busyFloor.some((p) => p.command) && busyFloor.some((p) => !p.command),
+    'the fixture should have both named and unnamed working desks',
+  );
+  for (const [cols, rows] of SIZES) {
+    for (let frame = 0; frame < 13; frame += 1) {
+      assertExact(viewOf({ people: busyFloor, cols, rows, frame }), `running ${cols}x${rows} f${frame}`);
+      assertExact(viewOf({ people: busyFloor, cols, rows, frame, detail: DETAILS[3][1] }), `running+panel ${cols}x${rows} f${frame}`);
+    }
+  }
+  // A command long enough to need cutting, on a floor small enough to draw desks.
+  const wordy = officeRoster(['working']).people;
+  wordy[0].command = 'gradlew assembleReleaseWithAVeryLongTaskName';
+  for (const [cols, rows] of SIZES) {
+    for (const frame of FRAMES) assertExact(viewOf({ people: wordy, cols, rows, frame }), `wordy ${cols}x${rows} f${frame}`);
+  }
+});
+
 test('a footer message never pushes a line over', () => {
   const long = 'could not answer Ada: the socket hung up halfway through sending the keys';
   for (const [cols, rows] of SIZES) {

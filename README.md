@@ -160,6 +160,28 @@ most guarded part of it:
   characters, and a partial failure is reported as what it was: "sent to 4 of 5;
   not Dev (agent_blocked)".
 
+## What they are working on
+
+A working desk's monitor shows the actual foreground command, so `npm test`,
+`cargo build` or `git rebase` is readable from across the floor with a bar
+chugging underneath it. When herdr cannot name one, which is the normal case for
+an agent that is thinking rather than shelling out, the monitor goes back to
+scrolling code rather than making something up.
+
+**Only a command name and at most one sub-command word ever reach the screen, and
+`cmdline` is never read at all.** That is a privacy rule rather than a display
+one. A real foreground process carries API endpoints, tokens, whole JSON settings
+blobs and absolute paths under your home directory in its arguments, and this
+thing is on screen while you are screen-sharing. So both words go through an
+allowlist (a bare word, letters and digits and a couple of punctuation marks, 16
+characters at most), and anything that is not obviously a plain word is dropped
+rather than trimmed, because a truncated secret is still a secret. `rg 'password
+= ...'` reads as `rg`; `claude --settings {...}` reads as nothing at all.
+
+Shells, the agents themselves, the toolbox wrappers and the MCP servers every
+agent permanently carries are all filtered out, so a busy desk says what the job
+is instead of saying `zsh` all day.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then
@@ -196,7 +218,7 @@ Arrow keys still walk the floor with the panel open, and it follows you.
 
 | State | Desk |
 |---|---|
-| `working` | hands on the keyboard, screen scrolling, green |
+| `working` | hands on the keyboard, green. The monitor shows the command it is running when herdr can name one, and scrolling code when it cannot |
 | `blocked` | hand up and waving, `APPROVE?` on screen, a speech bubble with the ask, pulsing amber |
 | `idle` | dozing (`z`), slate |
 | `done` | arms up, `ALL DONE`, cyan |
@@ -234,6 +256,11 @@ it was entered, so the first sighting of an agent starts the clock.
 - Subscriptions: the global pane/workspace/tab events, plus one
   `pane.agent_status_changed` descriptor per pane (that event is per-pane only, so the
   subscription is rebuilt whenever the set of desks changes).
+- The command on a monitor is one `pane.process_info` per *working* desk, at most
+  every 5s and at most four desks per pass. That response is the whole foreground
+  process tree, which is about fifteen kilobytes a pane on a real machine, so a busy
+  floor is read a few desks at a time rather than all of it every two seconds. Only
+  the process names and argv are looked at, never `cmdline`.
 - Speech bubbles cost one `agent.read --source visible` per *stuck* desk, refreshed at
   most every 6s. Nobody else is read until you open their desk, so a quiet office is
   three calls every two seconds no matter how many agents you are running.

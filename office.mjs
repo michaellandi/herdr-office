@@ -17,6 +17,7 @@ import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
 import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
 import { width } from './src/text.mjs';
+import { runningCommand } from './src/process.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -33,6 +34,14 @@ const DETAIL_MS = 2500;
 // A bubble is one screen read per stuck desk, so it is cheap but not free: only
 // blocked desks are read, and only when their bubble has gone stale.
 const ASK_MS = 6000;
+// A monitor showing the real command is one `pane.process_info` per *working*
+// desk, and that response is the whole foreground process tree: on a real
+// machine it is fifteen kilobytes a pane, because every agent permanently
+// carries its MCP servers around. So it is throttled harder than a bubble and
+// capped per pass, and a busy floor gets read a few desks at a time instead of
+// all of them every two seconds.
+const CMD_MS = 5000;
+const CMD_PER_PASS = 4;
 
 // Global subscriptions: these need no pane_id. pane.agent_status_changed is
 // per-pane, so it gets added for every desk we know about and re-subscribed
@@ -180,6 +189,28 @@ async function refreshAsks() {
   if (blocked.length && !ONCE) draw();
 }
 
+// Ask the working desks what they are actually running, so the monitor can say
+// `npm test` instead of scrolling generic code. Stale desks first, so a floor
+// with more working agents than one pass allows rotates through them fairly
+// rather than starving the ones at the bottom.
+async function refreshCommands() {
+  const due = roster.people
+    .filter((p) => p.status === 'working' && roster.commandAge(p.id) >= CMD_MS)
+    .sort((a, b) => roster.commandAge(b.id) - roster.commandAge(a.id))
+    .slice(0, CMD_PER_PASS);
+  if (!due.length) return;
+  for (const person of due) {
+    try {
+      const res = await api.request('pane.process_info', { pane_id: person.id });
+      roster.setCommand(person.id, runningCommand(res?.process_info));
+    } catch {
+      // A pane that will not say keeps whatever it last said. Deliberately not
+      // cleared: a transient failure should not blank a monitor mid-build.
+    }
+  }
+  if (!ONCE) draw();
+}
+
 // Feeds the roster everything it needs to seat people where their panes really
 // are. Order matters: the layouts refer to workspaces and tabs by id, so the
 // numbers have to be in hand before the geometry is read.
@@ -197,9 +228,7 @@ function seat(snapshot, tabs) {
 async function refresh() {
   if (DEMO) {
     roster.update(demoAgents());
-    for (const person of roster.people) {
-      if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
-    }
+    demoExtras();
     ensureSelection();
     draw();
     return;
@@ -215,6 +244,7 @@ async function refresh() {
     ensureSelection();
     syncSubscriptions();
     refreshAsks();
+    refreshCommands();
     if (NOTIFY) {
       for (const id of newlyBlocked) {
         const person = roster.find(id);
@@ -954,6 +984,21 @@ function demoAgents() {
   }));
 }
 
+// The parts of a desk that come from a follow-up call rather than agent.list: the
+// bubble over a stuck person's head and the command on a working monitor. Real
+// runs get these from agent.read and pane.process_info; the demo makes them up,
+// deterministically, so the recorded GIF and the --once render are the same
+// office every time. One command is deliberately longer than the twelve cells a
+// monitor has, because that is the case worth being able to look at.
+const DEMO_COMMANDS = ['npm test', 'cargo build', 'git rebase', 'pytest -x --last-failed', 'tsc', 'make'];
+
+function demoExtras() {
+  roster.people.forEach((person, i) => {
+    if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
+    if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
+  });
+}
+
 /* --------------------------------------------------------------------- boot */
 
 const anim = setInterval(() => {
@@ -984,9 +1029,7 @@ async function main() {
     clearInterval(poll);
     if (DEMO) {
       roster.update(demoAgents());
-      for (const person of roster.people) {
-        if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
-      }
+      demoExtras();
     } else {
       const snapshot = await api.request('session.snapshot', {}).catch(() => null);
       const tabs = await api.request('tab.list', {}).catch(() => null);
@@ -994,6 +1037,7 @@ async function main() {
       const list = await api.request('agent.list', {});
       roster.update(list.agents || []);
       await refreshAsks();
+      await refreshCommands();
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });

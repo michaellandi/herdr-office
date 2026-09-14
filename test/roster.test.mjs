@@ -113,3 +113,30 @@ test('a layout with no rects does not throw', () => {
   roster.update([agent('w1:p1')]);
   assert.deepEqual(seatedIds(roster), ['w1:p1']);
 });
+
+test('a command lives on a desk only while that desk is working', () => {
+  // The point of the throttle upstream is that a desk is only asked what it is
+  // running every few seconds, so the answer has to survive polls in between. The
+  // point of forgetting it is that a stale `npm test` on a dozing monitor is a lie.
+  const roster = new Roster();
+  roster.update([agent('w1:p1')]);
+  assert.equal(roster.find('w1:p1').command, null);
+  assert.equal(roster.commandAge('w1:p1'), Infinity);
+
+  roster.setCommand('w1:p1', 'npm test');
+  assert.equal(roster.find('w1:p1').command, 'npm test');
+  assert.ok(roster.commandAge('w1:p1') < 1000);
+  roster.update([agent('w1:p1')]);
+  assert.equal(roster.find('w1:p1').command, 'npm test', 'a poll must not blank the monitor');
+
+  // "herdr could not name it" is an answer, and it is remembered as one: the age
+  // resets, so the same quiet desk is not re-read on every single poll.
+  roster.setCommand('w1:p1', null);
+  assert.equal(roster.find('w1:p1').command, null);
+  assert.ok(roster.commandAge('w1:p1') < 1000);
+
+  roster.setCommand('w1:p1', 'cargo build');
+  roster.update([agent('w1:p1', { agent_status: 'idle' })]);
+  assert.equal(roster.find('w1:p1').command, null, 'an idle desk is not running anything');
+  assert.equal(roster.commandAge('w1:p1'), Infinity);
+});

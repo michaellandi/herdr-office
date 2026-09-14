@@ -29,6 +29,8 @@ export const FRAMES = [0, 1, 2, 3];
 
 const STATUSES = ['blocked', 'working', 'idle', 'done', 'unknown', 'blocked', 'blocked'];
 
+export const COMMANDS = ['npm test', 'pytest -x --last-failed --maxfail=1', 'cargo build', null, 'tsc', 'go', 'gradlew assemble'];
+
 export function officeRoster(statuses = STATUSES) {
   const roster = new Roster();
   roster.setWorkspaces([{ workspace_id: 'w1', label: 'main' }]);
@@ -57,6 +59,13 @@ export function officeRoster(statuses = STATUSES) {
     deny: ['esc'],
   });
   // p7 is deliberately left with no ask, to exercise the "needs your OK" fallback.
+  // A working desk's monitor shows the command herdr could name for it. This list
+  // is deliberately uneven: one command far wider than the twelve cells a screen
+  // has, and one desk left with nothing at all, because "herdr could not name it"
+  // is the common case and still has to draw.
+  roster.people.forEach((person, i) => {
+    if (person.status === 'working') roster.setCommand(person.id, COMMANDS[i % COMMANDS.length]);
+  });
   return roster;
 }
 

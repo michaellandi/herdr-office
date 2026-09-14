@@ -3,6 +3,7 @@
 // navigation. Nothing here talks to a socket or a terminal.
 import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity } from './theme.mjs';
+import { wrapField, describeTargets } from './compose.mjs';
 import {
   pose,
   screen,
@@ -390,6 +391,23 @@ function keyHints(view) {
   // the footer says that and nothing else rather than listing keys that are on
   // hold until the mouse button comes back up.
   if (view.drag?.active) return [['drop', 'on a desk to swap the panes'], ['esc', 'put it back']];
+  // With the assign field open every key is a letter in it, so the footer must not
+  // go on advertising the floor. The confirm step is the one place enter reaches
+  // more than one agent, and it says so in as many words.
+  if (view.compose) {
+    if (view.compose.sending) return [['', 'sending']];
+    if (view.compose.confirm) {
+      const n = (view.compose.to || []).length;
+      return [['enter', `send it to ${n} ${n === 1 ? 'person' : 'people'}`], ['esc', 'back to the text']];
+    }
+    return [
+      ['type', 'what they should do'],
+      ['enter', view.compose.scope === 'all' ? 'review who gets it' : 'send it'],
+      ['^w', 'last word'],
+      ['^u', 'clear'],
+      ['esc', 'drop it'],
+    ];
+  }
   // Same reasoning while the hire menu is open: the arrows are picking an agent,
   // not walking the floor, and saying otherwise would be a lie.
   if (view.hire) {
@@ -412,6 +430,7 @@ function keyHints(view) {
     ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
     ['hjkl', 'walk'],
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
+    ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
     ['f', 'jump to pane'],
@@ -424,15 +443,20 @@ function footerLines(view) {
   const { size } = view;
   const b = cells();
   b.add(' ');
+  // The message is right-aligned in the footer bar, so it has to have its room set
+  // aside BEFORE the hints fill the row. A footer that ran out of space used to
+  // truncate the message to nothing, which meant a refusal ("Cass has a hand up:
+  // answer that first") was a keystroke that visibly did nothing at all.
+  const msg = view.message ? truncate(view.message, Math.max(0, size.cols - 8)) : '';
+  const room = size.cols - 2 - (msg ? width(msg) + 2 : 0);
   for (const [key, label] of keyHints(view)) {
-    if (b.w + width(key) + width(label) + 4 > size.cols - 2) break;
+    if (b.w + width(key) + width(label) + 4 > room) break;
     b.add('  ');
     b.add(key, { fg: P.accent });
     b.add(' ');
     b.add(label, { fg: P.dim });
   }
-  if (view.message) {
-    const msg = truncate(view.message, Math.max(0, size.cols - b.w - 4));
+  if (msg) {
     b.gap(size.cols - width(msg) - 2);
     b.add(msg, { fg: status('blocked').fg });
   }
@@ -775,6 +799,95 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
 
 /* -------------------------------------------------------------- detail panel */
 
+// Assigning work. The most consequential panel in the office: what is in this
+// field gets typed into a real agent and acted on, so the panel's whole job is to
+// show, before enter, exactly what will be sent and exactly who will get it.
+//
+// It draws no buttons on purpose. Every other panel in the office is clickable,
+// but you had to reach the keyboard to type the text at all, so enter is already
+// under your hand, and a click target labelled "send this to six agents" is
+// exactly the stray click there is no undoing.
+function composePanel(view, panelRows) {
+  const { compose, size } = view;
+  const PW = Math.min(size.cols, Math.max(24, size.cols - 4));
+  const TEXT = PW - 4;
+  const left = Math.max(0, Math.floor((size.cols - PW) / 2));
+  const to = compose.to || [];
+  // Amber while it is asking you to confirm a broadcast, because that is the one
+  // state in here where enter reaches more than one person.
+  const chrome = {
+    borderFg: compose.error ? STATUS.blocked.fg : compose.confirm ? STATUS.blocked.fg : P.accent,
+    bold: false,
+  };
+  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const body = [];
+
+  const who = compose.scope === 'all' ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}` : `assign · ${compose.name || compose.id}`;
+  const head = cells();
+  head.add('╭─ ');
+  head.add(truncate(who, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
+  head.add('╮');
+  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  // The field. Three rows at most, and only as many as the panel can spare, with
+  // the end of what you typed always visible because that is where the cursor is.
+  const fieldRows = Math.max(1, Math.min(3, panelRows - 4));
+  const lines = wrapField(compose.text, TEXT - 2, fieldRows);
+  lines.forEach((text, i) => {
+    const b = cells();
+    b.add(' ');
+    b.add(text, { fg: P.ink });
+    // The cursor lives on the last row, and only while the field has the keyboard.
+    if (i === lines.length - 1 && !compose.sending && !compose.confirm) b.add('▏', { fg: P.accent });
+    body.push(row(b.out().text, b.out().spans));
+  });
+
+  if (compose.error) {
+    body.push(row(truncate(compose.error, TEXT), [{ from: 0, to: Infinity, fg: STATUS.blocked.fg }]));
+  } else if (compose.sending) {
+    body.push(row(truncate(`sending to ${describeTargets(to, Math.max(8, TEXT - 12))}`, TEXT), [{ from: 0, to: Infinity, fg: P.soft }]));
+  } else if (compose.scope === 'all' || to.length !== 1) {
+    // Who it reaches, by name, and who it does not. A broadcast that quietly went
+    // to four of your seven agents would be worse than one that failed.
+    const b = cells();
+    b.add('to', { fg: P.faint });
+    b.add('  ');
+    b.add(truncate(describeTargets(to, Math.max(8, TEXT - 4 - (compose.skipped?.blocked || compose.skipped?.working ? 22 : 0))), Math.max(0, TEXT - b.w)), { fg: to.length ? P.ink : P.dim });
+    const skips = [];
+    if (compose.skipped?.blocked) skips.push(`${compose.skipped.blocked} with a hand up`);
+    if (compose.skipped?.working) skips.push(`${compose.skipped.working} mid-task`);
+    if (skips.length) {
+      b.add('  ');
+      b.add(truncate(`not ${skips.join(', ')}`, Math.max(0, TEXT - b.w)), { fg: P.faint });
+    }
+    body.push(row(b.out().text, b.out().spans));
+  }
+
+  if (body.length < panelRows - 1) {
+    const hint = compose.sending
+      ? 'sending'
+      : compose.confirm
+        ? `enter to send this to ${to.length} ${to.length === 1 ? 'person' : 'people'} · esc to go back`
+        : compose.scope === 'all'
+          ? 'type it out · enter to review who gets it · esc to drop it'
+          : 'type it out · enter to send it · esc to drop it';
+    body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: compose.confirm ? STATUS.blocked.fg : P.faint }]));
+  }
+  body.push(edge('╰', '╯', PW, chrome));
+
+  const out = [];
+  for (let i = 0; i < panelRows; i += 1) {
+    if (i >= body.length) {
+      out.push(fill(size.cols, P.carpet));
+      continue;
+    }
+    out.push(fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return out;
+}
+
 function detailPanel(view, floorRows, hitboxes, startRow) {
   const { detail, size } = view;
   const person = view.people.find((p) => p.id === detail.id);
@@ -928,9 +1041,11 @@ export function renderFrame(view) {
   // bottom half and the floor keeps the top, so the desk you are reading about
   // stays in sight next to everyone else. A short pane gives the panel a floor
   // of eight rows, which is the least that still shows the answer keys.
-  // The hire menu and a desk's detail are the same slot: you are either reading
-  // about somebody or deciding who to hire, never both.
-  const panel = view.hire ? 'hire' : view.detail ? 'detail' : null;
+  // The hire menu, the assign field and a desk's detail are all the same slot: you
+  // are either reading about somebody, deciding who to hire, or writing down what
+  // somebody should do, never two of the three. Assign outranks the others because
+  // it is the one holding half-typed text somebody would lose.
+  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : null;
   const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
@@ -1043,7 +1158,8 @@ export function renderFrame(view) {
     grid.menuCols = drawn.menuCols;
     grid.menuVisible = drawn.menuVisible;
     out.push(...drawn.lines);
-  } else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
+  } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
+  else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid };
 }

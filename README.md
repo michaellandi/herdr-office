@@ -67,6 +67,9 @@ would rather not.
 | drag a desk onto another | swap the two real panes |
 | `+` / click the empty desk | hire somebody: opens a tab and starts an agent in it |
 | `w` / `t` / `e` (hiring) | into a new worktree / back to a plain tab / name the branch |
+| `a` | give the selected person a job |
+| `A` | standup: give the same job to everybody who is free |
+| `^w` / `^u` (typing) | delete the last word / clear the field |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
 | `b` | jump to the next raised hand |
@@ -121,6 +124,41 @@ and **leaves the tab where it is** rather than closing a pane on your behalf.
 
 Nothing about this fires on a stray click. The empty desk only opens the menu; the
 only thing that starts an agent is a name in that menu.
+
+## Assigning work
+
+`a` opens a field in the bottom half of the pane and whatever you type in it gets
+typed into that agent and acted on. `A` does the same thing to everybody who is
+free at once, which is the standup: one instruction, one keystroke, the whole
+floor.
+
+This is the only thing the office does that cannot be taken back, so it is the
+most guarded part of it:
+
+- **A broadcast confirms first.** Enter on a standup does not send it. It swaps the
+  field for the list of people it is about to reach, by name, plus who it is
+  skipping and why, and *that* enter sends. `esc` goes back to the text rather than
+  throwing it away, so checking who gets it costs you nothing.
+- **Nothing in the field is clickable.** Every other panel in the office has
+  buttons; this one has none, on purpose. You had to reach the keyboard to type the
+  text at all, so enter is already under your hand, and a click target reading
+  "send this to six agents" is exactly the stray click there is no undoing. The
+  mouse is ignored entirely while the field is open, because the floor underneath
+  it still has `[y]` and `[n]` drawn on it.
+- **Somebody with their hand up is refused up front.** Herdr rejects a prompt to a
+  blocked agent before it sends anything, so the office says "Cass has a hand up:
+  answer that first" when you press `a` rather than after you have written a
+  paragraph.
+- **Somebody mid-task is left alone.** A standup reaches the idle, the done and the
+  ones herdr cannot classify. Barging in on an agent already doing what you asked
+  is an interruption, not a standup, and it is not something one keystroke gets to
+  do to five agents at once. The panel counts who it skipped either way.
+- **Every key is a letter.** Nothing falls through to the floor while the field has
+  the keyboard, or a `y` typed in the middle of a sentence would approve something
+  for somebody.
+- A blank prompt is refused, whitespace is collapsed, the field caps at 400
+  characters, and a partial failure is reported as what it was: "sent to 4 of 5;
+  not Dev (agent_blocked)".
 
 ## Moving people around
 
@@ -185,6 +223,11 @@ it was entered, so the first sighting of an agent starts the clock.
   90s start would otherwise stop the clock on the whole office. A worktree hire
   swaps `worktree.create` in for the `tab.create`, since it comes with a workspace,
   a tab and a pane of its own, and deliberately does not send `trust_repository`.
+- Assigning work is one `agent.prompt` per recipient, sent one at a time on its own
+  short-lived socket for the same reason a hire gets one: the main connection is
+  queued, and a broadcast to seven desks would otherwise stop the clock on the whole
+  office. One at a time rather than in parallel so a partial failure can be reported
+  as "four of five" instead of a single rejected promise.
 - Dragging is one `pane.swap` with an explicit source and target. Mouse mode is
   `1002` rather than `1000`, because press-and-release alone cannot tell you where
   a desk went on the way.
@@ -231,8 +274,8 @@ Two rules that are easy to break by accident:
   U+257F) and block elements (U+2580 to U+259F). Geometric Shapes start at U+25A0 and
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
-- **`y` and `n` send real keystrokes to real agents.** Never test approve or deny
-  against a live office; `--demo` prints what it would have sent instead.
+- **`y`, `n` and `a` send real input to real agents.** Never test approve, deny or
+  assign against a live office; `--demo` prints what it would have sent instead.
   `test/summary.test.mjs` covers the prompt reading, including the one case that
   matters most: the "yes, and don't ask again" menu option must never be the one
   picked automatically.

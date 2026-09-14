@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, officeRoster, viewOf } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, officeRoster, viewOf } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -102,6 +102,28 @@ test('hiring, in every state the menu can be in', () => {
       // the menu still opens on the key.
       assertExact(viewOf({ people: many, cols, rows, hire, selectedId: HIRE_ID }), `hire=${name} list ${cols}x${rows}`);
     }
+  }
+});
+
+test('assigning work, in every state the field can be in', () => {
+  // Almost everything in this panel is generated at render time: the prompt wraps
+  // to whatever width is left, the recipients line is a sentence built out of names
+  // that may not fit, and a broadcast to thirty desks has to become a count rather
+  // than a second row nobody budgeted for.
+  const many = officeRoster(new Array(40).fill('working')).people;
+  for (const [cols, rows] of SIZES) {
+    for (const [name, compose] of COMPOSES) {
+      assertExact(viewOf({ people, cols, rows, compose }), `compose=${name} ${cols}x${rows}`);
+      assertExact(viewOf({ people: [], cols, rows, compose }), `compose=${name} empty ${cols}x${rows}`);
+      assertExact(viewOf({ people: many, cols, rows, compose }), `compose=${name} list ${cols}x${rows}`);
+    }
+  }
+  // The field outranks the other two panels, and asking for all three at once must
+  // still come out as one panel's worth of rows rather than a stack of them.
+  const compose = COMPOSES[3][1];
+  for (const [cols, rows] of SIZES) {
+    assertExact(viewOf({ people, cols, rows, compose, detail: DETAILS[3][1] }), `compose+detail ${cols}x${rows}`);
+    assertExact(viewOf({ people, cols, rows, compose, hire: HIRES[2][1] }), `compose+hire ${cols}x${rows}`);
   }
 });
 

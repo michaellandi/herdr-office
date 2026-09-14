@@ -140,7 +140,37 @@ export const HIRES = [
   ['the worktree went wrong', { kinds: KINDS, index: 0, pending: null, worktree: true, branch: 'office/claude-0914-1502', error: 'could not hire claude: repository is not trusted. The worktree it made is still there.' }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null }) {
+const SOME = [
+  { id: 'w1:p3', name: 'Cass', status: 'idle' },
+  { id: 'w1:p4', name: 'Dev', status: 'done' },
+  { id: 'w1:p5', name: 'Ede', status: 'unknown' },
+];
+
+const CROWD = new Array(30).fill(0).map((_, i) => ({ id: `w1:q${i}`, name: `Person${i}`, status: 'idle' }));
+
+const LONG = 'rebase onto main, run the whole test suite, and if anything fails leave it '
+  + 'alone and tell me what broke instead of trying to fix it yourself, because the last '
+  + 'three attempts made it worse and I would rather read the failure than the patch';
+
+// Every shape the assign field can be in. The two that matter most are the confirm
+// step (the only place one enter reaches more than one agent) and a broadcast that
+// reaches nobody, because both are generated sentences rather than fixed art.
+export const COMPOSES = [
+  ['none', null],
+  ['empty, one person', { scope: 'one', id: 'w1:p3', name: 'Cass', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['typed, one person', { scope: 'one', id: 'w1:p3', name: 'Cass', text: 'rebase onto main', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['a prompt that wraps', { scope: 'one', id: 'w1:p3', name: 'Cass', text: LONG, to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['a broadcast with skips', { scope: 'all', id: null, name: null, text: 'standup: what are you on?', to: SOME, skipped: { blocked: 2, working: 1 }, confirm: false, sending: false, error: null }],
+  ['a broadcast to a crowd', { scope: 'all', id: null, name: null, text: 'standup', to: CROWD, skipped: { blocked: 0, working: 4 }, confirm: false, sending: false, error: null }],
+  ['a broadcast to nobody', { scope: 'all', id: null, name: null, text: 'standup', to: [], skipped: { blocked: 3, working: 2 }, confirm: false, sending: false, error: null }],
+  ['confirming a broadcast', { scope: 'all', id: null, name: null, text: 'standup: what are you on?', to: SOME, skipped: { blocked: 2, working: 1 }, confirm: true, sending: false, error: null }],
+  ['confirming to a crowd', { scope: 'all', id: null, name: null, text: LONG, to: CROWD, skipped: { blocked: 0, working: 0 }, confirm: true, sending: false, error: null }],
+  ['sending', { scope: 'one', id: 'w1:p3', name: 'Cass', text: 'rebase onto main', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
+  ['nothing typed yet', { scope: 'one', id: 'w1:p3', name: 'Cass', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: 'nothing typed yet' }],
+  ['a very long name', { scope: 'one', id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', text: 'go', to: [{ id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+];
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -155,5 +185,6 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     drag,
     busy,
     hire,
+    compose,
   };
 }

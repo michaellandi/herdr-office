@@ -15,6 +15,7 @@ import { renderFrame, HIRE_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
+import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
 import { width } from './src/text.mjs';
 
 const argv = new Set(process.argv.slice(2));
@@ -124,6 +125,7 @@ function view() {
     drag,
     busy,
     hire,
+    compose,
   };
 }
 
@@ -630,6 +632,131 @@ async function startHire(kind) {
   }
 }
 
+/* ------------------------------------------------------------- assigning work */
+
+// `agent.prompt` puts text into a real agent's input and makes it act on it. It is
+// the only thing the office does that cannot be undone, reversed or answered
+// again, so it is the most guarded: the field has to be opened deliberately, the
+// text has to be typed, and a broadcast has to be confirmed against a list of
+// names before a single request goes out. Nothing here is clickable.
+let compose = null;
+
+// Long enough for an agent that is thinking about the prompt before acknowledging
+// it, short enough that a wedged one does not hold the field open all afternoon.
+const PROMPT_TIMEOUT_MS = 20000;
+
+// Saying no, and saying so on the screen this instant. note() alone waits for the
+// next animation tick, which on a refusal reads as a key that did nothing.
+function refuse(text) {
+  note(text);
+  draw();
+}
+
+function openCompose(scope) {
+  if (compose) return;
+  const person = scope === 'one' ? roster.find(selectedId) : null;
+  if (scope === 'one') {
+    if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
+    // The server rejects a blocked agent outright, before anything is sent. Saying
+    // so here is better than letting somebody type out a paragraph first.
+    if (person.status === 'blocked') return refuse(`${person.name} has a hand up: answer that first`);
+  }
+  const { to, skipped } = scope === 'all'
+    ? broadcastTargets(roster.people)
+    : { to: [person], skipped: { blocked: 0, working: 0 } };
+  if (scope === 'all' && !to.length) return refuse('nobody is free to take a new job right now');
+  // Assign and the hire menu are the same half of the pane, and half-typed text is
+  // the more valuable of the two, so opening one puts the other away.
+  hire = null;
+  detail = null;
+  compose = {
+    scope,
+    id: person?.id || null,
+    name: person?.name || null,
+    text: '',
+    to,
+    skipped,
+    confirm: false,
+    sending: false,
+    error: null,
+  };
+  prevLines = [];
+  draw();
+}
+
+function closeCompose() {
+  if (!compose) return;
+  compose = null;
+  prevLines = [];
+  draw();
+}
+
+// One `agent.prompt` per recipient, on its own connection: `wait` is not used, but
+// a slow agent still takes a moment to acknowledge, and requests on the main socket
+// are queued behind each other, so a standup would otherwise freeze the room.
+//
+// Sent one at a time rather than in parallel because the client serializes anyway,
+// and because a partial failure has to be reportable as "four of five", not as one
+// rejected promise.
+async function sendCompose() {
+  if (!compose || compose.sending) return;
+  const text = cleanPrompt(compose.text);
+  if (!text) {
+    // A blank prompt is a keystroke sent to an agent for no reason.
+    compose = { ...compose, error: 'nothing typed yet' };
+    prevLines = [];
+    draw();
+    return;
+  }
+  const to = compose.to || [];
+  if (!to.length) {
+    compose = { ...compose, error: 'nobody to send that to' };
+    prevLines = [];
+    draw();
+    return;
+  }
+  if (DEMO) {
+    note(`demo mode: would send "${truncateNote(text)}" to ${to.map((p) => p.name).join(', ')}`);
+    compose = null;
+    prevLines = [];
+    draw();
+    return;
+  }
+  compose = { ...compose, sending: true, confirm: false, error: null };
+  prevLines = [];
+  draw();
+  let side = null;
+  const failed = [];
+  try {
+    side = await new ApiClient().open();
+    for (const person of to) {
+      try {
+        await side.request('agent.prompt', { target: person.id, text }, PROMPT_TIMEOUT_MS);
+      } catch (err) {
+        failed.push(`${person.name} (${err.code || err.message})`);
+      }
+    }
+  } catch (err) {
+    failed.push(`nobody (${err.code || err.message})`);
+  } finally {
+    side?.close();
+  }
+  const sent = to.length - failed.length;
+  compose = null;
+  if (!sent) note(`could not assign that: ${failed.join(', ')}`);
+  else if (failed.length) note(`sent to ${sent} of ${to.length}; not ${failed.join(', ')}`);
+  else note(to.length === 1 ? `${to[0].name} is on it` : `sent to all ${to.length}`);
+  prevLines = [];
+  draw();
+  // They should be turning green about now, so do not wait out the poll to say so.
+  setTimeout(() => refresh(), 500);
+}
+
+// The footer is one line, and a four-hundred character prompt is not.
+function truncateNote(text) {
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+}
+
 // Nothing while the button is up. Once it goes down on a desk this holds where
 // it went down, so a press can turn out to have been a drag later without the
 // click handler having had to guess up front.
@@ -646,6 +773,11 @@ function cancelDrag() {
 // to whoever is under the pointer happens on every outcome, so the footer hints
 // and the next keystroke are about the desk you just touched.
 function onMouse(ev) {
+  // The assign field draws no buttons, and while it is open the mouse does nothing
+  // at all: the floor underneath it still has [y] and [n] on it, and a click that
+  // answered somebody's approval prompt while you were writing a sentence would be
+  // the worst kind of accident in here.
+  if (compose) return;
   const { drag: next, act } = nextDrag(drag, ev, hitboxes);
   drag = next;
   if (!act) return;
@@ -691,6 +823,15 @@ function onInput(chunk) {
   if (str === '\x1b') {
     // A desk in mid-air outranks the panel: esc puts it down first.
     if (drag) return cancelDrag();
+    // Backing out of a confirm goes back to the text rather than throwing it away,
+    // because "wait, who does this reach" should not cost you the paragraph.
+    if (compose?.confirm) {
+      compose = { ...compose, confirm: false };
+      prevLines = [];
+      draw();
+      return;
+    }
+    if (compose) return compose.sending ? undefined : closeCompose();
     // And a half-typed branch name outranks the menu it is in, so esc puts the
     // old name back rather than throwing away the whole hire you were setting up.
     if (hire?.editing) {
@@ -701,6 +842,30 @@ function onInput(chunk) {
     }
     if (hire) return closeHire();
     detail = null;
+    prevLines = [];
+    draw();
+    return;
+  }
+
+  // The assign field has the keyboard outright: every printable key is a letter in
+  // the prompt, and nothing falls through to the floor. It has to be this way, or a
+  // `y` typed into a sentence would answer somebody's approval prompt for them.
+  if (compose) {
+    if (compose.sending) return;
+    if (compose.confirm) {
+      // The only two keys that mean anything here. Enter sends, and it is the second
+      // deliberate enter, against a list of names that is on the screen.
+      if (str === '\r' || str === '\n') sendCompose();
+      return;
+    }
+    const { text, done } = typePromptChunk(compose.text, str);
+    compose = { ...compose, text, error: null };
+    // A single assign sends on enter. A broadcast steps through a confirm first,
+    // because it is one keystroke turning into N irreversible writes.
+    if (done) {
+      if (compose.scope === 'all' && cleanPrompt(text)) compose = { ...compose, confirm: true };
+      else sendCompose();
+    }
     prevLines = [];
     draw();
     return;
@@ -736,6 +901,8 @@ function onInput(chunk) {
   }
 
   if (str === '+') return openHire();
+  if (str === 'a') return openCompose('one');
+  if (str === 'A') return openCompose('all');
   if (str === '\x1b[A' || str === 'k') move(0, -1);
   else if (str === '\x1b[B' || str === 'j') move(0, 1);
   else if (str === '\x1b[D' || str === 'h') move(-1, 0);

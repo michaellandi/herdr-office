@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, HIRES, KINDS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
 
 const roster = officeRoster();
 const people = roster.people;
@@ -209,6 +209,37 @@ test('the worktree row is only clickable where it is legible', () => {
   // space, the title still says where the hire is going, and the keys still work.
   assert.equal(at(140, 10, worktree).length, 0, 'a short panel has no room for a destination row');
   assert.ok(at(140, 11, worktree).length > 0, 'one row taller and it is back');
+});
+
+test('nothing in the assign field is clickable, and neither is the floor under it', () => {
+  // A design guarantee, not an accident, so it is asserted rather than trusted.
+  // `agent.prompt` cannot be taken back, and a click target reading "send this to
+  // six agents" is exactly the stray click there is no undoing. You reached the
+  // keyboard to type the text at all, so enter is already under your hand.
+  //
+  // The stronger half: while the field is open the floor keeps its [y] and [n]
+  // buttons drawn, and a click that answered somebody's approval prompt while you
+  // were mid-sentence would be the worst accident available in here. office.mjs
+  // drops mouse events outright, but the panel must not add any of its own either.
+  const many = officeRoster(new Array(40).fill('blocked')).people;
+  let seen = 0;
+  for (const [cols, rows] of SIZES) {
+    for (const [name, compose] of COMPOSES) {
+      if (!compose) continue;
+      for (const crowd of [people, [], many]) {
+        const { lines, hitboxes } = renderFrame(viewOf({ people: crowd, cols, rows, compose }));
+        // The panel announces itself: its top border carries "assign ·" or
+        // "standup ·". Everything from that row down belongs to the field.
+        const top = lines.findIndex((l) => /╭─ (assign|standup) · /.test(stripAnsi(l)));
+        if (top < 0) continue; // too small to draw the panel at all
+        seen += 1;
+        for (const b of hitboxes) {
+          assert.ok(b.y < top, `compose=${name} ${cols}x${rows}: a ${b.action || 'desk'} hitbox at row ${b.y} is inside the field (top ${top})`);
+        }
+      }
+    }
+  }
+  assert.ok(seen > 50, `only checked ${seen} frames`);
 });
 
 test('a desk is clickable wherever it is drawn', () => {

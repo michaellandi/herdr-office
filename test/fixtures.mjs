@@ -5,6 +5,7 @@
 // tidy office proves nothing, because a tidy office is not what breaks.
 import { Roster } from '../src/roster.mjs';
 import { stripAnsi } from '../src/text.mjs';
+import { assignRooms } from '../src/rooms.mjs';
 
 export { stripAnsi };
 
@@ -66,6 +67,37 @@ export function officeRoster(statuses = STATUSES) {
   roster.people.forEach((person, i) => {
     if (person.status === 'working') roster.setCommand(person.id, COMMANDS[i % COMMANDS.length]);
   });
+  return roster;
+}
+
+// Which workspace each desk is in, for the rooms. The default plan is what a real
+// session looks like: a few desks in the workspace you are living in and a couple
+// parked in others. `roomyRoster(one per desk)` is the wrap case, since there are
+// only six wall colours and seven desks.
+const WS_NAMES = ['main', 'a-really-long-workspace-name-that-will-not-fit-anywhere', '', 'notes', 'sandbox', 'ops', 'seventh'];
+
+export function roomyRoster(plan = [1, 1, 1, 2, 2, 3, 3], statuses = STATUSES) {
+  const roster = new Roster();
+  roster.setWorkspaces(WS_NAMES.map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1 })));
+  roster.setTabs([
+    { tab_id: 't1', label: 'group-resolver', number: 1 },
+    { tab_id: 't2', label: 'a-really-long-tab-name-that-overflows-its-card', number: 2 },
+    { tab_id: 't3', label: '', number: 3 },
+  ]);
+  roster.update(
+    statuses.map((status, i) => ({
+      pane_id: `w${plan[i % plan.length]}:p${i + 1}`,
+      agent: 'claude',
+      agent_status: status,
+      workspace_id: `w${plan[i % plan.length]}`,
+      tab_id: `t${(i % 3) + 1}`,
+      cwd: `/Users/you/Desktop/projects/repo${plan[i % plan.length]}`,
+      terminal_title_stripped: `a task ${i}`,
+      focused: i === 0,
+      state_change_seq: 1,
+    })),
+  );
+  roster.setAsk(roster.people.find((p) => p.status === 'blocked')?.id, 'shell requires approval', { shape: 'y/n', approve: ['y'], deny: ['n'] });
   return roster;
 }
 
@@ -214,7 +246,7 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'group resolver', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -235,5 +267,9 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     following,
     zoom,
     total: total ?? people.length,
+    // Derived from these people by default, which for a one-workspace roster is no
+    // rooms at all: every test written before rooms existed keeps rendering exactly
+    // the office it was written against.
+    rooms: rooms || assignRooms(people),
   };
 }

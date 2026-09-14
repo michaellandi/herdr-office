@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { assignRooms } from '../src/rooms.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
 
 const roster = officeRoster();
@@ -334,6 +335,21 @@ test('a zoom level cannot leave a button on empty carpet', () => {
       const tiles = hitboxes.filter((b) => !b.action && b.h > 1);
       assert.ok(tiles.length <= 1, `zoom=cubicle ${cols}x${rows}: ${tiles.length} desks are clickable`);
       if (tiles.length) assert.equal(tiles[0].id, people[2].id);
+    }
+  }
+});
+
+test('rooms are paint, so nothing moves under the mouse', () => {
+  // The claim rooms are built on is that they cost no cells. The grid tests prove no
+  // line got wider; this proves the click map is the same map, box for box, which is
+  // the version of that claim that matters when a box is an approve button.
+  const roomy = roomyRoster([1, 2, 2, 3, 3, 3, 1]).people;
+  const rooms = assignRooms(roomy);
+  for (const [cols, rows] of SIZES) {
+    for (const zoom of ['auto', 'list', 'cubicle']) {
+      const at = (withRooms) =>
+        renderFrame(viewOf({ people: roomy, cols, rows, zoom, rooms: withRooms ? rooms : new Map() })).hitboxes;
+      assert.deepEqual(at(true), at(false), `${cols}x${rows} ${zoom}`);
     }
   }
 });

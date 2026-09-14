@@ -5,6 +5,7 @@ import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
+import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 import {
   pose,
   screen,
@@ -226,7 +227,7 @@ function eventSlab(label, kind) {
   };
 }
 
-function tile(person, { selected, frame, now, lifted = false, dropTarget = false }) {
+function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall }) {
   const st = status(person.status);
   const who = identity(person.id);
   const body = pose(person.status, frame);
@@ -249,7 +250,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
         ? P.accent
         : person.status === 'blocked'
           ? (alert && st.hot) || st.fg
-          : P.wall;
+          // The cubicle wall is the room, so this is where a workspace tint lands: it
+          // is the last thing consulted, after the drag, the selection and the status,
+          // which is what guarantees a room colour can never paint over a raised hand.
+          : wall;
   const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)) };
   const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
   const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
@@ -455,6 +459,18 @@ function headerLines(view) {
     b.add('▌', { fg: st.fg });
     b.add(` ${counts[key]} `, { fg: P.soft, bold: key === 'blocked' });
     b.add(PHRASE[key], { fg: P.dim });
+  }
+  // The legend for the rooms, which is what turns the wall colours from decoration
+  // into information. After the counts, because a count of raised hands outranks a
+  // note about which workspace they are in, and it drops off a narrow pane the same
+  // way the counts do rather than shoving the clock off the end.
+  for (const room of roomsShown(view.rooms, people)) {
+    const name = truncate(room.name || `room ${room.number}`, 10);
+    if (b.w + width(name) + 5 > budget) break;
+    b.add('   ');
+    b.add('▌', { fg: room.wall });
+    b.add(' ');
+    b.add(name, { fg: room.ink });
   }
   b.gap(size.cols - width(clock) - 2);
   if (b.w + width(clock) + 2 <= size.cols) b.add(clock, { fg: P.dim });
@@ -735,7 +751,12 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // Narrow terminals drop columns from the right rather than wrapping: state
     // and face first, then who they are, then what they are doing.
     const room = (n) => b.w + n <= cols - 1;
-    b.add(' ');
+    // The room, as a painted cell in the margin. The list is sorted by workspace, so
+    // a stripe down the left edge is the group boundary, and it fits in a column that
+    // was already a space: the one place a room can be shown in a one-line row
+    // without taking a cell off anything that has words in it.
+    const tint = roomOf(view.rooms, person);
+    b.add(' ', tint ? { bg: tint.wall } : null);
     b.add(selected ? '▌' : ' ', { fg: P.accent });
     b.add(' ');
     b.add(face, { fg: who.skin });
@@ -1073,7 +1094,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     fields.push(['status', st.label + dwell, st.fg]);
     fields.push(['tab', person.tabName || '(unnamed tab)', P.ink]);
     fields.push(['doing', person.title || '(no pane title)', P.soft]);
-    fields.push(['where', [person.workspaceName, person.tabId, person.id].filter(Boolean).join(' · '), P.soft]);
+    // In the room's own colour, which is what ties a wall you can see to a workspace
+    // you can name. Plain when the office has only one room.
+    fields.push(['where', [person.workspaceName, person.tabId, person.id].filter(Boolean).join(' · '), roomOf(view.rooms, person)?.ink || P.soft]);
     fields.push(['cwd', person.cwd, P.soft]);
     // Only when there is one. A `branch: (none)` row on every desk in an untrusted
     // repo would be a permanent apology for a thing nobody asked about.
@@ -1292,6 +1315,7 @@ export function renderFrame(view) {
           // it, so the room never looks settled while it is still moving.
           lifted: (Boolean(view.drag?.active) && person.id === view.drag.id) || Boolean(view.busy?.has(person.id)),
           dropTarget: Boolean(view.drag?.active) && person.id === view.drag.overId && person.id !== view.drag.id,
+          wall: roomWall(view.rooms, person),
         });
       });
       const span = rendered.length * TILE_W + (rendered.length - 1) * GAP_X;

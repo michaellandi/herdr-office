@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, BRANCHES, officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, BRANCHES, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { assignRooms, ROOM_TINTS } from '../src/rooms.mjs';
+import { fg } from '../src/theme.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -237,6 +239,62 @@ test('a filter that matches nobody says so, and offers no empty desk', () => {
   assert.ok(!/hire/i.test(text.split('\n').slice(2, -2).join('\n')), 'no hiring prompt on a filtered floor');
   // The header still says how many people are really in the room.
   assert.match(stripAnsi(lines[0]), /0 of 7 desks/);
+});
+
+test('a floor split into rooms, at every size and every zoom', () => {
+  // Rooms are colour and nothing else, which is exactly the claim worth testing on
+  // the grid: paint cannot move a cell, so if any of this changed a line width then
+  // it was not colour after all.
+  for (const plan of [[1, 1, 1, 2, 2, 3, 3], [1, 2, 3, 4, 5, 6, 7], [1, 1, 1, 1, 1, 1, 2]]) {
+    const roomy = roomyRoster(plan).people;
+    for (const [cols, rows] of SIZES) {
+      for (const zoom of ['auto', 'list', 'cubicle']) {
+        assertExact(viewOf({ people: roomy, cols, rows, zoom }), `${cols}x${rows} rooms=${plan.join('')} ${zoom}`);
+        // And with a desk open, since the card puts the workspace name in the room's
+        // own colour.
+        assertExact(viewOf({ people: roomy, cols, rows, zoom, detail: DETAILS[3][1] }), `${cols}x${rows} rooms card ${zoom}`);
+      }
+    }
+  }
+});
+
+test('the room legend gives way rather than shoving the clock off', () => {
+  // Seven rooms is more legend than a header has room for, and the clock is on the
+  // far right: the chips have to stop when they run out of space, the same way the
+  // status counts already do.
+  const roomy = roomyRoster([1, 2, 3, 4, 5, 6, 7]).people;
+  for (const [cols, rows] of SIZES) {
+    const header = stripAnsi(renderFrame(viewOf({ people: roomy, cols, rows })).lines[0]);
+    assert.equal(width(header), cols, `${cols}x${rows} header`);
+    if (cols >= 60) assert.match(header, /\d\d:\d\d:\d\d/, `${cols}x${rows} lost the clock`);
+  }
+  // On a pane wide enough for everything, the rooms are actually named.
+  const wide = stripAnsi(renderFrame(viewOf({ people: roomy, cols: 200, rows: 60 })).lines[0]);
+  assert.ok(wide.includes('notes'), wide);
+});
+
+test('a room colour never paints over a raised hand', () => {
+  // The one rule the palette has to obey. A wall is the last thing the border
+  // consults, after the drag, the selection and the status, so a desk with its hand
+  // up is drawn identically whether it is in a coloured room or not.
+  const roomy = roomyRoster([1, 2, 2, 2, 2, 2, 2]).people;
+  const rooms = assignRooms(roomy);
+  const sand = fg(ROOM_TINTS[1].wall); // room two's wall, a colour nothing else uses
+  const blocked = roomy.find((p) => p.status === 'blocked' && p.workspaceId === 'w2');
+  const working = roomy.find((p) => p.status === 'working' && p.workspaceId === 'w2');
+  assert.ok(blocked && working);
+  // One column, one desk, nobody selected: the only wall on the screen belongs to
+  // the desk being asserted about, and no selection or drag is in the way of it.
+  const floor = (person, withRooms) => {
+    const view = viewOf({ people: [person], cols: 40, rows: 20, selectedId: null, rooms: withRooms ? rooms : new Map() });
+    return renderFrame(view).lines.slice(2, 18);
+  };
+  assert.deepEqual(floor(blocked, true), floor(blocked, false), 'the room repainted a raised hand');
+  assert.ok(!floor(blocked, true).join('').includes(sand), 'a wall colour reached a raised hand');
+  // ...and the wall of a desk that is merely working does change, or none of this
+  // would be doing anything at all.
+  assert.notDeepEqual(floor(working, true), floor(working, false));
+  assert.ok(floor(working, true).join('').includes(sand), 'no room colour on the wall');
 });
 
 test('a footer message never pushes a line over', () => {

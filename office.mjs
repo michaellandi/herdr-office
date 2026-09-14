@@ -24,6 +24,7 @@ import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
+import { assignRooms } from './src/rooms.mjs';
 import { branchFromList } from './src/branches.mjs';
 
 const argv = new Set(process.argv.slice(2));
@@ -191,6 +192,9 @@ function view() {
   const people = filterPeople(roster.people, filter);
   return {
     people,
+    // Room colours come from the WHOLE roster rather than the filtered floor, so a
+    // filter narrows who is on screen without repainting the walls behind them.
+    rooms: assignRooms(roster.people),
     counts: countOf(people),
     total: roster.people.length,
     filter,
@@ -1240,28 +1244,43 @@ function onInput(chunk) {
 
 let demoTick = 0;
 const DEMO_TABS = ['socket-client', 'login-flow', 'flaky-tests', 'deps', 'office-plugin', 'triage', 'null-hunt'];
+// Three workspaces, because one was hiding the thing rooms exist to show. Real
+// sessions spread across a few, and a demo floor where every desk is in the same
+// one could never have caught a wall painted the wrong colour.
+const DEMO_WORKSPACES = [
+  { workspace_id: 'w1', label: 'herdr-office', number: 1 },
+  { workspace_id: 'w2', label: 'kiro-web', number: 2 },
+  { workspace_id: 'w3', label: 'notes', number: 3 },
+];
 function demoAgents() {
   demoTick += 1;
-  roster.setTabs(DEMO_TABS.map((label, i) => ({ tab_id: `w1:t${i + 1}`, label })));
+  roster.setWorkspaces(DEMO_WORKSPACES);
   const cycle = ['working', 'working', 'blocked', 'idle', 'done', 'unknown'];
-  return [
+  const desks = [
     ['w1:p1', 'claude', 'refactor the socket client'],
     ['w1:p2', 'kiro', 'rewrite the login flow'],
     ['w1:p3', 'codex', 'fix a flaky test'],
-    ['w1:p4', 'opencode', 'bump deps'],
-    ['w1:p5', 'claude', 'write the office plugin'],
-    ['w1:p6', 'gemini', 'triage the bug queue'],
-    ['w1:p7', 'kiro', 'chase a null pointer'],
-  ].map(([pane_id, agent, title], i) => ({
+    ['w2:p1', 'opencode', 'bump deps'],
+    ['w2:p2', 'claude', 'write the office plugin'],
+    ['w3:p1', 'gemini', 'triage the bug queue'],
+    ['w3:p2', 'kiro', 'chase a null pointer'],
+  ];
+  roster.setTabs(desks.map(([pane_id], i) => ({ tab_id: `${pane_id.split(':')[0]}:t${i + 1}`, label: DEMO_TABS[i], number: i + 1 })));
+  return desks.map(([pane_id, agent, title], i) => ({
     pane_id,
     agent,
+    // Room, repo and checkout agree with each other, because a demo where the card
+    // said one workspace and the cwd under it said another repo would be teaching
+    // the reader something that is not true of a real session.
     agent_status: cycle[(i + Math.floor(demoTick / 6)) % cycle.length],
-    workspace_id: 'w1',
-    tab_id: `w1:t${i + 1}`,
+    workspace_id: pane_id.split(':')[0],
+    tab_id: `${pane_id.split(':')[0]}:t${i + 1}`,
     // A checkout each, because that is how a floor of agents on different branches
     // actually looks: one desk in the repo itself and the rest in linked worktrees.
     cwd: DEMO_BRANCHES[i]
-      ? `/Users/you/Desktop/projects/herdr-office${i ? `/.worktrees/${DEMO_BRANCHES[i].replace(/\//g, '-')}` : ''}`
+      ? `/Users/you/Desktop/projects/${DEMO_WORKSPACES.find((w) => w.workspace_id === pane_id.split(':')[0]).label}${
+        i ? `/.worktrees/${DEMO_BRANCHES[i].replace(/\//g, '-')}` : ''
+      }`
       // The one desk with no branch is somewhere that is not a repository at all,
       // which has to be its own directory: a branch is a fact about a checkout, so
       // two desks in the same checkout cannot disagree about it, and the cache is
@@ -1295,7 +1314,7 @@ function demoExtras() {
   roster.people.forEach((person, i) => {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
-    roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: 'herdr-office' });
+    roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {

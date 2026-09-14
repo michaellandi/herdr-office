@@ -366,6 +366,39 @@ branch. A ref name is author-controlled text, so it is put through the same wash
 tab names and terminal titles: one line, no control characters, thirty-two
 characters at the outside.
 
+## Rooms, one per workspace
+
+A herdr session with three workspaces open is three separate bodies of work, and
+the office used to draw them as one undifferentiated floor. The workspace is
+already the first thing the seating order sorts by, so desks from the same one are
+always next to each other; all that was missing was being able to see where one
+group ends and the next begins. So each workspace is a room, and a room is a
+colour: the cubicle walls in it are painted a shade of their own, the header names
+the rooms in those same colours, the list view carries a stripe of it down the left
+margin, and the `where` line on a desk's card is written in it.
+
+It is colour and nothing else. No label rows, no dividers, not one extra cell
+anywhere. The floor's geometry decides how many desks fit on a page and where the
+walkway goes, and a room heading inserted between two rows of cubicles would have
+moved every one of those numbers; a wall painted a different shade cannot wrap a
+line. The same tests that prove no row got wider also prove the click map is
+identical box for box, which is the version of that claim that matters given some
+of those boxes are approve buttons.
+
+There are six wall shades and then it wraps. Every one of them is a permutation of
+the same three colour channels, so they all sit at the same brightness and no room
+shouts louder than its neighbours. A raised hand still owns the eye in any room:
+the wall is the last thing a cubicle's border consults, after the drag, the
+selection and the status, so a desk waiting on you is drawn exactly the same in a
+painted room as in a plain one. Past six workspaces a shade gets used twice, which
+is better than inventing a seventh bright enough to be mistaken for a status.
+
+One workspace gets no colours and no legend, which is the common case: an
+explanation that the only room in the office is the room you are in would be noise
+on every frame. The colours also come from the whole office rather than from the
+desks currently on screen, so putting a filter on narrows who you can see without
+repainting the walls behind them.
+
 ## Moving people around
 
 Desks are laid out in the order the panes really are: workspace, then tab, then

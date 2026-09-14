@@ -13,6 +13,7 @@ import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
 import { renderFrame } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
+import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { width } from './src/text.mjs';
 
 const argv = new Set(process.argv.slice(2));
@@ -75,7 +76,10 @@ function note(text, ms = 4000) {
 /* ---------------------------------------------------------------- terminal */
 
 function enterTerminal() {
-  process.stdout.write('\x1b[?1049h\x1b[?25l\x1b[2J\x1b[?1000h\x1b[?1006h');
+  // 1002 rather than 1000: button-event tracking reports motion while a button
+  // is held, which is the difference between being able to drag a desk and only
+  // seeing where it was picked up and put down.
+  process.stdout.write('\x1b[?1049h\x1b[?25l\x1b[2J\x1b[?1002h\x1b[?1006h');
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', onInput);
@@ -86,7 +90,8 @@ function enterTerminal() {
 }
 
 function leaveTerminal() {
-  process.stdout.write('\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l');
+  // Both trackers off, in case something upstream left 1000 on.
+  process.stdout.write('\x1b[?1002l\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l');
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 }
 
@@ -115,6 +120,8 @@ function view() {
     now: Date.now(),
     size: size(),
     message,
+    drag,
+    busy,
   };
 }
 
@@ -166,6 +173,20 @@ async function refreshAsks() {
   if (blocked.length && !ONCE) draw();
 }
 
+// Feeds the roster everything it needs to seat people where their panes really
+// are. Order matters: the layouts refer to workspaces and tabs by id, so the
+// numbers have to be in hand before the geometry is read.
+function seat(snapshot, tabs) {
+  const snap = snapshot?.snapshot;
+  if (snap?.workspaces) roster.setWorkspaces(snap.workspaces);
+  // The snapshot's tabs carry `number`, which is what orders one workspace's
+  // tabs. tab.list goes second so its labels win where the two disagree, and it
+  // cannot clobber a number it does not carry.
+  if (snap?.tabs) roster.setTabs(snap.tabs);
+  if (tabs?.tabs) roster.setTabs(tabs.tabs);
+  if (snap?.layouts) roster.setLayouts(snap.layouts);
+}
+
 async function refresh() {
   if (DEMO) {
     roster.update(demoAgents());
@@ -182,8 +203,7 @@ async function refresh() {
       api.request('session.snapshot', {}).catch(() => null),
       api.request('tab.list', {}).catch(() => null),
     ]);
-    if (snapshot?.snapshot?.workspaces) roster.setWorkspaces(snapshot.snapshot.workspaces);
-    if (tabs?.tabs) roster.setTabs(tabs.tabs);
+    seat(snapshot, tabs);
     const newlyBlocked = roster.update(agentList.agents || []);
     ensureSelection();
     syncSubscriptions();
@@ -412,31 +432,82 @@ async function jumpToPane() {
   }
 }
 
-// The buttons sit on top of the desk they belong to, so an answer beats a select
-// wherever the two overlap.
-function hitTest(x, y) {
-  const under = hitboxes.filter((box) => x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h);
-  return under.find((box) => box.action) || under[0] || null;
+// Swapping two desks swaps the two real panes, which is why it asks the server
+// rather than just reordering the picture: the floor is a view of the session,
+// and a drag that only moved a drawing would be a lie the next poll erased.
+// `pane.swap` is reversible and closes nothing, so it needs no confirmation, but
+// it does need the in-flight guard: a second swap fired at a pane whose first
+// swap has not landed yet is a race against a layout that is still moving.
+const busy = new Set();
+
+async function swapDesks(sourceId, targetId) {
+  const from = roster.find(sourceId);
+  const to = roster.find(targetId);
+  if (!from || !to || sourceId === targetId) return;
+  if (busy.has(sourceId) || busy.has(targetId)) {
+    note('still moving those two, hold on');
+    return;
+  }
+  if (DEMO) {
+    note(`demo mode: would swap ${from.name} and ${to.name}`);
+    return;
+  }
+  busy.add(sourceId);
+  busy.add(targetId);
+  draw();
+  try {
+    await api.request('pane.swap', { source_pane_id: sourceId, target_pane_id: targetId });
+    note(`${from.name} and ${to.name} swapped desks`);
+    await refresh();
+  } catch (err) {
+    note(`could not swap ${from.name} and ${to.name}: ${err.code || err.message}`);
+  } finally {
+    busy.delete(sourceId);
+    busy.delete(targetId);
+    draw();
+  }
+}
+
+// Nothing while the button is up. Once it goes down on a desk this holds where
+// it went down, so a press can turn out to have been a drag later without the
+// click handler having had to guess up front.
+let drag = null;
+
+function cancelDrag() {
+  if (!drag) return;
+  drag = null;
+  prevLines = [];
+  draw();
+}
+
+// All the deciding happens in nextDrag; this only carries it out. Walking over
+// to whoever is under the pointer happens on every outcome, so the footer hints
+// and the next keystroke are about the desk you just touched.
+function onMouse(ev) {
+  const { drag: next, act } = nextDrag(drag, ev, hitboxes);
+  drag = next;
+  if (!act) return;
+  if (act.id) selectedId = act.id;
+  if (act.type === 'answer') respond(act.action);
+  else if (act.type === 'open') loadDetail(act.id, { force: true });
+  else if (act.type === 'swap') {
+    selectedId = act.from;
+    swapDesks(act.from, act.to);
+  } else if (act.type === 'cancel') note('put it back');
+  // A desk that has been in the air has left pale borders and lifted rows behind
+  // it, so the cheap line-diff repaint cannot be trusted for this frame.
+  if (act.type === 'swap' || act.type === 'cancel') prevLines = [];
+  draw();
 }
 
 function onInput(chunk) {
   const str = chunk.toString('utf8');
 
-  // SGR mouse reports: \x1b[<button;col;rowM on press.
-  const mouse = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(str);
-  if (mouse) {
-    const [, button, col, row, kind] = mouse;
-    if (kind === 'M' && Number(button) === 0) {
-      const box = hitTest(Number(col) - 1, Number(row) - 1);
-      if (box) {
-        // Walk over to whoever was clicked either way, so the footer hints and a
-        // follow-up keystroke are about the desk under the pointer.
-        selectedId = box.id;
-        if (box.action) respond(box.action);
-        else loadDetail(box.id, { force: true });
-        draw();
-      }
-    }
+  // A chunk can carry a whole run of motion reports, and mid-drag it usually
+  // does, so every one of them gets handled rather than just the first.
+  const mice = parseMouse(str);
+  if (mice.length) {
+    for (const ev of mice) onMouse(ev);
     return;
   }
 
@@ -445,6 +516,8 @@ function onInput(chunk) {
   // the floor now, so enter still means "show me this desk" even while one is
   // open, which is what walking to a new desk and hitting it should do.
   if (str === '\x1b') {
+    // A desk in mid-air outranks the panel: esc puts it down first.
+    if (drag) return cancelDrag();
     detail = null;
     prevLines = [];
     draw();
@@ -535,9 +608,8 @@ async function main() {
       }
     } else {
       const snapshot = await api.request('session.snapshot', {}).catch(() => null);
-      if (snapshot?.snapshot?.workspaces) roster.setWorkspaces(snapshot.snapshot.workspaces);
       const tabs = await api.request('tab.list', {}).catch(() => null);
-      if (tabs?.tabs) roster.setTabs(tabs.tabs);
+      seat(snapshot, tabs);
       const list = await api.request('agent.list', {});
       roster.update(list.agents || []);
       await refreshAsks();

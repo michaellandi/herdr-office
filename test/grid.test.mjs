@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderFrame } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, officeRoster, viewOf } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, officeRoster, viewOf } from './fixtures.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -63,6 +63,26 @@ test('a footer message never pushes a line over', () => {
   const long = 'could not answer Ada: the socket hung up halfway through sending the keys';
   for (const [cols, rows] of SIZES) {
     assertExact(viewOf({ people, cols, rows, message: long }), `message ${cols}x${rows}`);
+  }
+});
+
+test('dragging a desk, in every drag state', () => {
+  // Drag feedback is meant to be colour only. If a drop target ever grows a
+  // glyph or an extra cell, the whole floor wraps, so it is checked here rather
+  // than trusted.
+  const many = officeRoster(new Array(40).fill('working')).people;
+  for (const [cols, rows] of SIZES) {
+    for (const [name, drag] of DRAGS) {
+      assertExact(viewOf({ people, cols, rows, drag }), `drag=${name} ${cols}x${rows}`);
+      assertExact(viewOf({ people, cols, rows, drag, detail: DETAILS[3][1] }), `drag=${name} +panel ${cols}x${rows}`);
+      // Forty desks is the compact list, which paints drag state as a row
+      // background instead of a border.
+      assertExact(viewOf({ people: many, cols, rows, drag }), `drag=${name} list ${cols}x${rows}`);
+    }
+    // A swap in flight pales its two desks whether or not anything is being
+    // dragged right now.
+    assertExact(viewOf({ people, cols, rows, busy: new Set(['w1:p1', 'w1:p3']) }), `busy ${cols}x${rows}`);
+    assertExact(viewOf({ people: many, cols, rows, busy: new Set(['w1:p1', 'w1:p3']) }), `busy list ${cols}x${rows}`);
   }
 });
 

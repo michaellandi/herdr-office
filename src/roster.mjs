@@ -27,12 +27,32 @@ function paneSortKey(paneId) {
   return [ws || '', (pane || '').padStart(4, '0')].join(':');
 }
 
+// Sorts high, so anything we have no number for lands after everything we do
+// rather than jumping to the front of the office.
+const UNKNOWN = 9999;
+const pad = (n) => String(Math.max(0, Math.min(UNKNOWN, Math.round(n)))).padStart(4, '0');
+
+// Where a desk sits on the floor, in reading order, mirroring where the pane
+// actually is in Herdr: workspace, then tab, then top-to-bottom, then
+// left-to-right, with the pane id as the last resort so the order is total and
+// stable. Without the geometry (demo mode, or a server that returned no
+// layouts) every desk scores the same and it falls back to pane id alone,
+// which is the order the office has always used.
+function seatKey(person, seats) {
+  const seat = seats.get(person.id);
+  if (!seat) return `${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${paneSortKey(person.id)}`;
+  return [pad(seat.workspaceNumber), pad(seat.tabNumber), pad(seat.y), pad(seat.x), paneSortKey(person.id)].join('|');
+}
+
 export class Roster {
   constructor(clock = () => Date.now()) {
     this.clock = clock;
     this.people = [];
     this.workspaceNames = new Map();
+    this.workspaceNumbers = new Map();
     this.tabNames = new Map();
+    this.tabNumbers = new Map();
+    this.seats = new Map(); // pane_id -> { workspaceNumber, tabNumber, x, y }
     this.focusedPaneId = null;
     this.states = new Map(); // pane_id -> { status, since, seq }
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
@@ -40,8 +60,10 @@ export class Roster {
 
   setWorkspaces(workspaces = []) {
     for (const ws of workspaces) {
+      if (!ws?.workspace_id) continue;
       // session.snapshot calls it `label`; older payloads used `name`.
-      if (ws?.workspace_id) this.workspaceNames.set(ws.workspace_id, ws.label || ws.name || ws.workspace_id);
+      this.workspaceNames.set(ws.workspace_id, ws.label || ws.name || ws.workspace_id);
+      if (ws.number != null) this.workspaceNumbers.set(ws.workspace_id, ws.number);
     }
   }
 
@@ -49,7 +71,30 @@ export class Roster {
   // beats a pane's terminal title for telling desks apart at a glance.
   setTabs(tabs = []) {
     for (const tab of tabs) {
-      if (tab?.tab_id) this.tabNames.set(tab.tab_id, tab.label || String(tab.number ?? ''));
+      if (!tab?.tab_id) continue;
+      this.tabNames.set(tab.tab_id, tab.label || String(tab.number ?? ''));
+      if (tab.number != null) this.tabNumbers.set(tab.tab_id, tab.number);
+    }
+  }
+
+  // Where every pane physically is, from `session.snapshot`'s `layouts`. This is
+  // what lets the floor match the room: seats are laid out in the same order the
+  // panes are, so swapping two panes visibly swaps two desks instead of
+  // rearranging the real session behind an unchanged picture.
+  setLayouts(layouts = []) {
+    this.seats.clear();
+    for (const layout of layouts) {
+      const workspaceNumber = this.workspaceNumbers.get(layout?.workspace_id) ?? UNKNOWN;
+      const tabNumber = this.tabNumbers.get(layout?.tab_id) ?? UNKNOWN;
+      for (const pane of layout?.panes || []) {
+        if (!pane?.pane_id) continue;
+        this.seats.set(pane.pane_id, {
+          workspaceNumber,
+          tabNumber,
+          x: pane.rect?.x ?? UNKNOWN,
+          y: pane.rect?.y ?? UNKNOWN,
+        });
+      }
     }
   }
 
@@ -117,7 +162,7 @@ export class Roster {
           sessionId: a.agent_session?.value || null,
         };
       })
-      .sort((x, y) => paneSortKey(x.id).localeCompare(paneSortKey(y.id)));
+      .sort((x, y) => seatKey(x, this.seats).localeCompare(seatKey(y, this.seats)));
 
     this.people.forEach((person, i) => {
       person.name = nickname(i);

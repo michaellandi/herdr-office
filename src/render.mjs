@@ -183,15 +183,26 @@ function speechBubble(text) {
   };
 }
 
-function tile(person, { selected, frame, now }) {
+function tile(person, { selected, frame, now, lifted = false, dropTarget = false }) {
   const st = status(person.status);
   const who = identity(person.id);
   const body = pose(person.status, frame);
   const scr = screen(person.status, frame);
   // Amber pulse so a raised hand catches the eye from across the room.
   const alert = person.status === 'blocked' && frame % 4 < 2;
-  const borderFg = selected ? P.accent : person.status === 'blocked' ? (alert && st.hot) || st.fg : P.wall;
-  const chrome = { borderFg, bold: selected || alert };
+  // Drag feedback is colour only, never a different glyph or an extra cell: the
+  // desk being carried goes pale, the desk it would land on lights up. Anything
+  // that changed a line's width here would wrap the whole floor.
+  const borderFg = dropTarget
+    ? P.accent
+    : lifted
+      ? P.faint
+      : selected
+        ? P.accent
+        : person.status === 'blocked'
+          ? (alert && st.hot) || st.fg
+          : P.wall;
+  const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)) };
   const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
   const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
   // A person, a cell of desk, then their monitor.
@@ -304,6 +315,10 @@ function headerLines(view) {
 // the selected desk is actually waiting on you, so the hint is never a lie.
 function keyHints(view) {
   const selected = view.people.find((p) => p.id === view.selectedId);
+  // Mid-drag the only two things that can happen are the drop and the cancel, so
+  // the footer says that and nothing else rather than listing keys that are on
+  // hold until the mouse button comes back up.
+  if (view.drag?.active) return [['drop', 'on a desk to swap the panes'], ['esc', 'put it back']];
   return [
     ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
     ['hjkl', 'walk'],
@@ -500,7 +515,19 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     }
     b.add(truncate(tail, Math.max(0, cols - b.w - 2)), { fg: person.status === 'blocked' ? st.fg : P.soft });
     const { text, spans } = b.fit(cols);
-    lines.push(paint(text, spans, { bg: selected ? P.cubicle : i % 2 ? P.carpetEdge : P.carpet }));
+    // Drag feedback in the list is the row background only, for the same reason
+    // it is border colour only on a desk: it cannot change how wide the row is.
+    const dragging = Boolean(view.drag?.active);
+    const rowBg = (dragging && person.id === view.drag.id) || view.busy?.has(person.id)
+      ? P.lift
+      : dragging && person.id === view.drag.overId
+        ? P.drop
+        : selected
+          ? P.cubicle
+          : i % 2
+            ? P.carpetEdge
+            : P.carpet;
+    lines.push(paint(text, spans, { bg: rowBg }));
     hitboxes.push({ id: person.id, x: 0, y: startRow + i, w: cols, h: 1 });
   }
   return lines;
@@ -714,7 +741,15 @@ export function renderFrame(view) {
         if (person.status === 'blocked') {
           for (const btn of BUTTONS) hitboxes.push({ id: person.id, action: btn.action, x: x + btn.x, y: y + btn.y, w: btn.w, h: btn.h });
         }
-        return tile(person, { selected: person.id === view.selectedId, frame: view.frame, now: view.now });
+        return tile(person, {
+          selected: person.id === view.selectedId,
+          frame: view.frame,
+          now: view.now,
+          // A desk with a swap in flight stays pale until the server confirms
+          // it, so the room never looks settled while it is still moving.
+          lifted: (Boolean(view.drag?.active) && person.id === view.drag.id) || Boolean(view.busy?.has(person.id)),
+          dropTarget: Boolean(view.drag?.active) && person.id === view.drag.overId && person.id !== view.drag.id,
+        });
       });
       const span = rendered.length * TILE_W + (rendered.length - 1) * GAP_X;
       for (let k = 0; k < TILE_H; k += 1) {

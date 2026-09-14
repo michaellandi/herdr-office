@@ -43,6 +43,10 @@ export const P = {
   backWall: '#191f28',
   trim: '#2b3543',
   aisle: '#171c24', // the walkway between two rows of cubicles
+  // Dragging a desk. The row you picked up goes flat, the row it would land on
+  // takes a wash of the accent colour, and neither changes a single glyph.
+  lift: '#191d24',
+  drop: '#1b3242',
   // Furniture. Muted on purpose: it is scenery, and it must never pull the eye
   // away from a raised hand.
   leaf: '#3f7d52',

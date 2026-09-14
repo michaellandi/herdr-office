@@ -81,7 +81,18 @@ export const DETAILS = [
   ['desk has gone', detailFor('w1:pGONE', { shape: 'y/n', approve: ['y'], deny: ['n'] })],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '' }) {
+// The drag states worth rendering: nothing in the air, a desk picked up but not
+// yet moved, one hovering over somebody else, and one hovering over carpet.
+// Every one of them has to hold the cell-exact invariant.
+export const DRAGS = [
+  ['no drag', null],
+  ['lifted, not moved', { id: 'w1:p1', start: { x: 2, y: 2 }, overId: 'w1:p1', active: false }],
+  ['over another desk', { id: 'w1:p1', start: { x: 2, y: 2 }, overId: 'w1:p3', active: true }],
+  ['over carpet', { id: 'w1:p1', start: { x: 2, y: 2 }, overId: null, active: true }],
+  ['over a desk that has gone', { id: 'w1:p1', start: { x: 2, y: 2 }, overId: 'w1:pGONE', active: true }],
+];
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set() }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -93,5 +104,7 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     now: Date.UTC(2026, 8, 10, 12, 0, 0),
     size: { cols, rows },
     message,
+    drag,
+    busy,
   };
 }

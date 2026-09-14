@@ -64,6 +64,7 @@ would rather not.
 |---|---|
 | arrows / `hjkl` | walk around the floor (walking off the edge pages to the next floor) |
 | `enter` / click | ask that person what they are up to |
+| drag a desk onto another | swap the two real panes |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
 | `b` | jump to the next raised hand |
@@ -78,6 +79,25 @@ only do anything if that person is actually waiting on you.
 The `[y]` and `[n]` drawn on a stuck person's monitor are real buttons: click either
 one to answer that desk without selecting it first or opening anything. The same
 choices in the detail panel's **answer them** row are clickable too.
+
+## Moving people around
+
+Desks are laid out in the order the panes really are: workspace, then tab, then
+top to bottom and left to right within the tab. So the floor is a picture of your
+session rather than an arbitrary list, and **dragging one desk onto another swaps
+the two panes for real**. The desk you picked up goes pale, the one you are about
+to drop it on lights up, and `esc` or a drop on empty carpet puts it back.
+
+A press only selects. Opening a desk waits for the release, because a press that
+turned into a drag was never a request to open anything, and the `[y]` and `[n]`
+buttons answer on press and cannot be dragged at all: an approval is the one
+irreversible thing on this screen, so it is not also a handle you can pick
+somebody's desk up by. Dropping a desk *on* a colleague's `[y]` swaps the two
+desks and does not answer for them.
+
+Swapping panes is reversible and closes nothing, so it does not ask first. It
+does keep both desks pale until the server confirms, so a swap in flight never
+looks like a room that has finished moving.
 
 ## Answering from the office
 
@@ -102,7 +122,7 @@ Arrow keys still walk the floor with the panel open, and it follows you.
 | `done` | arms up, `ALL DONE`, cyan |
 | `unknown` | shrugging, violet. Herdr sees an agent it cannot classify, which is *not* proof of completion |
 
-Desks are named in floor order from a pool of forty, so the front row is always Ada,
+Desks are named by seat from a pool of forty, so the front row is always Ada,
 Bo, Cass, Dev and Ede. Faces, hair and shirt colours come from the pane id instead, so
 a desk keeps its look between runs even if a new pane appearing earlier on the floor
 shifts the names along. `*` marks the focused pane.
@@ -112,7 +132,13 @@ it was entered, so the first sighting of an agent starts the clock.
 ## How it works
 
 - `agent.list` + `session.snapshot` + `tab.list` build the roster; a 2s poll is the
-  floor, and subscriptions make it feel instant.
+  floor, and subscriptions make it feel instant. The snapshot's `layouts` are where
+  the seating comes from: `panes[].rect` is the real geometry, so the desks are in
+  the same order as the panes and a swap is visible instead of being a change you
+  have to take on faith.
+- Dragging is one `pane.swap` with an explicit source and target. Mouse mode is
+  `1002` rather than `1000`, because press-and-release alone cannot tell you where
+  a desk went on the way.
 - Subscriptions: the global pane/workspace/tab events, plus one
   `pane.agent_status_changed` descriptor per pane (that event is per-pane only, so the
   subscription is rebuilt whenever the set of desks changes).

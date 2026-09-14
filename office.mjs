@@ -21,6 +21,7 @@ import { width } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
 import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
+import { escalate } from './src/escalate.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -34,6 +35,10 @@ const NOTIFY = !argv.has('--quiet');
 // exactly why it is opt-out: it is somebody else's window, and a title is a
 // shared surface that other things may also care about.
 const TITLE = !argv.has('--no-title');
+// Which pane the office itself is in, when herdr started it. Used for one thing:
+// knowing whether you are looking at the floor right now, so a nudge about a hand
+// you can already see is never sent.
+const OWN_PANE = process.env.HERDR_PANE_ID || '';
 
 const ANIM_MS = 320;
 const POLL_MS = 2000;
@@ -268,6 +273,9 @@ function clearTitle() {
 // numbers have to be in hand before the geometry is read.
 function seat(snapshot, tabs) {
   const snap = snapshot?.snapshot;
+  // Whether the office is the pane you are looking at. Free with the snapshot we
+  // already fetch, and the difference between a useful nudge and a rude one.
+  if (snap) watching = Boolean(OWN_PANE) && snap.focused_pane_id === OWN_PANE;
   if (snap?.workspaces) roster.setWorkspaces(snap.workspaces);
   // The snapshot's tabs carry `number`, which is what orders one workspace's
   // tabs. tab.list goes second so its labels win where the two disagree, and it
@@ -298,6 +306,7 @@ async function refresh() {
     refreshAsks();
     refreshCommands();
     syncTitle();
+    nudge();
     if (NOTIFY) {
       for (const id of newlyBlocked) {
         const person = roster.find(id);
@@ -316,6 +325,19 @@ async function refresh() {
     note(`api: ${err.message}`);
     draw();
   }
+}
+
+// Says it again when a hand stays up: one toast however many are waiting, backing
+// off as it goes, and nothing at all while the office is the pane you are looking
+// at. See src/escalate.mjs for why each of those is a rule rather than a nicety.
+let watching = false;
+let escalation = null;
+function nudge() {
+  if (!NOTIFY || DEMO || ONCE) return;
+  const { toast, state } = escalate({ people: roster.people, state: escalation, watching });
+  escalation = state;
+  if (!toast) return;
+  api?.request('notification.show', { ...toast, sound: 'request' }).catch(() => {});
 }
 
 // Per-pane status subscriptions have to be rebuilt when desks come and go.

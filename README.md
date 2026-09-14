@@ -207,6 +207,32 @@ back is one of the fixed strings. One caveat worth knowing: `0 failed` is the ha
 path, so the failure patterns require a non-zero count. An office that read every
 green test run as a disaster would be worse than one that said nothing.
 
+## Saying it again
+
+A toast when somebody starts waiting on you is easy. The second toast is the hard
+one, because a tool that nags gets muted and a muted tool might as well not have
+shipped. So the office nudges on a ladder: a minute after a hand goes up
+unanswered, then five, then fifteen, then every fifteen for as long as it stays up.
+It does not give up, since the hand is not going down on its own, and it never gets
+faster either.
+
+Three things keep it civil:
+
+- **One toast, however many hands are up.** A floor with six stuck agents gets the
+  longest wait named and the rest as a count, not six notifications.
+- **Nothing at all while you are looking at the floor.** If the office is the
+  focused pane, the hand is already drawn on your screen. The rung is not spent
+  either, so looking away with somebody still waiting nudges you then, which is
+  when it is useful again. This costs nothing extra: `focused_pane_id` comes with
+  the snapshot the office already polls, and `HERDR_PANE_ID` says which pane it is
+  in itself.
+- **An agent that was already stuck when the office opened is left alone.** The
+  roster only knows when a state was entered if it watched it happen, so that
+  duration is a floor rather than a fact, and a nudge quoting it would be a lie. It
+  becomes real the moment they change state.
+
+`--quiet` turns off the first toast and every nudge after it.
+
 ## On the window itself
 
 The office also writes the headline count to the window title, so it is legible

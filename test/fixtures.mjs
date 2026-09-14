@@ -130,6 +130,14 @@ export const HIRES = [
   ['starting somebody', { kinds: KINDS, index: 1, pending: 'claude', error: null }],
   ['a very long kind name', { kinds: ['a-locally-overridden-agent-with-a-silly-name', 'claude'], index: 0, pending: null, error: null }],
   ['it went wrong', { kinds: KINDS, index: 0, pending: null, error: 'could not hire claude: timed out waiting for it to come up. The tab it opened is still there.' }],
+  // The worktree half: a branch name, one being typed, an empty field mid-edit,
+  // and a name far longer than the row it sits in.
+  ['into a worktree', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: 'office/claude-0914-1502' }],
+  ['naming the branch', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: 'office/claude-0914-1502', editing: true }],
+  ['an empty branch field', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: '', editing: true }],
+  ['a silly long branch', { kinds: KINDS, index: 3, pending: null, error: null, worktree: true, branch: `office/${'x'.repeat(72)}` }],
+  ['making a worktree', { kinds: KINDS, index: 1, pending: 'claude', error: null, worktree: true, branch: 'office/claude-0914-1502' }],
+  ['the worktree went wrong', { kinds: KINDS, index: 0, pending: null, worktree: true, branch: 'office/claude-0914-1502', error: 'could not hire claude: repository is not trusted. The worktree it made is still there.' }],
 ];
 
 export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null }) {

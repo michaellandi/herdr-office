@@ -14,6 +14,7 @@ import { Roster } from './src/roster.mjs';
 import { renderFrame, HIRE_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
+import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
 import { width } from './src/text.mjs';
 
 const argv = new Set(process.argv.slice(2));
@@ -482,9 +483,12 @@ async function swapDesks(sourceId, targetId) {
 
 /* ------------------------------------------------------------------- hiring */
 
-// The empty desk. Hiring is two calls: open a tab, then start an agent in the
-// pane that tab came with (`agent.start` does not create one, and it wants a pane
-// sitting at an interactive shell prompt, which a fresh tab is).
+// The empty desk. Hiring is two calls: make somewhere for them to sit, then start
+// an agent in the pane that came with it (`agent.start` does not create one, and
+// it wants a pane sitting at an interactive shell prompt, which a fresh tab is).
+// Somewhere to sit is either a plain tab in the project you are already in, or a
+// whole new worktree on its own branch, which is `worktree.create` and comes with
+// its own workspace, tab and pane.
 //
 // It is the one thing in the office that creates something rather than reporting
 // on it, so it takes two deliberate steps: walk to the empty desk, then pick a
@@ -512,7 +516,7 @@ async function openHire() {
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
-  hire = { kinds: [], index: 0, pending: null, error: null };
+  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
   prevLines = [];
   draw();
   try {
@@ -536,11 +540,35 @@ function closeHire() {
 // pane the tail of the list is not drawn, and a cursor you cannot see is worse
 // than a list you cannot reach.
 function moveHire(dx, dy) {
-  if (!hire || hire.pending || !hire.kinds.length) return;
+  if (!hire || hire.pending || hire.editing || !hire.kinds.length) return;
   const limit = Math.min(hire.kinds.length, grid.menuVisible || hire.kinds.length);
-  const next = hire.index + dx + dy * Math.max(1, grid.menuCols);
-  if (next < 0 || next >= limit) return;
-  hire = { ...hire, index: next };
+  const index = nextIndex(hire.index, dx, dy, grid.menuCols, limit);
+  // The offered name has the agent's own name in it, so it follows the cursor.
+  // Only until somebody types their own, though: a name you chose is not something
+  // walking one cell to the left gets to overwrite.
+  const branch = hire.named ? hire.branch : defaultBranch(hire.kinds[index]);
+  hire = { ...hire, index, branch };
+}
+
+// Where the hire lands. Switching to a worktree offers a branch name straight
+// away, because a worktree with no branch is not a thing you can create, and a
+// name nobody has to type is a name nobody has to think about.
+function setWorktree(on) {
+  if (!hire || hire.pending) return;
+  if (on === hire.worktree) return;
+  const branch = hire.named ? hire.branch : defaultBranch(hire.kinds[hire.index]);
+  hire = { ...hire, worktree: on, branch, editing: false };
+}
+
+// Renaming starts from empty, not from the offered name. The offered name is
+// twenty-odd characters of timestamp, and a field that made you backspace through
+// all of it before you could type your own is a field nobody would use twice. esc
+// puts the old one back, and leaving it empty falls back to the offer.
+function editBranch(on) {
+  if (!hire || hire.pending || !hire.worktree) return;
+  if (on) hire = { ...hire, editing: true, was: hire.branch, branch: '' };
+  else if (hire.branch) hire = { ...hire, editing: false, named: true };
+  else hire = { ...hire, editing: false, branch: hire.was || defaultBranch(hire.kinds[hire.index]) };
 }
 
 // `agent.start` waits for the agent to reach its own prompt, which can take the
@@ -549,34 +577,50 @@ function moveHire(dx, dy) {
 // polling and animating while somebody is being shown to their desk.
 async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
+  const wantsWorktree = hire.worktree;
+  // Sanitized once, here, at the last possible moment: what goes on the wire is a
+  // name git will accept, and the field keeps whatever was typed into it.
+  const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
   if (DEMO) {
-    note(`demo mode: would open a tab and start ${kind} in it`);
+    note(wantsWorktree
+      ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
+      : `demo mode: would open a tab and start ${kind} in it`);
     return;
   }
-  hire = { ...hire, pending: kind, error: null };
+  hire = { ...hire, pending: kind, error: null, editing: false };
   prevLines = [];
   draw();
   // Same project as everyone else, by default: an agent hired into the wrong
   // directory is worse than no agent, and the focused desk is the best guess at
-  // what you are actually working on.
+  // what you are actually working on. For a worktree it is also the repository the
+  // new branch comes off.
   const cwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || undefined;
   let side = null;
   try {
     side = await new ApiClient().open();
-    const tab = await side.request('tab.create', { cwd, label: kind, focus: false });
-    const paneId = tab?.root_pane?.pane_id;
-    if (!paneId) throw new Error('herdr opened a tab with no pane in it');
+    // `worktree.create` brings its own workspace, tab and pane, so it replaces
+    // tab.create rather than being done alongside it. `trust_repository` is
+    // deliberately not sent: auto-trusting a repository on somebody's behalf is
+    // exactly the prompt they asked herdr to show them, so a untrusted repo
+    // surfaces as an error here instead of being waved through.
+    const made = wantsWorktree
+      ? await side.request('worktree.create', { cwd, branch, label: branch, focus: false }, 30000)
+      : await side.request('tab.create', { cwd, label: kind, focus: false });
+    const paneId = made?.root_pane?.pane_id;
+    if (!paneId) throw new Error(`herdr made ${wantsWorktree ? 'a worktree' : 'a tab'} with no pane in it`);
     await side.request('agent.start', { name: kind, kind, pane_id: paneId, timeout_ms: HIRE_TIMEOUT_MS }, HIRE_TIMEOUT_MS + 5000);
     hire = null;
     selectedId = paneId;
-    note(`${kind} is at a desk now`);
+    note(wantsWorktree ? `${kind} is on ${branch} now` : `${kind} is at a desk now`);
     prevLines = [];
     await refresh();
   } catch (err) {
-    // The tab is left where it is on purpose. It is a pane at a shell prompt,
-    // which is harmless, and closing panes on somebody's behalf because a start
-    // timed out is how you close the one they had just started typing in.
-    const why = `could not hire ${kind}: ${err.code || err.message}. The tab it opened is still there.`;
+    // Whatever got made is left where it is on purpose. A pane at a shell prompt
+    // is harmless, and closing panes (or deleting a worktree, and the branch and
+    // the files in it) on somebody's behalf because a start timed out is how you
+    // throw away the thing they had just started typing in.
+    const left = wantsWorktree ? 'The worktree it made is still there.' : 'The tab it opened is still there.';
+    const why = `could not hire ${kind}: ${err.code || err.message}. ${left}`;
     if (hire) hire = { ...hire, pending: null, error: why };
     else note(why);
   } finally {
@@ -611,7 +655,10 @@ function onMouse(ev) {
     // arrive here. Neither one starts anything by itself: the desk opens the menu,
     // and only a cell in the menu is a hire.
     if (act.action === 'hire') openHire();
-    else if (act.action.startsWith('hire:')) startHire(act.action.slice(5));
+    else if (act.action === 'hire:where:here') setWorktree(false);
+    else if (act.action === 'hire:where:worktree') setWorktree(true);
+    else if (act.action === 'hire:branch') editBranch(true);
+    else if (act.action.startsWith('hire:start:')) startHire(act.action.slice(11));
     else respond(act.action);
   } else if (act.type === 'open') {
     if (act.id === HIRE_ID) openHire();
@@ -644,6 +691,14 @@ function onInput(chunk) {
   if (str === '\x1b') {
     // A desk in mid-air outranks the panel: esc puts it down first.
     if (drag) return cancelDrag();
+    // And a half-typed branch name outranks the menu it is in, so esc puts the
+    // old name back rather than throwing away the whole hire you were setting up.
+    if (hire?.editing) {
+      hire = { ...hire, editing: false, branch: hire.was || defaultBranch(hire.kinds[hire.index]) };
+      prevLines = [];
+      draw();
+      return;
+    }
     if (hire) return closeHire();
     detail = null;
     prevLines = [];
@@ -656,11 +711,26 @@ function onInput(chunk) {
   // fall through and answer a prompt at whatever desk was selected before.
   if (hire) {
     if (hire.pending) return;
+    // And while the branch field has the keyboard, every printable key is a letter
+    // in a branch name. Not a menu key, not a hire: the only way out is enter or
+    // esc, so nothing can be started by a stray keystroke aimed at the field.
+    if (hire.editing) {
+      const { branch, done } = typeChunk(hire.branch, str);
+      hire = { ...hire, branch };
+      if (done) editBranch(false);
+      prevLines = [];
+      draw();
+      return;
+    }
     if (str === '\x1b[A' || str === 'k') moveHire(0, -1);
     else if (str === '\x1b[B' || str === 'j') moveHire(0, 1);
     else if (str === '\x1b[D' || str === 'h') moveHire(-1, 0);
     else if (str === '\x1b[C' || str === 'l' || str === '\t') moveHire(1, 0);
+    else if (str === 'w') setWorktree(true);
+    else if (str === 't') setWorktree(false);
+    else if (str === 'e') editBranch(true);
     else if (str === '\r' || str === '\n' || str === ' ') startHire(hire.kinds[hire.index]);
+    prevLines = [];
     draw();
     return;
   }

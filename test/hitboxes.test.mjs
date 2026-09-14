@@ -126,9 +126,9 @@ test('every hire menu cell sits on the name it would start', () => {
     if (!hire) continue;
     const { lines, hitboxes } = renderFrame(viewOf({ people, cols, rows, hire, selectedId: HIRE_ID }));
     const plain = lines.map(stripAnsi);
-    for (const box of hitboxes.filter((b) => b.action?.startsWith('hire:'))) {
+    for (const box of hitboxes.filter((b) => b.action?.startsWith('hire:start:'))) {
       seen += 1;
-      const kind = box.action.slice('hire:'.length);
+      const kind = box.action.slice('hire:start:'.length);
       const under = (plain[box.y] || '').slice(box.x, box.x + box.w);
       assert.equal(width(under), box.w, `hire=${name}: cell for ${kind} is ${width(under)} cells`);
       assert.ok(under.includes(kind.slice(0, 9)), `hire=${name}: cell for ${kind} is over ${JSON.stringify(under)}`);
@@ -144,8 +144,71 @@ test('a menu that cannot be shown offers nothing to click', () => {
   for (const label of ['still asking', 'starting somebody', 'it went wrong']) {
     const hire = HIRES.find(([n]) => n === label)[1];
     const { hitboxes } = renderFrame(viewOf({ people, cols, rows, hire, selectedId: HIRE_ID }));
-    assert.equal(hitboxes.filter((b) => b.action?.startsWith('hire:')).length, 0, `${label} should have no menu cells`);
+    assert.equal(hitboxes.filter((b) => b.action?.startsWith('hire:start:')).length, 0, `${label} should have no menu cells`);
   }
+});
+
+test('the worktree row is only clickable where it is legible', () => {
+  // Two of these three buttons create a directory and a git branch on disk, so a
+  // box over a truncated label (or over the row of a menu that is not asking
+  // anything) would make one off a click on nothing.
+  const worktree = HIRES.find(([n]) => n === 'into a worktree')[1];
+  const here = HIRES.find(([n]) => n === 'a menu')[1];
+  const boxes = (view) => renderFrame(view).hitboxes.filter((b) => b.action?.startsWith('hire:where') || b.action === 'hire:branch');
+  const at = (cols, rows, hire) => {
+    const view = viewOf({ people, cols, rows, hire, selectedId: HIRE_ID });
+    const { lines } = renderFrame(view);
+    return boxes(view).map((b) => ({ ...b, under: stripAnsi(lines[b.y] || '').slice(b.x, b.x + b.w) }));
+  };
+
+  // Wide enough for the whole row: every button is there, and each one is over its
+  // own label rather than over a neighbour's.
+  const wide = at(140, 46, here);
+  assert.deepEqual(wide.map((b) => b.action), ['hire:where:here', 'hire:where:worktree']);
+  assert.ok(wide[0].under.includes('this project'), wide[0].under);
+  assert.ok(wide[1].under.includes('worktree'), wide[1].under);
+
+  const wt = at(140, 46, worktree);
+  assert.deepEqual(wt.map((b) => b.action), ['hire:branch', 'hire:branch', 'hire:where:here']);
+  assert.ok(wt[0].under.includes('office/claude'), wt[0].under);
+  assert.ok(wt[1].under.includes('rename'), wt[1].under);
+  for (const b of wt) assert.equal(width(b.under), b.w, `${b.action} is ${width(b.under)} cells, claims ${b.w}`);
+
+  // Editing swaps the two buttons for a prompt, so there is exactly one box (the
+  // field) and no way to click your way out of the edit into a hire.
+  const editing = at(140, 46, HIRES.find(([n]) => n === 'naming the branch')[1]);
+  assert.deepEqual(editing.map((b) => b.action), ['hire:branch']);
+
+  // A hire already in flight offers no choices at all: the destination is decided
+  // and the calls are out. A failed one keeps them, because the branch name is
+  // usually the thing that needs changing.
+  for (const label of ['making a worktree', 'starting somebody']) {
+    const hire = HIRES.find(([n]) => n === label)[1];
+    assert.equal(at(140, 46, hire).length, 0, `${label} should offer no destination buttons`);
+  }
+  assert.deepEqual(
+    at(140, 46, HIRES.find(([n]) => n === 'the worktree went wrong')[1]).map((b) => b.action),
+    ['hire:branch', 'hire:branch', 'hire:where:here'],
+  );
+
+  // Narrow enough that the row truncates: whatever survives is still over its own
+  // label, and the buttons that got cut off are simply not clickable. The branch
+  // field is allowed to show an elided name (clicking it opens a rename, which
+  // makes nothing), but a destination button must never sit on half a word.
+  for (const cols of [24, 32, 40, 50, 60, 72]) {
+    for (const hire of [here, worktree]) {
+      for (const b of at(cols, 46, hire)) {
+        assert.equal(width(b.under), b.w, `${cols} cols: ${b.action} claims ${b.w} cells over ${JSON.stringify(b.under)}`);
+        if (b.action === 'hire:branch') continue;
+        assert.ok(!b.under.includes('…'), `${cols} cols: ${b.action} sits on a truncated label ${JSON.stringify(b.under)}`);
+      }
+    }
+  }
+
+  // And a pane too short for the row does not draw it at all: the menu keeps the
+  // space, the title still says where the hire is going, and the keys still work.
+  assert.equal(at(140, 10, worktree).length, 0, 'a short panel has no room for a destination row');
+  assert.ok(at(140, 11, worktree).length > 0, 'one row taller and it is back');
 });
 
 test('a desk is clickable wherever it is drawn', () => {

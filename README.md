@@ -66,6 +66,7 @@ would rather not.
 | `enter` / click | ask that person what they are up to |
 | drag a desk onto another | swap the two real panes |
 | `+` / click the empty desk | hire somebody: opens a tab and starts an agent in it |
+| `w` / `t` / `e` (hiring) | into a new worktree / back to a plain tab / name the branch |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
 | `b` | jump to the next raised hand |
@@ -93,6 +94,24 @@ focused, so a hire lands in the project you are already working on.
 
 `+` opens the same menu from anywhere, which is the only way in on a pane too
 small to draw a desk in.
+
+### Into a new worktree
+
+The row under the title is **where** the hire lands. `w` switches it from this
+project to a fresh git worktree, and the office offers a branch name with the
+agent's own name and the time in it (`office/claude-0914-1502`), which follows the
+cursor as you move through the menu. `e` renames it, starting from an empty field
+so you are not backspacing through a timestamp, and `esc` mid-rename puts the old
+name back rather than abandoning the hire. `t` goes back to a plain tab.
+
+A worktree hire is one `worktree.create`, which brings its own workspace, tab and
+pane, and then the same `agent.start` into that pane. The branch name is filtered
+as you type (letters, digits, `.`, `_`, `/`, `-`, and a space becomes a hyphen) and
+sanitized once more on the way out, so what reaches git is a name git will take.
+Nothing about the repository is auto-trusted: if herdr would have asked you to
+trust it, it still asks, and the office reports the refusal instead of waving it
+through. A hire that fails leaves the worktree, the branch and the files exactly
+where they are.
 
 Starting an agent means waiting for it to reach its own prompt, which can take
 most of a minute, so the hire runs on its own connection: the floor keeps
@@ -163,7 +182,9 @@ it was entered, so the first sighting of an agent starts the clock.
   `agent.start` into the pane that tab came with (`agent.start` does not make one,
   and it wants a pane sitting at a shell prompt, which a fresh tab is). It runs on
   its own short-lived socket, because requests on the main one are queued and a
-  90s start would otherwise stop the clock on the whole office.
+  90s start would otherwise stop the clock on the whole office. A worktree hire
+  swaps `worktree.create` in for the `tab.create`, since it comes with a workspace,
+  a tab and a pane of its own, and deliberately does not send `trust_repository`.
 - Dragging is one `pane.swap` with an explicit source and target. Mouse mode is
   `1002` rather than `1000`, because press-and-release alone cannot tell you where
   a desk went on the way.

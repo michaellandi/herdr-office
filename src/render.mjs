@@ -393,9 +393,16 @@ function keyHints(view) {
   // Same reasoning while the hire menu is open: the arrows are picking an agent,
   // not walking the floor, and saying otherwise would be a lie.
   if (view.hire) {
-    return view.hire.pending
-      ? [['esc', 'stop watching']]
-      : [['hjkl', 'pick an agent'], ['enter', 'hire them'], ['esc', 'never mind']];
+    // And while the branch field has the keyboard, every letter is a letter. The
+    // footer has to say so, because otherwise j and k look like they still walk.
+    if (view.hire.editing) return [['type', 'a branch name'], ['enter', 'done'], ['esc', 'undo it']];
+    if (view.hire.pending) return [['esc', 'stop watching']];
+    return [
+      ['hjkl', 'pick an agent'],
+      ['enter', view.hire.worktree ? 'hire into a worktree' : 'hire them'],
+      ...(view.hire.worktree ? [['e', 'name the branch'], ['t', 'no worktree']] : [['w', 'in a new worktree']]),
+      ['esc', 'never mind'],
+    ];
   }
   // Standing at the empty desk, enter means hire, so the footer says that and
   // does not also offer the two hints it would have meant at anybody else's desk.
@@ -638,21 +645,79 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
   const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
   const body = [];
 
+  // The title carries the destination, because it is the one row that is drawn at
+  // every pane size: a worktree is a directory and a branch on disk, and nobody
+  // should be able to create one without the screen having said so.
+  const subtitle = hire.pending
+    ? ` · starting ${hire.pending}`
+    : hire.worktree
+      ? ' · into a new worktree'
+      : ' · who do you want at that desk?';
   const head = cells();
   head.add('╭─ ');
   head.add('hire', { fg: P.ink, bold: true });
-  head.add(truncate(hire.pending ? ` · starting ${hire.pending}` : ' · who do you want at that desk?', Math.max(0, PW - head.w - 2)), { fg: P.dim });
+  head.add(truncate(subtitle, Math.max(0, PW - head.w - 2)), { fg: P.dim });
   head.add(' ');
   head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
   head.add('╮');
   body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  // Where the hire lands, and the branch it lands on. Dropped on a pane with no
+  // room for it rather than eating the only row the menu has; the title still says
+  // which of the two it is.
+  // Drawn over a failed hire too, because "not a trusted repository" and "that
+  // branch already exists" are both fixed from this row, and hiding it would mean
+  // starting the whole hire again to change one word.
+  if (!hire.pending && panelRows >= 6) {
+    const b = cells();
+    const button = (label, action, style) => {
+      const from = b.w;
+      b.add(label, style);
+      // A narrow pane truncates this row, and a hitbox over a label that got cut
+      // off is a click on nothing. So a button is only clickable once it is
+      // entirely on the screen; the keys still work either way.
+      if (b.w <= TEXT) {
+        hitboxes.push({ id: HIRE_ID, action, x: left + 2 + from, y: startRow + body.length, w: Math.max(1, b.w - from), h: 1 });
+      }
+    };
+    if (!hire.worktree) {
+      b.add('where', { fg: P.faint });
+      b.add('  ');
+      button('▌ this project', 'hire:where:here', { fg: P.ink });
+      b.add('  ');
+      button('w  a new worktree', 'hire:where:worktree', { fg: P.soft });
+    } else {
+      b.add('branch', { fg: P.faint });
+      b.add('  ');
+      // The field, with a block for a cursor while it is being typed into. Not a
+      // real terminal cursor: the office keeps that hidden, and one that only
+      // exists in the art cannot end up left behind in somebody's shell.
+      const room = Math.max(8, TEXT - (hire.editing ? 26 : 34));
+      // Mid-rename the field starts empty, so an empty one is a cursor and not a
+      // problem. Empty with nobody typing into it would be, hence the placeholder.
+      const shown = hire.branch || (hire.editing ? '' : '(unnamed)');
+      button(truncate(shown, room) + (hire.editing ? '▏' : ''), 'hire:branch', {
+        fg: hire.editing ? P.ink : P.soft,
+        bold: hire.editing,
+      });
+      b.add('  ');
+      if (hire.editing) b.add('enter when done', { fg: P.faint });
+      else {
+        button('e  rename', 'hire:branch', { fg: P.faint });
+        b.add('  ');
+        button('t  no worktree', 'hire:where:here', { fg: P.faint });
+      }
+    }
+    body.push(row(b.out().text, b.out().spans));
+  }
 
   const menuCols = Math.max(1, Math.floor(TEXT / MENU_CELL));
   let menuVisible = 0;
   if (hire.error) {
     body.push(row(truncate(hire.error, TEXT), [{ from: 0, to: Infinity, fg: STATUS.blocked.fg }]));
   } else if (hire.pending) {
-    body.push(row(`opening a tab and waiting for ${truncate(hire.pending, Math.max(0, TEXT - 32))} to come up`, [{ from: 0, to: Infinity, fg: P.soft }]));
+    const opening = hire.worktree ? 'making a worktree' : 'opening a tab';
+    body.push(row(truncate(`${opening} and waiting for ${hire.pending} to come up`, TEXT), [{ from: 0, to: Infinity, fg: P.soft }]));
   } else if (!hire.kinds.length) {
     // No manifests means herdr has not been told about any agent it can start,
     // which is worth saying out loud rather than drawing an empty grid.
@@ -660,7 +725,9 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
   } else {
     // Every row of the menu, clipped to whatever the panel has left after the
     // title and the footer hint.
-    const menuRows = Math.max(1, Math.min(Math.ceil(hire.kinds.length / menuCols), panelRows - 3));
+    // Whatever the panel has left after what is already drawn (title, and the
+    // where row if it fit), the footer hint and the bottom edge.
+    const menuRows = Math.max(1, Math.min(Math.ceil(hire.kinds.length / menuCols), panelRows - body.length - 2));
     menuVisible = Math.min(hire.kinds.length, menuRows * menuCols);
     for (let r = 0; r < menuRows; r += 1) {
       const b = cells();
@@ -673,7 +740,7 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
         b.add(on ? '▌' : ' ', { fg: P.accent });
         b.add(padEnd(truncate(kind, MENU_CELL - 2), MENU_CELL - 1), { fg: on ? P.ink : P.soft, bold: on });
         // Every cell is clickable, so the menu does not need the keyboard.
-        hitboxes.push({ id: HIRE_ID, action: `hire:${kind}`, x: left + 2 + from, y: startRow + body.length, w: MENU_CELL, h: 1 });
+        hitboxes.push({ id: HIRE_ID, action: `hire:start:${kind}`, x: left + 2 + from, y: startRow + body.length, w: MENU_CELL, h: 1 });
       }
       body.push(row(b.out().text, b.out().spans));
     }
@@ -684,7 +751,13 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
   }
 
   if (body.length < panelRows - 1) {
-    const hint = hire.pending ? 'esc to stop watching (the agent keeps starting)' : 'enter to hire · esc to change your mind';
+    const hint = hire.pending
+      ? 'esc to stop watching (the agent keeps starting)'
+      : hire.editing
+        ? 'typing a branch name · enter when done · esc to undo it'
+        : hire.worktree
+          ? 'enter to hire into a new worktree · esc to change your mind'
+          : 'enter to hire · esc to change your mind';
     body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: P.faint }]));
   }
   body.push(edge('╰', '╯', PW, chrome));

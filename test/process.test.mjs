@@ -12,7 +12,7 @@ import { runningCommand, describeProcess } from '../src/process.mjs';
 
 const proc = (name, argv) => ({ pid: 1, name, argv0: name, argv, cmdline: (argv || [name]).join(' ') });
 
-// A kiro-cli agent sitting at its own prompt, as herdr really reports it: the
+// A CLI agent sitting at its own prompt, shaped the way herdr reports one: the
 // agent, its wrappers, its credential helper. Nothing here is a job.
 const IDLE_AGENT = {
   pane_id: 'w1:p1',
@@ -22,10 +22,10 @@ const IDLE_AGENT = {
     proc('bun', ['/Users/you/Library/Application Support/kiro-cli/bun', '/Users/you/Library/Application Support/kiro-cli/tui.js', 'chat']),
     proc('kiro-cli-chat', ['/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat', 'chat']),
     proc('kiro-cli', ['/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli']),
-    proc('launcher', ['/tools/aim/sandbox/launcher', '--session-id', 'bf3c4493-af7e-4385-91ad-4b3d5323b995', '/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli']),
-    proc('creds_agent', ['/tools/aim/sandbox/creds_agent', '--port', '50865', '--exit-on-orphan']),
-    proc('toolbox-exec', ['aim', 'sandbox', '--client', 'kiro-cli']),
-    proc('toolbox-exec', ['kiro-cli']),
+    proc('launcher', ['/opt/toolbox/launcher', '--session-id', '00000000-0000-0000-0000-000000000000', '/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli']),
+    proc('cred-agent', ['/opt/toolbox/cred-agent', '--port', '50865', '--exit-on-orphan']),
+    proc('tool-exec', ['sandbox', '--client', 'kiro-cli']),
+    proc('tool-exec', ['kiro-cli']),
   ],
 };
 
@@ -38,16 +38,16 @@ test('an agent doing nothing but being an agent is running nothing', () => {
 });
 
 test('MCP servers are furniture, not work', () => {
-  // Every agent permanently carries these. A desk that said "builder-mcp" would
-  // be saying so all day, about nothing.
+  // Every agent permanently carries these. A desk that said "docs-mcp" would be
+  // saying so all day, about nothing.
   const info = {
     foreground_processes: [
-      proc('aws-chorus-mcp-', ['/cache/AIMLocalChorusMCP/build/local-chorus-mcp/aws-chorus-mcp-darwin-arm64']),
-      proc('aim', ['/tools/aim/aim', 'mcp', 'start-server', 'local-chorus-mcp']),
-      proc('node', ['node', '/tools/pippin-mcp-server/dist/index.js']),
-      proc('builder-mcp', ['/tools/builder-mcp/builder-mcp', '--include-tools', 'SkillsTool,InternalSearch']),
-      proc('claude', ['/tools/claude-code/bin/claude']),
-      proc('toolbox-exec', ['claude']),
+      proc('docs-mcp-darw', ['/opt/mcp/build/docs-mcp/docs-mcp-darwin-arm64']),
+      proc('mcp-host', ['/opt/mcp/mcp-host', 'mcp', 'start-server', 'docs-mcp']),
+      proc('node', ['node', '/opt/mcp/notes-mcp-server/dist/index.js']),
+      proc('search-mcp', ['/opt/mcp/search-mcp', '--include-tools', 'Search,Read']),
+      proc('claude', ['/opt/agents/claude-code/bin/claude']),
+      proc('tool-exec', ['claude']),
     ],
   };
   assert.equal(runningCommand(info), null);
@@ -121,16 +121,16 @@ test('a label is always short, and always a bare word or two', () => {
 });
 
 test('a wrapper is furniture even when it is wearing the job as a name', () => {
-  // Straight off a live machine: herdr reports these with a `name` that is the
-  // wrapper and an `argv0` that is the thing being wrapped, or the other way
-  // round. Either half naming scaffolding is enough to skip the process, or a
-  // desk would spend all day proudly announcing "pippin-mcp-server".
+  // The shape a live machine reports: a `name` that is the wrapper and an `argv0`
+  // that is the thing being wrapped, or the other way round. Either half naming
+  // scaffolding is enough to skip the process, or a desk would spend all day
+  // proudly announcing "notes-mcp-server".
   const info = {
     foreground_processes: [
-      { pid: 1, name: 'toolbox-exec', argv0: 'pippin-mcp-server', argv: ['pippin-mcp-server'] },
-      { pid: 2, name: 'node', argv0: 'aws-chorus-mcp-darwin-arm64', argv: ['node'] },
+      { pid: 1, name: 'tool-exec', argv0: 'notes-mcp-server', argv: ['notes-mcp-server'] },
+      { pid: 2, name: 'node', argv0: 'docs-mcp-darwin-arm64', argv: ['node'] },
       { pid: 3, name: 'caffeinate', argv0: 'caffeinate', argv: ['caffeinate', '-dimsu'] },
-      { pid: 4, name: 'runner', argv0: 'builder-mcp', argv: ['runner'] },
+      { pid: 4, name: 'runner', argv0: 'search-mcp', argv: ['runner'] },
       ...IDLE_AGENT.foreground_processes,
     ],
   };

@@ -26,14 +26,14 @@ test('rooms are numbered in floor order', () => {
   const people = [
     desk('w1:p1', 'w1', 'main'),
     desk('w1:p2', 'w1', 'main'),
-    desk('w2:p1', 'w2', 'kiro-web'),
+    desk('w2:p1', 'w2', 'web-app'),
     desk('w3:p1', 'w3', 'notes'),
   ];
   const rooms = assignRooms(people);
   assert.equal(rooms.size, 3);
   assert.deepEqual([...rooms.keys()], ['w1', 'w2', 'w3']);
   assert.deepEqual([...rooms.values()].map((r) => r.number), [1, 2, 3]);
-  assert.deepEqual([...rooms.values()].map((r) => r.name), ['main', 'kiro-web', 'notes']);
+  assert.deepEqual([...rooms.values()].map((r) => r.name), ['main', 'web-app', 'notes']);
   assert.equal(roomWall(rooms, people[0]), ROOM_TINTS[0].wall);
   assert.equal(roomWall(rooms, people[2]), ROOM_TINTS[1].wall);
   // Room one keeps the office's own wall colour, so adding a second workspace does
@@ -60,7 +60,7 @@ test('a filter does not repaint the walls', () => {
   // The whole reason assignment takes the full roster: if it took the people on
   // screen then typing three letters would move every colour by one, and the legend
   // would be describing an office that only exists while you hold the key down.
-  const all = [desk('w1:p1', 'w1', 'main'), desk('w2:p1', 'w2', 'kiro-web'), desk('w3:p1', 'w3', 'notes')];
+  const all = [desk('w1:p1', 'w1', 'main'), desk('w2:p1', 'w2', 'web-app'), desk('w3:p1', 'w3', 'notes')];
   const rooms = assignRooms(all);
   const onScreen = [all[2]];
   assert.equal(roomWall(rooms, onScreen[0]), ROOM_TINTS[2].wall, 'still the third room');

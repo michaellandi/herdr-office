@@ -184,9 +184,11 @@ characters at most), and anything that is not obviously a plain word is dropped
 rather than trimmed, because a truncated secret is still a secret. `rg 'password
 = ...'` reads as `rg`; `claude --settings {...}` reads as nothing at all.
 
-Shells, the agents themselves, the toolbox wrappers and the MCP servers every
-agent permanently carries are all filtered out, so a busy desk says what the job
-is instead of saying `zsh` all day.
+Shells, the agents themselves, the wrappers and credential helpers a managed
+machine adds, and the MCP servers every agent permanently carries are all filtered
+out, so a busy desk says what the job is instead of saying `zsh` all day. The
+wrappers are matched on the shape of the name rather than by product, so a machine
+this was never run on still gets a clean monitor.
 
 ## News from a desk
 

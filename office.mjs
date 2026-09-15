@@ -1262,7 +1262,7 @@ const DEMO_TABS = ['socket-client', 'login-flow', 'flaky-tests', 'deps', 'office
 // one could never have caught a wall painted the wrong colour.
 const DEMO_WORKSPACES = [
   { workspace_id: 'w1', label: 'herdr-office', number: 1 },
-  { workspace_id: 'w2', label: 'kiro-web', number: 2 },
+  { workspace_id: 'w2', label: 'web-app', number: 2 },
   { workspace_id: 'w3', label: 'notes', number: 3 },
 ];
 function demoAgents() {

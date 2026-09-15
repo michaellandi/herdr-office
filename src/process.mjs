@@ -13,9 +13,9 @@
 // through an allowlist. Anything that is not obviously a bare word is dropped
 // rather than trimmed, because "dropped" cannot leak and "trimmed" can.
 
-// The agent itself, the shell it sits in, and the scaffolding herdr and the
-// toolbox wrap around both. None of these are the job: they are always there, so
-// reporting them would mean every working desk permanently said "zsh".
+// The agent itself, the shell it sits in, and the scaffolding wrapped around
+// both. None of these are the job: they are always there, so reporting them would
+// mean every working desk permanently said "zsh".
 const NOT_THE_JOB = new Set([
   // shells
   'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'login',
@@ -23,11 +23,17 @@ const NOT_THE_JOB = new Set([
   'claude', 'kiro', 'kiro-cli', 'kiro-cli-chat', 'codex', 'gemini', 'cursor',
   'devin', 'cline', 'opencode', 'copilot', 'amp', 'grok', 'droid', 'qwen',
   'kimi', 'pi', 'agy', 'hermes', 'kilo', 'qodercli', 'maki', 'muse', 'q', 'aider',
-  // wrappers, launchers and credential helpers
-  'toolbox-exec', 'launcher', 'creds_agent', 'aim', 'brazil', 'env', 'sudo',
+  // launchers and the environment they are launched through
+  'launcher', 'env', 'sudo', 'doas', 'nice',
   // things that are running but are not somebody doing something
   'caffeinate', 'ssh-agent', 'pbcopy', 'pbpaste', 'tee', 'script',
 ]);
+
+// Wrappers, sandboxes and credential helpers, matched by the shape of the name
+// rather than by product: a managed machine has several of them, they vary by
+// employer, and they are all called some variation on this. Matching the shape
+// means an environment this was never run in still gets a clean monitor.
+const WRAPPER = /^(.*-(exec|shim|wrapper|sandbox)|.*launcher|creds?[-_]?agent|sandbox)$/i;
 
 // A whole process is ignored if any of these turn up in its name or in an argv
 // token: an MCP server is a permanent child of every agent, and a language
@@ -50,14 +56,15 @@ const basename = (str) => String(str ?? '').split('/').pop();
 function isScaffolding(proc) {
   const name = basename(proc?.name);
   if (!name) return true;
-  // argv0 as well as name, because they disagree in practice: herdr reports the
-  // toolbox wrappers with `name: 'toolbox-exec'` and `argv0: 'pippin-mcp-server'`,
-  // and the informative half is whichever one is not the wrapper.
+  // argv0 as well as name, because they disagree in practice: a wrapped process is
+  // reported with the wrapper as one of the two and the thing being wrapped as the
+  // other, and the informative half is whichever one is not the wrapper.
   const argv0 = basename(proc?.argv0);
   for (const label of [name, argv0]) {
     if (!label) continue;
     if (NOT_THE_JOB.has(label)) return true;
     if (SCAFFOLDING.test(label)) return true;
+    if (WRAPPER.test(label)) return true;
   }
   const argv = Array.isArray(proc?.argv) ? proc.argv : [];
   // Deliberately tests argv and NOT cmdline. Same information for this purpose,

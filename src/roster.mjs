@@ -27,21 +27,56 @@ function paneSortKey(paneId) {
   return [ws || '', (pane || '').padStart(4, '0')].join(':');
 }
 
+// Sorts high, so anything we have no number for lands after everything we do
+// rather than jumping to the front of the office.
+// How long a piece of news stays over somebody's head. Long enough to read from
+// across the floor, short enough that a room full of stale announcements never
+// builds up: "tests passed" from two minutes ago is not news, it is clutter.
+export const EVENT_MS = 12000;
+
+const eventOf = (entry, now) => (entry && now - entry.at < EVENT_MS ? { label: entry.label, kind: entry.kind } : null);
+
+const UNKNOWN = 9999;
+const pad = (n) => String(Math.max(0, Math.min(UNKNOWN, Math.round(n)))).padStart(4, '0');
+
+// Where a desk sits on the floor, in reading order, mirroring where the pane
+// actually is in Herdr: workspace, then tab, then top-to-bottom, then
+// left-to-right, with the pane id as the last resort so the order is total and
+// stable. Without the geometry (demo mode, or a server that returned no
+// layouts) every desk scores the same and it falls back to pane id alone,
+// which is the order the office has always used.
+function seatKey(person, seats) {
+  const seat = seats.get(person.id);
+  if (!seat) return `${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${paneSortKey(person.id)}`;
+  return [pad(seat.workspaceNumber), pad(seat.tabNumber), pad(seat.y), pad(seat.x), paneSortKey(person.id)].join('|');
+}
+
 export class Roster {
   constructor(clock = () => Date.now()) {
     this.clock = clock;
     this.people = [];
     this.workspaceNames = new Map();
+    this.workspaceNumbers = new Map();
     this.tabNames = new Map();
+    this.tabNumbers = new Map();
+    this.seats = new Map(); // pane_id -> { workspaceNumber, tabNumber, x, y }
     this.focusedPaneId = null;
     this.states = new Map(); // pane_id -> { status, since, seq }
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
+    this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
+    this.events = new Map(); // pane_id -> { label, kind, at }, news, and short-lived
+    // Keyed by working directory rather than by pane, because that is the question
+    // `worktree.list` answers: two desks in the same checkout share one answer and
+    // therefore one call.
+    this.branches = new Map(); // cwd -> { branch, repo, at }
   }
 
   setWorkspaces(workspaces = []) {
     for (const ws of workspaces) {
+      if (!ws?.workspace_id) continue;
       // session.snapshot calls it `label`; older payloads used `name`.
-      if (ws?.workspace_id) this.workspaceNames.set(ws.workspace_id, ws.label || ws.name || ws.workspace_id);
+      this.workspaceNames.set(ws.workspace_id, ws.label || ws.name || ws.workspace_id);
+      if (ws.number != null) this.workspaceNumbers.set(ws.workspace_id, ws.number);
     }
   }
 
@@ -49,7 +84,30 @@ export class Roster {
   // beats a pane's terminal title for telling desks apart at a glance.
   setTabs(tabs = []) {
     for (const tab of tabs) {
-      if (tab?.tab_id) this.tabNames.set(tab.tab_id, tab.label || String(tab.number ?? ''));
+      if (!tab?.tab_id) continue;
+      this.tabNames.set(tab.tab_id, tab.label || String(tab.number ?? ''));
+      if (tab.number != null) this.tabNumbers.set(tab.tab_id, tab.number);
+    }
+  }
+
+  // Where every pane physically is, from `session.snapshot`'s `layouts`. This is
+  // what lets the floor match the room: seats are laid out in the same order the
+  // panes are, so swapping two panes visibly swaps two desks instead of
+  // rearranging the real session behind an unchanged picture.
+  setLayouts(layouts = []) {
+    this.seats.clear();
+    for (const layout of layouts) {
+      const workspaceNumber = this.workspaceNumbers.get(layout?.workspace_id) ?? UNKNOWN;
+      const tabNumber = this.tabNumbers.get(layout?.tab_id) ?? UNKNOWN;
+      for (const pane of layout?.panes || []) {
+        if (!pane?.pane_id) continue;
+        this.seats.set(pane.pane_id, {
+          workspaceNumber,
+          tabNumber,
+          x: pane.rect?.x ?? UNKNOWN,
+          y: pane.rect?.y ?? UNKNOWN,
+        });
+      }
     }
   }
 
@@ -64,6 +122,66 @@ export class Roster {
       person.ask = text;
       person.choice = choice;
     }
+  }
+
+  // What the pane's foreground process is, in as many words as it is safe to put
+  // on a screen (see src/process.mjs). A null label is stored as well as a real
+  // one: it is the difference between "nothing running" and "not asked yet",
+  // which is what stops the poll asking the same quiet desk twice a second.
+  setCommand(id, label) {
+    this.commands.set(id, { label: label || null, at: this.clock() });
+    const person = this.find(id);
+    if (person) person.command = label || null;
+  }
+
+  // Something that just happened at this desk (see src/events.mjs): the tests
+  // went green, the build broke, a rebase hit a conflict. It is news rather than
+  // state, so it expires on its own after EVENT_MS instead of waiting for the
+  // agent's status to change, and the label is always one of the office's own
+  // fixed strings, never anything the agent printed.
+  setEvent(id, label, kind) {
+    if (!label) return;
+    this.events.set(id, { label, kind: kind || 'good', at: this.clock() });
+    const person = this.find(id);
+    if (person) person.event = { label, kind: kind || 'good' };
+  }
+
+  // Drops anything that has gone stale, and reports whether the floor changed, so
+  // the caller only repaints when there is a reason to.
+  expireEvents(now = this.clock()) {
+    let changed = false;
+    for (const [id, entry] of [...this.events]) {
+      if (now - entry.at < EVENT_MS) continue;
+      this.events.delete(id);
+      const person = this.find(id);
+      if (person) person.event = null;
+      changed = true;
+    }
+    return changed;
+  }
+
+  // Which branch a working directory is on (see src/branches.mjs). A null branch is
+  // stored the same way a null command is: "asked, nothing to say" has to be
+  // distinguishable from "not asked yet", or a detached checkout gets re-asked on
+  // every single pass forever.
+  setBranch(cwd, { branch = null, repo = null } = {}) {
+    if (!cwd) return;
+    this.branches.set(cwd, { branch: branch || null, repo: repo || null, at: this.clock() });
+    for (const person of this.people) {
+      if (person.cwd !== cwd) continue;
+      person.branch = branch || null;
+      person.repo = repo || null;
+    }
+  }
+
+  branchAge(cwd) {
+    const entry = this.branches.get(cwd);
+    return entry ? this.clock() - entry.at : Infinity;
+  }
+
+  commandAge(id) {
+    const entry = this.commands.get(id);
+    return entry ? this.clock() - entry.at : Infinity;
   }
 
   askAge(id) {
@@ -95,6 +213,9 @@ export class Roster {
         this.states.set(id, { status, since, seq, assumed });
         // Once they are unstuck the question is gone, so the bubble goes too.
         if (status !== 'blocked') this.asks.delete(id);
+        // A desk that has stopped working is no longer running anything, and a
+        // stale "npm test" on an idle monitor would be a lie the office told.
+        if (status !== 'working') this.commands.delete(id);
 
         return {
           id,
@@ -110,14 +231,18 @@ export class Roster {
           tabId: a.tab_id || '',
           tabName: this.tabNames.get(a.tab_id) || '',
           ask: this.asks.get(id)?.text || '',
+          command: this.commands.get(id)?.label || null,
+          event: eventOf(this.events.get(id), now),
           choice: this.asks.get(id)?.choice || null,
           focused: Boolean(a.focused),
           cwd: a.cwd || '',
+          branch: this.branches.get(a.cwd || '')?.branch || null,
+          repo: this.branches.get(a.cwd || '')?.repo || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
         };
       })
-      .sort((x, y) => paneSortKey(x.id).localeCompare(paneSortKey(y.id)));
+      .sort((x, y) => seatKey(x, this.seats).localeCompare(seatKey(y, this.seats)));
 
     this.people.forEach((person, i) => {
       person.name = nickname(i);

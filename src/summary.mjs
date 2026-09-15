@@ -131,15 +131,104 @@ export function summarize(person, outputLines) {
   return out;
 }
 
+// Why the office thinks what it thinks, off `agent explain`.
+//
+// The office asserts five states and a raised hand, and until this line existed
+// you had to take its word for all of it. A desk reading idle while its agent is
+// plainly working is the question this answers: which rule fired, what it was
+// looking at, and whether detection was even running.
+//
+// It is also a safety problem wearing a debugging feature's clothes. The explain
+// payload is a full rule evaluation, and every rule in it carries an `evidence`
+// block whose `region_preview` is raw screen text. Reading one off a live session
+// produced an AWS account id and a paragraph of somebody's private reasoning, in
+// the first desk tried. So the rule here is the rule that governs the news on the
+// wall and the job on the monitor: the payload is used to say WHY, and nothing
+// that came off the wire is drawn.
+//
+// Concretely: `evidence` is never read at all, and every value that does get drawn
+// has to pass a shape check first. herdr's own identifiers (states, rule ids,
+// regions, manifest names) are bare tokens, so a bare token is what is allowed.
+// Anything longer or stranger is data wearing an identifier's name, and it is
+// dropped rather than trimmed.
+const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$/;
+// Regions are named like `whole_recent` or `bottom_non_empty_lines(5)`.
+const REGION = /^[A-Za-z0-9_]{1,32}(\([0-9]{1,3}\))?$/;
+const MANIFEST = /^[A-Za-z0-9._-]{1,32}$/;
+
+const token = (value) => (typeof value === 'string' && TOKEN.test(value) ? value : null);
+const counted = (value) => (Number.isFinite(value) && value >= 0 && value <= 9999 ? Math.floor(value) : null);
+
+// Ordered by how much each line explains, because the panel clips this section
+// from the bottom to keep the answer keys on screen: whichever rule fired matters
+// more than which file the rules came from.
 export function describeDetection(explain) {
   if (!explain || typeof explain !== 'object') return [];
   const body = explain.explain || explain.detection || explain;
-  const rule = body.matched_rule;
+  if (!body || typeof body !== 'object') return [];
   const lines = [];
-  if (body.state) lines.push(`state ${body.state}${rule ? ` via rule ${rule.id}` : ''}`);
-  const flags = ['visible_blocker', 'visible_working', 'visible_idle'].filter((k) => body[k]);
+
+  const state = token(body.state);
+  const rule = body.matched_rule && typeof body.matched_rule === 'object' ? body.matched_rule : null;
+  const ruleId = rule ? token(rule.id) : null;
+  if (state) lines.push(`state ${state}${ruleId ? ` via rule ${ruleId}` : ''}`);
+  else if (ruleId) lines.push(`matched rule ${ruleId}`);
+
+  // herdr's warnings and fallback reasons are free text, so they can carry a path,
+  // a URL, or a version of the screen. A bare token is an enum and safe to repeat;
+  // anything else is only acknowledged, with a pointer at the CLI that can print
+  // the whole thing safely because it is not a wall display.
+  for (const [label, value] of [
+    ['warning', body.warning],
+    ['fallback', body.fallback_reason],
+    ['update skipped', body.skipped_update_reason],
+  ]) {
+    if (!value) continue;
+    const bare = token(value);
+    lines.push(bare ? `${label}: ${bare}` : `${label} reported (run: herdr agent explain)`);
+  }
+
+  // The reasons a state can disagree with the screen in front of you. These are
+  // the whole point of the section, so they sit above the arithmetic.
+  if (body.screen_detection_skipped === true) lines.push('screen detection skipped');
+  if (body.skip_state_update === true) lines.push('state held, not being updated');
+  if (body.local_override_shadowing_remote === true) lines.push('a local manifest overrides the published one');
+  const status = token(body.remote_update_status);
+  if (status && status !== 'current') lines.push(`manifest update ${status}`);
+
+  // The rule's own terms: priority says what it beat, region says where on the
+  // screen it was looking.
+  if (rule) {
+    const parts = [];
+    const priority = counted(rule.priority);
+    const region = typeof rule.region === 'string' && REGION.test(rule.region) ? rule.region : null;
+    if (priority !== null) parts.push(`priority ${priority}`);
+    if (region) parts.push(`looking at ${region}`);
+    if (parts.length) lines.push(parts.join(', '));
+  }
+
+  // How close the call was. One match is a clear read; four means several rules
+  // recognised that screen and the priority above is what settled it.
+  const rules = Array.isArray(body.evaluated_rules) ? body.evaluated_rules : [];
+  if (rules.length) {
+    const matched = rules.filter((r) => r && r.matched === true).length;
+    lines.push(`${rules.length} rules checked, ${matched} matched`);
+  }
+
+  const flags = ['visible_blocker', 'visible_working', 'visible_idle'].filter((k) => body[k] === true);
   if (flags.length) lines.push(`signals: ${flags.map((f) => f.replace('visible_', '')).join(', ')}`);
-  if (body.warning) lines.push(`warning: ${body.warning}`);
-  if (body.fallback_reason) lines.push(`fallback: ${body.fallback_reason}`);
+
+  // Which manifest was in force, by name and version only. `manifest_source` is an
+  // absolute path under somebody's home directory, so the basename is all that is
+  // ever drawn, and the scheme in front of it says where it came from.
+  const source = typeof body.manifest_source === 'string' ? body.manifest_source : '';
+  const scheme = /^([a-z]{1,12}):/.exec(source);
+  const file = source.replace(/^[a-z]{1,12}:/, '').split('/').pop();
+  const version = token(body.manifest_version);
+  if (file && MANIFEST.test(file)) {
+    const where = scheme ? ` (${scheme[1]})` : '';
+    lines.push(`rules from ${file}${version ? ` ${version}` : ''}${where}`);
+  }
+
   return lines;
 }

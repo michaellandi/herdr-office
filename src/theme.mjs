@@ -43,6 +43,10 @@ export const P = {
   backWall: '#191f28',
   trim: '#2b3543',
   aisle: '#171c24', // the walkway between two rows of cubicles
+  // Dragging a desk. The row you picked up goes flat, the row it would land on
+  // takes a wash of the accent colour, and neither changes a single glyph.
+  lift: '#191d24',
+  drop: '#1b3242',
   // Furniture. Muted on purpose: it is scenery, and it must never pull the eye
   // away from a raised hand.
   leaf: '#3f7d52',
@@ -57,6 +61,19 @@ export const P = {
   faint: '#4a5566',
   accent: '#5ec8f5',
 };
+
+// News over a desk: the tests went green, the build broke, a rebase hit a
+// conflict. Deliberately not the status colours. A raised hand is the one thing
+// in this room that must always win the eye, so an event slab is a darker,
+// flatter wash than a status bar, and even the failure colour is duller than the
+// amber of somebody waiting on you.
+export const EVENT = {
+  good: { bg: '#173322', ink: '#8ee0a8' },
+  broke: { bg: '#3a1c1c', ink: '#f09a9a' },
+  snag: { bg: '#2f2340', ink: '#c9a8f0' },
+};
+
+export const eventTint = (kind) => EVENT[kind] || EVENT.good;
 
 export const STATUS = {
   working: { label: 'WORKING', fg: '#5ce08a', screen: '#7cf0a6' },

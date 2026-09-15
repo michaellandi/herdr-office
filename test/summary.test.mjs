@@ -129,12 +129,107 @@ test('summarize says something even about an empty screen', () => {
   assert.deepEqual(summarize({ status: 'blocked' }, []), ['stuck waiting on you (could not spot the question)']);
 });
 
+test('describeDetection reads the socket envelope as well as the bare body', () => {
+  const want = ['state blocked via rule prompt', 'signals: blocker'];
+  const body = { state: 'blocked', matched_rule: { id: 'prompt' }, visible_blocker: true };
+  assert.deepEqual(describeDetection(body), want, 'the CLI returns the body bare');
+  assert.deepEqual(describeDetection({ explain: body }), want, 'the socket wraps it in `explain`');
+});
+
+// A live explain read off a real machine, condensed to what the office draws. The
+// point of the section is answering "why does it think that", so every line here is
+// one of the reasons a state can disagree with the screen in front of you.
+test('describeDetection explains a real explain payload', () => {
+  assert.deepEqual(
+    describeDetection({
+      state: 'blocked',
+      matched_rule: { id: 'tool_approval_prompt', priority: 950, region: 'bottom_non_empty_lines(5)' },
+      evaluated_rules: [{ matched: true }, { matched: false }, { matched: false }],
+      visible_blocker: true,
+      skip_state_update: true,
+      remote_update_status: 'stale',
+      manifest_source: 'remote:/Users/somebody/.local/state/herdr/agent-detection/remote/claude.toml',
+      manifest_version: '2026.09.01.1',
+    }),
+    [
+      'state blocked via rule tool_approval_prompt',
+      'state held, not being updated',
+      'manifest update stale',
+      'priority 950, looking at bottom_non_empty_lines(5)',
+      '3 rules checked, 1 matched',
+      'signals: blocker',
+      'rules from claude.toml 2026.09.01.1 (remote)',
+    ],
+  );
+});
+
+// The panel clips this section from the bottom to keep the answer keys on screen,
+// so the order is part of the contract: which rule fired has to outrank which file
+// the rules came from, or a short pane keeps the trivia and drops the answer.
+test('describeDetection puts the rule that fired first and the paperwork last', () => {
+  const lines = describeDetection({
+    state: 'idle',
+    matched_rule: { id: 'osc_title', priority: 10, region: 'whole_recent' },
+    manifest_source: 'local:/tmp/kiro.toml',
+    screen_detection_skipped: true,
+  });
+  assert.match(lines[0], /^state idle via rule osc_title$/);
+  assert.equal(lines.indexOf('screen detection skipped'), 1);
+  assert.match(lines[lines.length - 1], /^rules from kiro\.toml/);
+});
+
+// The load-bearing test in this file. Every field of an explain payload is a place
+// herdr can hand us a path, a URL, a token or a copy of somebody's screen, and one
+// live read produced an account id and a paragraph of private reasoning. So the
+// assertion is not "the output looks right", it is that none of the input reaches
+// the output unless it is shaped like one of herdr's own identifiers.
+test('describeDetection draws nothing that came off the wire', () => {
+  const secret = 'ACCOUNT 000000000000 sk-live-000 /Users/somebody/.aws/credentials';
+  const lines = describeDetection({
+    // A state, a rule id and a region that are really prose. Shaped wrong, so dropped
+    // rather than trimmed: a trimmed secret is still a secret with the end cut off.
+    state: `blocked ${secret}`,
+    matched_rule: { id: secret, priority: 9e9, region: `whole_recent ${secret}`, state: secret },
+    // Free text by design. Acknowledged, never repeated.
+    warning: `manifest ${secret} failed to load`,
+    fallback_reason: `could not reach https://example.invalid/${secret}`,
+    skipped_update_reason: `rate limited until 2026-09-10 by ${secret}`,
+    remote_update_status: secret,
+    remote_update_error: secret,
+    // The dangerous half of the payload: every rule quotes the screen.
+    evaluated_rules: [
+      { id: secret, matched: true, evidence: { region_preview: secret, contains: [secret], regex: secret, line_regex: secret, region_bytes: 99 } },
+    ],
+    // An absolute path under somebody's home directory.
+    manifest_source: `remote:/Users/somebody/.local/state/herdr/${secret}/claude.toml`,
+    manifest_version: secret,
+    agent: secret,
+  }).join('\n');
+
+  for (const needle of ['000000000000', 'sk-live', '/Users/', '.aws', 'example.invalid', 'rate limited', 'failed to load', 'could not reach']) {
+    assert.ok(!lines.includes(needle), `${JSON.stringify(needle)} leaked: ${JSON.stringify(lines)}`);
+  }
+  // What it says instead: that there is something to read, and where to read it.
+  assert.match(lines, /^warning reported \(run: herdr agent explain\)$/m);
+  assert.match(lines, /^fallback reported \(run: herdr agent explain\)$/m);
+  assert.match(lines, /^update skipped reported \(run: herdr agent explain\)$/m);
+  // An absurd priority is not a number worth printing either.
+  assert.ok(!lines.includes('9000000000'), lines);
+  // And the safe arithmetic still comes through, because that is the point.
+  assert.match(lines, /^1 rules checked, 1 matched$/m);
+});
+
+// The whole payload can also be junk, or wrapped in an envelope, or not there at
+// all. `herdr agent explain --json` returns the body bare; the socket wraps it.
 test('describeDetection survives whatever agent explain returns', () => {
   assert.deepEqual(describeDetection(null), []);
   assert.deepEqual(describeDetection('nonsense'), []);
+  assert.deepEqual(describeDetection(42), []);
+  assert.deepEqual(describeDetection([]), []);
   assert.deepEqual(describeDetection({}), []);
-  assert.deepEqual(describeDetection({ explain: { state: 'blocked', matched_rule: { id: 'prompt' }, visible_blocker: true } }), [
-    'state blocked via rule prompt',
-    'signals: blocker',
-  ]);
+  assert.deepEqual(describeDetection({ explain: null }), []);
+  assert.deepEqual(describeDetection({ state: null, matched_rule: 'not an object', evaluated_rules: 'nope' }), []);
+  assert.deepEqual(describeDetection({ evaluated_rules: [null, 'x', { matched: true }] }), ['3 rules checked, 1 matched']);
+  // A rule with nothing legible about it beyond its id still names the rule.
+  assert.deepEqual(describeDetection({ matched_rule: { id: 'prompt', priority: null, region: null } }), ['matched rule prompt']);
 });

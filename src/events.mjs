@@ -34,7 +34,15 @@ export const WATCHES = [
     // `[1-9]\d*` rather than `\d+`, because `0 failed` is the happy path and an
     // office that called it a failure would be wrong on every green test run.
     // Rust's regex crate has no lookahead, so there is no `(?!0)` to reach for.
-    pattern: '^FAIL\\b|\\b[1-9]\\d* (?:tests? )?(?:failed|failing)\\b|\\btests? failed\\b|\\bassertion failed\\b|\\bFAILED \\(',
+    //
+    // Capped at four digits, which is not fussiness: watching a live pane, this fired
+    // on `kill: kill 53041 failed: no such process` and would have hung "tests failed"
+    // over a desk that had run no tests. A process id is five or six digits and a test
+    // count almost never is, so the cap costs a suite of ten thousand cases (which
+    // still matches on `tests failed` and on `FAILED (`) and buys back every line
+    // about a pid. `\b` before the digits is what makes the cap work: it will not
+    // match the last four digits of a longer number.
+    pattern: '^FAIL\\b|\\b[1-9]\\d{0,3} (?:tests? )?(?:failed|failing)\\b|\\btests? failed\\b|\\bassertion failed\\b|\\bFAILED \\(',
   },
   {
     kind: 'broke',
@@ -110,4 +118,33 @@ export function eventFromMatch(payload) {
     if (hit) return hit;
   }
   return null;
+}
+
+// A whole message off the event stream, turned into news for one desk or into
+// nothing. Returns `{ paneId, kind, label }`.
+//
+// This lives here rather than in the office's stream handler because that is where it
+// was, and where it was wrong for the entire life of the feature. The live envelope is
+//
+//     { event: "pane.output_matched", data: { matched_line, pane_id, read } }
+//
+// so the name is a STRING at the top level and the payload is under `data` with no
+// `type` of its own. The handler read it as `msg.result || msg.event || msg`, which
+// yields that string, and then asked the string for a `.type`: false on every event,
+// forever, on every pane. Nobody noticed because the one file in the office with no
+// unit tests was the one doing the parsing. Hence this function, and hence
+// test/events.test.mjs asserting on the envelope as observed on the wire.
+//
+// The bundled schema does not settle the shape: what it documents under
+// `output_matched` is the request/response variant, not the subscription envelope. The
+// two fallbacks below cover the other shapes it allows for, so a server that moves the
+// name onto the payload keeps working.
+export function newsFromEvent(msg) {
+  const name = typeof msg?.event === 'string' ? msg.event : msg?.type;
+  const payload = msg?.data || msg?.result || (typeof msg?.event === 'object' ? msg.event : msg);
+  if (!payload || typeof payload !== 'object') return null;
+  if (name !== 'pane.output_matched' && payload.type !== 'output_matched') return null;
+  if (!payload.pane_id) return null;
+  const news = eventFromMatch(payload);
+  return news ? { paneId: payload.pane_id, kind: news.kind, label: news.label } : null;
 }

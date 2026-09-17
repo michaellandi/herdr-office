@@ -7,7 +7,7 @@
 // words instead of quoting any of it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, eventFromMatch, WATCHES, WATCH_PATTERN } from '../src/events.mjs';
+import { classify, eventFromMatch, newsFromEvent, WATCHES, WATCH_PATTERN } from '../src/events.mjs';
 
 test('a failure is a failure even when most of the run passed', () => {
   assert.deepEqual(classify('Tests:  1 failed, 42 passed, 43 total'), { kind: 'broke', label: 'tests failed' });
@@ -96,4 +96,82 @@ test('the subscription pattern is one regex, and the same one', () => {
     assert.ok(classify(line), `fired but could not classify: ${line}`);
   }
   assert.ok(!whole.test('Compiling serde v1.0.197'), 'would fire on ordinary chatter');
+});
+
+/* --------------------------------------------------- the shape off the wire */
+
+// The envelope, copied from a real `pane.output_matched` message captured on the live
+// socket at protocol 22. The name is a string at the top level and the payload is
+// under `data` with no `type` of its own, which is not what the bundled schema's
+// `output_matched` variant describes (that one documents the request/response form).
+//
+// This is the regression test for the whole feature having never worked: the office
+// read the envelope as `msg.result || msg.event || msg`, got the string
+// `"pane.output_matched"`, and asked it for a `.type`. Every event was discarded.
+const WIRE = {
+  event: 'pane.output_matched',
+  data: {
+    matched_line: '42 passed, 0 failed',
+    pane_id: 'w1:pD',
+    read: {
+      format: 'text',
+      pane_id: 'w1:pD',
+      revision: 0,
+      source: 'visible',
+      tab_id: 'w1:t7',
+      text: 'npm test\n42 passed, 0 failed\n',
+      truncated: false,
+      workspace_id: 'w1',
+    },
+  },
+};
+
+test('the envelope the server actually sends produces news', () => {
+  assert.deepEqual(newsFromEvent(WIRE), { paneId: 'w1:pD', kind: 'good', label: 'tests passed' });
+});
+
+test('the name being a bare string is not mistaken for the payload', () => {
+  // The exact defect. `msg.event` is a string, so anything that treats it as the
+  // payload gets `undefined` for every field and silently drops the event.
+  assert.equal(typeof WIRE.event, 'string');
+  assert.ok(newsFromEvent(WIRE), 'a string name must not shadow data');
+});
+
+test('the payload on the message is read too, for a server that moves it', () => {
+  // The shape the schema documents, in case a future protocol sends that instead.
+  const flat = { type: 'output_matched', pane_id: 'w1:p9', matched_line: 'CONFLICT (content): merge conflict in a.js' };
+  assert.deepEqual(newsFromEvent(flat), { paneId: 'w1:p9', kind: 'snag', label: 'merge conflict' });
+  assert.deepEqual(newsFromEvent({ result: flat }), { paneId: 'w1:p9', kind: 'snag', label: 'merge conflict' });
+});
+
+test('every other event on the stream is not news', () => {
+  // The office subscribes to a dozen other things on the same socket, and all of them
+  // arrive here. Exactly one of them may put a slab over a desk.
+  assert.equal(newsFromEvent({ event: 'pane.focused', data: { pane_id: 'w1:pD' } }), null);
+  assert.equal(newsFromEvent({ event: 'pane.agent_status_changed', data: { pane_id: 'w1:pD', status: 'blocked' } }), null);
+  assert.equal(newsFromEvent({ event: 'tab.renamed', data: { tab_id: 'w1:t7' } }), null);
+  assert.equal(newsFromEvent(null), null);
+  assert.equal(newsFromEvent({}), null);
+  assert.equal(newsFromEvent({ event: 'pane.output_matched' }), null, 'no data, no news');
+  assert.equal(newsFromEvent({ event: 'pane.output_matched', data: { matched_line: '42 passed' } }), null, 'no pane, nowhere to put it');
+  assert.equal(
+    newsFromEvent({ event: 'pane.output_matched', data: { pane_id: 'w1:pD', matched_line: 'just some output' } }),
+    null,
+    'a match the office has no label for is not news',
+  );
+});
+
+test('a process id is not a test count', () => {
+  // Caught on the live socket: the office subscribed, and the first thing it matched
+  // was `kill: kill 53041 failed: no such process` in a shell pane. Hanging "tests
+  // failed" over a desk that had run no tests is the kind of wrong that makes somebody
+  // stop believing the whole wall.
+  assert.equal(classify('kill: kill 53041 failed: no such process'), null);
+  assert.equal(classify('error: process 98765 failed to start'), null);
+  // Still a failure when it is one. Four digits is the cap, so a real suite still
+  // reports, and the wordier forms are unaffected by the cap entirely.
+  assert.equal(classify('1 failed, 41 passed')?.label, 'tests failed');
+  assert.equal(classify('9999 failed')?.label, 'tests failed');
+  assert.equal(classify('Tests: 12043 failed'), null, 'a five-digit count needs the word tests');
+  assert.equal(classify('12043 tests failed')?.label, 'tests failed', 'and that is what it has');
 });

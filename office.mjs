@@ -21,7 +21,7 @@ import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mj
 import { width } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
 import { readProcessTable, paneProcesses } from './src/ps.mjs';
-import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
+import { WATCH_PATTERN, eventFromMatch, newsFromEvent } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
@@ -92,6 +92,25 @@ const CMD_PER_PASS = 4;
 // trade for a wall display.
 const BRANCH_MS = 30000;
 const BRANCH_PER_PASS = 2;
+// How much of a desk's screen the server matches the watchlist against, counted up
+// from the bottom. This was 8, on the reasoning that news is the last thing printed,
+// and 8 is almost exactly wrong for the panes this office watches: an agent in a
+// full-screen UI keeps its input box and its hints at the bottom of the screen, so the
+// last eight lines are chrome and the test run is above them. Measured against a live
+// agent pane, a phrase plainly on screen produced no event at 4 or 8 lines and fired at
+// 12, which puts that pane's chrome at about ten rows.
+//
+// So the window has to clear the chrome, and 24 is that with room for another agent's
+// UI being taller. It is not the whole screen, deliberately. The match is edge
+// triggered: the server fires when the window starts matching and stays quiet while it
+// still does, so the wider the window the longer one old failure sitting on screen
+// suppresses everything after it. A window that scrolls is what keeps news arriving.
+//
+// Where exactly the sweet spot is between those two was not settled, and could not be
+// on the pane available to measure from: it renders in a way that kept the test phrase
+// on screen throughout, so the rollover timings from it say more about that agent's UI
+// than about the server. 24 is a reasoned floor, not a measured optimum.
+const MATCH_LINES = 24;
 
 // Global subscriptions: these need no pane_id. pane.agent_status_changed is
 // per-pane, so it gets added for every desk we know about and re-subscribed
@@ -579,6 +598,9 @@ function nudge() {
 // Per-pane status subscriptions have to be rebuilt when desks come and go.
 // Cheap: one extra socket, only when the set of pane ids actually changes.
 let subscribedTo = '';
+// The last thing the stream complained about, so a subscription the server will never
+// accept is said once rather than on every rebuild for the rest of the session.
+let streamComplaint = '';
 function syncSubscriptions() {
   if (DEMO) return;
   const ids = roster.people.map((p) => p.id).sort();
@@ -602,7 +624,7 @@ function syncSubscriptions() {
         pane_id,
         source: 'visible',
         match: { type: 'regex', value: WATCH_PATTERN },
-        lines: 8,
+        lines: MATCH_LINES,
         strip_ansi: true,
       },
     ]),
@@ -611,9 +633,18 @@ function syncSubscriptions() {
     .open(
       subs,
       (msg) => onServerEvent(msg),
-      () => {
+      (err) => {
         // Force a resubscribe on the next poll if the stream dies.
         subscribedTo = '';
+        // And say so, once, because this used to be discarded. The server rejects the
+        // whole subscribe request if any one descriptor in it is bad and then closes
+        // the stream, so a single renamed event name in a future protocol would leave
+        // the office quietly poll-only with nothing on screen to suggest why. Not
+        // fatal, which is why it is a note and not a quit: polling still works.
+        if (err?.message && err.message !== streamComplaint) {
+          streamComplaint = err.message;
+          note(`events: ${err.message}`, 6000);
+        }
       },
     )
     .catch((err) => note(`events: ${err.message}`));
@@ -623,17 +654,15 @@ function syncSubscriptions() {
 // the source of truth for state; an output match additionally puts a line of news
 // over the desk it came from.
 //
-// The matched output is never drawn. eventFromMatch turns it into one of the
-// office's own fixed labels or into nothing at all, so an error message with a
-// path or a token in it cannot end up on the wall (see src/events.mjs).
+// The matched output is never drawn. newsFromEvent turns it into one of the office's
+// own fixed labels or into nothing at all, so an error message with a path or a token
+// in it cannot end up on the wall. It also owns reading the stream's envelope, which
+// used to be done here and was wrong the whole time (see src/events.mjs).
 function onServerEvent(msg) {
-  const payload = msg?.result || msg?.event || msg;
-  if (payload?.type === 'output_matched' && payload.pane_id) {
-    const news = eventFromMatch(payload);
-    if (news && roster.find(payload.pane_id)) {
-      roster.setEvent(payload.pane_id, news.label, news.kind);
-      draw();
-    }
+  const news = newsFromEvent(msg);
+  if (news && roster.find(news.paneId)) {
+    roster.setEvent(news.paneId, news.label, news.kind);
+    draw();
   }
   scheduleRefresh();
 }

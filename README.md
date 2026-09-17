@@ -718,6 +718,18 @@ Two rules that are easy to break by accident:
   matters most: the "yes, and don't ask again" menu option must never be the one
   picked automatically.
 
+One test in the suite talks to the world. `test/protocol.test.mjs` runs `herdr api
+schema --json` and holds every request in the source to it: the method names, the
+parameters, the event descriptors, the read sources. It exists because most of what
+this office can say is only said when somebody presses a key, so a request the server
+would reject and a request nobody ever sends look identical from inside a test suite,
+and the news labels spent their whole life in exactly that gap. It is also the only
+check that covers the paths a test cannot run, since sending `agent.prompt` or
+`worktree.create` for real means typing into somebody's live agent and making a branch
+in their repository. With no herdr installed those assertions skip rather than pass,
+because a machine without herdr genuinely cannot answer the question. What it proves is
+spelling and not meaning: conforming to the schema is no evidence that a feature works.
+
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch
 rather than a release tag, so `main` is what strangers install and it has to stay

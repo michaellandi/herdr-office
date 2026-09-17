@@ -713,7 +713,8 @@ Two rules that are easy to break by accident:
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
 - **`y`, `n` and `a` send real input to real agents.** Never test approve, deny or
-  assign against a live office; `--demo` prints what it would have sent instead.
+  assign against a live office; `--demo` prints what it would have sent instead, and
+  `test/office.test.mjs` sends them for real down a socket no agent is listening on.
   `test/summary.test.mjs` covers the prompt reading, including the one case that
   matters most: the "yes, and don't ask again" menu option must never be the one
   picked automatically.
@@ -735,10 +736,20 @@ stands up a fake one on a temp socket and holds the client to the wire's actual
 manners, including a server that closes after every answer and a server that does not.
 It exists because nothing tested the class every call goes through, so a wrong
 description of the wire sat in three comments from the first commit until somebody
-measured it. The assertion
-worth keeping is that a request reaches the server exactly once: a read that is sent
-twice is waste, but `agent.send_keys` sent twice is two keystrokes typed at somebody's
-agent.
+measured it. The assertion worth keeping is that a request reaches the server exactly
+once: a read that is sent twice is waste, but `agent.send_keys` sent twice is two
+keystrokes typed at somebody's agent.
+
+`test/office.test.mjs` runs the office itself. It spawns `office.mjs` as a child
+process pointed at a fake herdr, types keys on its stdin and reads frames off its
+stdout, which works because the office only asks for raw mode when stdin is a tty and
+honours `COLUMNS`/`LINES` when stdout is not. Every other test in the suite covers a
+function in `src/`; this one covers the seam between the office and the wire, which was
+the one place a bug could sit with everything else green, and did. It is also how the
+write paths get exercised at all: a fake server can be sent `agent.prompt` and
+`agent.send_keys` without a real agent receiving anything, so the tests can assert the
+thing that actually matters, which is that a standup reaches each person exactly once
+and `y` is one keystroke.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch

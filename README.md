@@ -45,6 +45,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
+| `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
@@ -271,6 +272,50 @@ including on ctrl-c and on a crash. A stale "2 waiting on you" outliving the
 process that wrote it would be worse than no title at all. If herdr reports there
 is no foreground window to title, nothing is remembered as set, so it goes out
 again when a window comes back. `--no-title` switches the whole thing off.
+
+## Pixels, in two places
+
+A terminal cell holds a word, a colour and one of eight block glyphs. That is
+enough to say `worked 3h40m - waiting 12m30s`, and not enough to show you that the
+waiting was a fifth of the session without you doing the division. So where the
+office has a proportion to show, and only there, it draws one in pixels through
+`pane.graphics.set` and lets herdr worry about which escape sequence your terminal
+speaks.
+
+Two layers, and neither may cover a word. An image occludes the cells underneath it
+instead of compositing with them, so a layer only ever lands on cells that were
+already blank or already a picture:
+
+- **The whiteboard's bar row** becomes a stacked bar of where the session's time
+  actually went, with quarter marks over it. That row already holds the same bar
+  drawn in whole cells, so the layer buys resolution rather than information, and
+  the two lines of writing above and below it are untouched. The frame and the
+  `open since 09:41` title stay in cells, because they are words.
+- **The blank row under the header** becomes one tick per desk in the whole
+  session, grouped by room, with a raised hand drawn taller. The floor plan pages,
+  and until now the only thing saying the other two floors existed was the words
+  "keep walking for the rest". This says which of them has somebody waiting.
+
+Nothing in the graphics layer draws text. Words are cells, proportions are pixels,
+which keeps every rule the office has about what may reach a screen in exactly one
+place.
+
+The first version of the whiteboard layer got this wrong in a way worth recording:
+it covered both interior rows, so it deleted `worked 3h40m - waiting 12m30s` in
+order to draw a picture of it, and what was left was five colours with nothing to
+say which one meant waiting. A chart that costs you the legend explaining it is a
+worse whiteboard. Hence the rule above, and hence the coarse cell bar underneath.
+
+It is opt-out rather than opt-in because there is nothing here for a default to
+break. The pane is asked once, with `pane.graphics.info`, whether it can draw at
+all; a terminal that says no is never asked again and the text renderer is already
+correct. An image occludes the cells under it, so the renderer volunteers the
+rectangles it is willing to lose and graphics may not touch anything else. A
+picture whose numbers moved but whose pixels would not is never sent, because the
+floor repaints three times a second and the charts do not. Three failures in a row
+switch the whole thing off for the rest of the run, and quitting takes the pixels
+down with it. `--no-graphics` is for taste, not for safety: some people want a
+terminal to be only text.
 
 ## Finding one desk in twenty
 

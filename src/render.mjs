@@ -6,6 +6,10 @@ import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
+// Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
+// one divide the same numbers the same way and cannot disagree about which slice won a
+// rounding contest.
+import { allot } from './charts.mjs';
 import {
   pose,
   screen,
@@ -627,12 +631,29 @@ const MARGIN = 2;
 // the strip under the desks, it appears when the room has a wall to hang it on, and
 // it is the first thing the band gives up when the pane gets small. Nothing about
 // the office's state is ONLY on the whiteboard.
-// Four rows, which is the height of a pot plant: the tallest thing that still
-// hangs on a five-row strip of wall, so the board is up in most panes rather than
-// only in a maximised one. Two lines of writing is also about as much as anybody
-// reads off a wall in passing.
+// Five rows: a frame, two lines of writing, and one bar between them. Two lines is
+// about as much as anybody reads off a wall in passing, and the fifth row is the
+// most the wall band can give without the board crowding out the plants.
+//
+// The bar row is drawn in cells like everything else, as whole blocks in the status
+// colours, and it is the one row of this board a pixel layer is allowed to take
+// (see the regions list in renderFrame). That ordering is deliberate: the coarse bar
+// is the real fallback rather than an empty row waiting for a picture, so a terminal
+// with no graphics is not missing anything, it just gets the proportion to the
+// nearest thirty-sixth instead of the nearest pixel.
 const WB_W = 40; // the whole board, borders included
 const WB_TEXT = WB_W - 4;
+// The order the header already counts statuses in, so the bar and the counts above
+// it read left to right the same way.
+const WB_ORDER = ['working', 'blocked', 'idle', 'done', 'unknown'];
+// A prop row's colour is named rather than given as a hex, so the names have to
+// resolve to both palette entries and status colours. `status.blocked` is the amber a
+// blocked desk is drawn in, so the bar matches the desks it is summarising.
+const colour = (name) =>
+  name.startsWith('status.') ? (STATUS[name.slice(7)] || STATUS.unknown).fg : P[name];
+// Where the bar sits inside `rows`, so the caller can hand exactly that row to a
+// pixel layer without counting lines here and there separately.
+const WB_BAR_ROW = 2;
 
 export function whiteboard(stats, now) {
   if (!stats) return null;
@@ -656,9 +677,30 @@ export function whiteboard(stats, now) {
   // A second, not a millisecond: on the first frame of a session the worst wait is
   // however long ago the last poll was, and "worst 0s" is not a statistic.
   if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest)}`);
+  // The coarse bar: whole cells in the status colours, in the same left-to-right
+  // order the header counts them. A cell is the smallest thing this can be wrong by,
+  // which is the whole argument for the pixel layer that covers it, and is also why
+  // the bar is here at all rather than the row being left blank for one.
+  const split = allot(WB_ORDER.map((k) => Math.max(0, (stats.spent || {})[k] || 0)), WB_TEXT);
+  const barFg = [];
+  let bar = '';
+  WB_ORDER.forEach((key, i) => {
+    for (let n = 0; n < split[i]; n += 1) {
+      bar += '\u2588';
+      barFg.push(key);
+    }
+  });
+  // A session with no time in it yet gets the empty track rather than a bar of
+  // nothing, for the same reason the board refuses to hang at all until there is a
+  // number on it: an empty picture reads as broken, an empty track reads as early.
+  const barRow = bar ? line(padEnd(bar, WB_TEXT)) : line('');
+  // Two cells of frame and padding on the left before the bar starts, so the colours
+  // line up under the words they belong to.
+  const barStyle = bar ? ['plastic', 'plastic', ...barFg.map((k) => `status.${k}`)] : 'soft';
   const rows = [
     `\u250c ${title} ` + '\u2500'.repeat(Math.max(0, WB_W - 4 - width(title))) + '\u2510',
     line(spent),
+    barRow,
     line(hands.join(' \u00b7 ')),
     '\u2514' + '\u2500'.repeat(WB_W - 2) + '\u2518',
   ];
@@ -670,7 +712,8 @@ export function whiteboard(stats, now) {
     w: WB_W,
     h: rows.length,
     rows,
-    rowFg: ['plastic', 'soft', 'soft', 'plastic'],
+    barRow: WB_BAR_ROW,
+    rowFg: ['plastic', 'soft', barStyle, 'soft', 'plastic'],
     // A surface, rather than writing directly on the wall: the spaces inside the
     // frame are part of the board, which is what makes it read as one.
     bg: 'paper',
@@ -724,7 +767,12 @@ function propRow(placed, y, cols) {
   for (const { p, x, y: py } of placed) {
     const r = y - py;
     if (r < 0 || r >= p.h) continue;
-    const hex = P[p.rowFg[r]];
+    // A row's colour is normally one name for the whole row. The whiteboard's bar row
+    // needs a name per cell, because a stacked bar in five colours is the one thing
+    // on a prop that cannot be a single colour and still mean anything.
+    const style = p.rowFg[r];
+    const perCell = Array.isArray(style);
+    const rowHex = perCell ? null : P[style];
     // A prop with a surface (the whiteboard) owns every cell of its box, spaces
     // included, or the wall would show through between its words.
     const back = p.bg ? P[p.bg] : null;
@@ -733,7 +781,9 @@ function propRow(placed, y, cols) {
       if (back) backs[x + i] = back;
       if (ch === ' ') return;
       chars[x + i] = ch;
-      colours[x + i] = hex;
+      // Past the end of a per-cell list the row falls back to its last colour, so a
+      // bar shorter than its row cannot leave uncoloured cells behind it.
+      colours[x + i] = perCell ? colour(style[i] ?? style[style.length - 1]) : rowHex;
     });
   }
   const spans = [];
@@ -757,13 +807,20 @@ function propRow(placed, y, cols) {
 // join between the two and the furniture has something to stand against. The top
 // row of the band is the trim along that join, which is why the furniture starts
 // one row lower.
+// Returns where the whiteboard ended up, in floor-local cells, or null when it did
+// not go up at all. Only the whiteboard, because it is the only piece of furniture
+// with numbers on it: src/graphics.mjs draws a real chart inside its frame when the
+// terminal can take one, and it can only do that if something tells it which
+// rectangle the frame is currently occupying. Nobody else needs to know, so this
+// stays a return value rather than becoming state.
 function decorate(lines, cols, floorRows, minY, board = null) {
   const bandTop = Math.max(minY, floorRows - BAND_H);
   const bandH = Math.min(floorRows - bandTop, BAND_H);
   const placed = furnish(cols, bandTop + 1, bandH - 1, board);
-  if (!placed.length) return;
+  if (!placed.length) return null;
   const trim = paint('▔'.repeat(cols), [], { fg: P.trim, bg: P.backWall });
   for (let y = bandTop; y < floorRows; y += 1) lines[y] = y === bandTop ? trim : propRow(placed, y, cols);
+  return board ? placed.find((at) => at.p === board) || null : null;
 }
 
 /* --------------------------------------------------------------------- floor */
@@ -1377,6 +1434,17 @@ export function renderFrame(view) {
   const startRow = out.length;
   const hitboxes = [];
   const grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
+  // Rectangles of cells the office is willing to give up to a pixel layer, in
+  // screen coordinates, the same way hitboxes are. An image occludes whatever text
+  // is under it, so this list is the whole permission system: a region is only in
+  // here if what it currently holds is decoration, or is a picture of a number that
+  // a chart says better. Everything else on the screen is words, and words stay
+  // cells. See src/graphics.mjs.
+  const regions = [];
+  // The spacer under the header bar. It is a row of carpet and nothing else, it is
+  // always there, and it is directly beneath the counts, which is exactly where a
+  // strip about who needs you belongs.
+  if (rows >= 2) regions.push({ kind: 'strip', x: 0, y: 1, w: cols, h: 1 });
 
   const stepX = TILE_W + GAP_X;
   const stepY = TILE_H + GAP_Y;
@@ -1488,7 +1556,14 @@ export function renderFrame(view) {
     const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
-    decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, whiteboard(view.stats, view.now));
+    const board = whiteboard(view.stats, view.now);
+    const hung = decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, board);
+    // Only the bar row, not the writing. The first version of this took both interior
+    // rows and so deleted `worked 12m · waiting 3m` to draw a picture of it, which
+    // left proportions with nothing to say which colour meant "waiting". The board now
+    // carries its own coarse bar in cells, and this region is that bar: a layer may
+    // only take cells that were already a picture, never cells that were words.
+    if (hung) regions.push({ kind: 'board', x: hung.x + 1, y: startRow + hung.y + board.barRow, w: WB_W - 2, h: 1 });
     if (pages > 1 && floorRows > 0) {
       // One desk to a floor is a desk, not a floor, and saying "floor 3 of 7" while
       // exactly one person is on the screen reads as six missing colleagues.
@@ -1510,5 +1585,5 @@ export function renderFrame(view) {
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
-  return { lines: out.slice(0, rows), hitboxes, grid };
+  return { lines: out.slice(0, rows), hitboxes, grid, regions };
 }

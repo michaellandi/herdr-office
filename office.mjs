@@ -9,6 +9,7 @@
 //   node office.mjs --once     render one frame and exit (handy for diffing art)
 //   node office.mjs --quiet    no toast when somebody starts waiting on you
 //   node office.mjs --no-title leave the window title alone
+//   node office.mjs --no-graphics  text only, no pixel charts
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -28,6 +29,8 @@ import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
 import { Clocks } from './src/punchclock.mjs';
 import { branchFromList } from './src/branches.mjs';
+import { Graphics, graphicsLog } from './src/graphics.mjs';
+import { timeChart, attentionStrip } from './src/charts.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -41,6 +44,12 @@ const NOTIFY = !argv.has('--quiet');
 // exactly why it is opt-out: it is somebody else's window, and a title is a
 // shared surface that other things may also care about.
 const TITLE = !argv.has('--no-title');
+// Pixels, in the two places a chart beats a sentence. Opt-out for the same reason
+// toasts are: the pane is asked once whether it can draw at all, and a terminal
+// that says no is never asked again, so there is nothing here for a default to
+// break. What it is opt-out *for* is taste: some people want a terminal to be
+// only text, and that is a preference, not a capability.
+const GRAPHICS = !argv.has('--no-graphics');
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -102,6 +111,9 @@ const roster = new Roster();
 const clocks = new Clocks();
 let api = null;
 let events = null;
+// The pixel layers, when the pane can take them. Null the whole time in --demo and
+// --once, which have no socket and no pane to draw into respectively.
+let graphics = null;
 let selectedId = null;
 // The filter. `text` is what is typed, `editing` is whether the field has the
 // keyboard: an accepted filter keeps narrowing the floor after you have stopped
@@ -147,6 +159,11 @@ function enterTerminal() {
   process.stdin.on('data', onInput);
   process.stdout.on('resize', () => {
     prevLines = [];
+    // A resize moves the rectangles the pixel layers were placed into, so whatever
+    // is on screen is in the wrong place until the redraw lands. Uncovering the rows
+    // means the text comes back first and the picture goes over it again a frame
+    // later, rather than a stale chart sitting over a floor that has moved.
+    covered = new Set();
     draw();
   });
 }
@@ -165,16 +182,17 @@ function quit(code = 0, msg) {
   events?.close();
   leaveTerminal();
   if (msg) process.stderr.write(`${msg}\n`);
-  // The socket stays open just long enough to give the window title back, then
-  // goes regardless. Half a second is the whole budget: an office that would not
-  // quit because a title would not clear is worse than a stale title.
+  // The socket stays open just long enough to give the window title back and take
+  // the office's pixels down with it, then goes regardless. Half a second is the
+  // whole budget for both: an office that would not quit because a title would not
+  // clear is worse than a stale title, and the same goes for a leftover chart.
   const done = () => {
     api?.close();
     process.exit(code);
   };
   const bail = setTimeout(done, 500);
   bail.unref?.();
-  clearTitle()
+  Promise.all([clearTitle(), graphics?.clear() ?? Promise.resolve()])
     .catch(() => {})
     .then(() => {
       clearTimeout(bail);
@@ -231,8 +249,16 @@ function view() {
 let hitboxes = [];
 let grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
 
+// Screen rows currently hidden behind a pixel layer. The renderer still produces
+// their text and the diff below still remembers it; the bytes are just never
+// written. An image occludes the cells underneath it rather than compositing with
+// them, so writing that row again would punch the text back through the middle of
+// the picture, and at 320ms the office would flicker between the two.
+let covered = new Set();
+
 function draw() {
-  const rendered = renderFrame(view());
+  const model = view();
+  const rendered = renderFrame(model);
   hitboxes = rendered.hitboxes;
   grid = rendered.grid;
   const { cols, rows } = size();
@@ -240,13 +266,62 @@ function draw() {
   for (let i = 0; i < rows; i += 1) {
     const line = rendered.lines[i] ?? '';
     if (prevLines[i] === line) continue;
+    // Remembered either way, so the diff stays honest about what the office has
+    // decided this row should say, whether or not it was allowed to say it.
+    prevLines[i] = line;
+    if (covered.has(i)) continue;
     // Only clear the tail when there is a tail. On a line that already fills the
     // row the cursor is sitting in the last column with a pending wrap, and an
     // erase-to-end-of-line there eats the character we just drew.
     out += `\x1b[${i + 1};1H${line}${width(line) < cols ? '\x1b[K' : ''}`;
-    prevLines[i] = line;
   }
   if (out) process.stdout.write(out);
+  paintPixels(model, rendered.regions);
+}
+
+// Turns the rectangles renderFrame volunteered into pixel layers. Runs after the
+// text has gone out, never before: the cells have to be on the screen before an
+// image is placed over them, or the first frame draws the picture and then paints
+// the floor on top of it.
+//
+// The mapping lives here rather than in src/graphics.mjs because this is the only
+// file that knows what the office is looking at. graphics.mjs moves pictures; it
+// has no opinion about what they are of.
+function paintPixels(model, regions) {
+  const caps = graphics?.caps;
+  const next = new Set();
+  graphicsLog(
+    `paint: graphics=${Boolean(graphics)} caps=${Boolean(caps)} visible=${caps?.visible} ` +
+      `regions=[${(regions || []).map((r) => `${r.kind} ${r.w}x${r.h}+${r.x},${r.y}`).join('; ') || 'none'}]`,
+  );
+  if (caps && caps.visible) {
+    const frames = [];
+    for (const region of regions || []) {
+      const drawn =
+        region.kind === 'strip'
+          ? // The WHOLE roster, not the filtered floor. The strip's entire job is to
+            // say what is not on screen, and a filter is the commonest reason for
+            // something not being on screen.
+            attentionStrip(roster.people, selectedId, region.w, region.h, caps)
+          : region.kind === 'board'
+            ? timeChart(model.stats, region.w, region.h, caps)
+            : null;
+      // A chart that decided its rectangle was too small to say anything returns
+      // null, and then the text it would have replaced simply stays.
+      if (!drawn) {
+        graphicsLog(`paint: ${region.kind} declined its ${region.w}x${region.h} rectangle`);
+        continue;
+      }
+      frames.push({ id: `office.${region.kind}`, region, ...drawn });
+      for (let y = region.y; y < region.y + region.h; y += 1) next.add(y);
+    }
+    graphics.sync(frames);
+  }
+  // A row that has just come out from behind a layer has to be written again. It was
+  // deliberately skipped while it was covered, so the diff believes the terminal
+  // already has it and would otherwise leave the picture sitting there.
+  for (const y of covered) if (!next.has(y)) prevLines[y] = null;
+  covered = next;
 }
 
 /* --------------------------------------------------------------------- data */
@@ -1376,6 +1451,13 @@ const anim = setInterval(() => {
   // minutes and a stale "tests passed" would sit there the whole time.
   roster.expireEvents();
   draw();
+  // Not for the cell size, which never changes, but for whether anybody is looking:
+  // that flips when somebody switches tab, and nothing else in the office would
+  // notice. It sits on the frame rather than the 2s poll because the delay this
+  // controls is one a person sits through, watching a whiteboard that has no chart on
+  // it yet. Throttles itself, swallows its own failures, and is never awaited, so a
+  // server without graphics costs one question once and then stops being asked.
+  graphics?.poll();
 }, ANIM_MS);
 
 const poll = setInterval(refresh, POLL_MS);
@@ -1421,6 +1503,14 @@ async function main() {
   }
 
   enterTerminal();
+  // Asked once before the first frame, so the office either knows the cell size or
+  // knows it is a text-only terminal by the time it has anything to draw. A pane id
+  // is required and comes from the environment herdr started us in, so an office run
+  // by hand outside herdr is simply text, which is correct.
+  if (GRAPHICS && api && OWN_PANE) {
+    graphics = new Graphics(api, OWN_PANE);
+    await graphics.probe();
+  }
   await refresh();
   draw();
 }

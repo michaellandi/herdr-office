@@ -49,111 +49,117 @@ function openSocket({ onLine, onClose, onError }) {
   });
 }
 
-// Request/response connection. Keep this one separate from the event stream:
-// events.subscribe holds its connection open and pushes unsolicited lines.
+// Request/response calls. Keep this separate from the event stream: only
+// events.subscribe holds a connection open and pushes unsolicited lines.
 //
-// The connection reconnects itself: some reads (recent-source reads against a
-// busy full-screen agent) make the server hang up mid-response, and one bad
-// desk should not take the whole office down.
+// One connection per request, because that is what the server does. Measured
+// against herdr 0.9.0 on 2026-09-17: it answers exactly one request and then
+// closes the connection, whether or not anything was concurrent. A second
+// request written to the same socket gets EPIPE, even when written in the same
+// tick as the first reply arriving.
 //
-// Requests go out one at a time. On herdr 0.9.0 the server tolerates two
-// in-flight requests on a connection and hangs up on the third, so a
-// Promise.all of three calls silently loses the last one: the symptom is a
-// field that is simply always empty. Queueing here costs a round trip per call
-// and makes every caller safe, rather than asking each one to remember.
+// This one fact used to be written down here as three different hazards (reads
+// with a `recent` source dropping the connection, agent.explain doing the same,
+// and a limit of two concurrent requests), because it was met three times in
+// three places and diagnosed freshly each time. None of the three reproduce:
+// every read source answers fine against a busy full-screen agent, and so does
+// explain. The connection simply never survives an answer.
+//
+// The previous shape here held one socket open and reconnected when it dropped,
+// which worked, but a request issued before that drop had been noticed went into
+// the socket the server had already closed, and only then got retried on a fresh
+// one. So calls issued back to back went out twice: a sequential loop of awaits,
+// each call leaving the moment the previous answer landed, which is exactly what
+// a broadcast and the hire sequence are. A call after any idle gap was fine,
+// which is why pressing a key was never affected and this went unnoticed. On this
+// build the duplicate is refused by the kernel and never reaches herdr, but that
+// is luck about the timing of a reset: `agent.send_keys` and `agent.prompt` are on
+// this path, and a duplicate that did land is two keystrokes, or the same
+// instruction typed at somebody's agent twice. Opening a connection per request
+// costs the same round trip and cannot do that.
+//
+// Requests still go out single file, so callers can fire whatever they like
+// concurrently without opening a socket per caller or reordering the wire.
 export class ApiClient {
-  #sock = null;
-  #pending = new Map();
   #seq = 0;
-  #connecting = null;
   #tail = Promise.resolve();
+  #live = new Set();
 
+  // Nothing to hold open, but the caller wants to hear about a missing socket
+  // now rather than on the first desk it tries to draw, so make the connection
+  // and drop it. A bare connect assumes no method, which is the point: it
+  // answers "is herdr there", not "does herdr still speak this protocol".
   async open() {
-    await this.#ensure();
+    const sock = await openSocket({ onLine: () => {} });
+    sock.destroy();
     return this;
-  }
-
-  #ensure() {
-    if (this.#sock) return Promise.resolve(this.#sock);
-    if (this.#connecting) return this.#connecting;
-    this.#connecting = openSocket({
-      onLine: (msg) => this.#dispatch(msg),
-      onClose: () => {
-        this.#sock = null;
-        this.#failAll(Object.assign(new Error('herdr socket closed'), { retryable: true }));
-      },
-    })
-      .then((sock) => {
-        this.#sock = sock;
-        this.#connecting = null;
-        return sock;
-      })
-      .catch((err) => {
-        this.#connecting = null;
-        throw err;
-      });
-    return this.#connecting;
-  }
-
-  #dispatch(msg) {
-    const entry = this.#pending.get(msg.id);
-    if (!entry) return;
-    this.#pending.delete(msg.id);
-    clearTimeout(entry.timer);
-    if (msg.error) {
-      const err = new Error(msg.error.message || 'herdr api error');
-      err.code = msg.error.code;
-      entry.reject(err);
-    } else {
-      entry.resolve(msg.result ?? {});
-    }
-  }
-
-  #failAll(err) {
-    for (const entry of this.#pending.values()) {
-      clearTimeout(entry.timer);
-      entry.reject(err);
-    }
-    this.#pending.clear();
   }
 
   request(method, params = {}, timeoutMs = 8000) {
     // Chain onto the tail so callers can fire whatever they like concurrently
     // and still reach the server in single file. A failed request must not
     // break the chain, hence the bare catch on the link we hand to the next
-    // caller.
-    const result = this.#tail.then(() => this.#attempt(method, params, timeoutMs));
+    // caller: without it, one failed read would wedge every later call and the
+    // office would quietly stop refreshing.
+    const result = this.#tail.then(() => this.#send(method, params, timeoutMs));
     this.#tail = result.catch(() => {});
     return result;
   }
 
-  async #attempt(method, params, timeoutMs) {
-    try {
-      return await this.#send(method, params, timeoutMs);
-    } catch (err) {
-      if (!err.retryable) throw err;
-      return this.#send(method, params, timeoutMs);
-    }
-  }
-
-  async #send(method, params, timeoutMs) {
-    const sock = await this.#ensure();
+  // One socket, one request, one answer, then done. No retry: a request that has
+  // been written may have been acted on, and sending it again is exactly the
+  // duplicate this class exists to avoid. A read that fails is redrawn by the
+  // next poll; a write that fails says so on screen.
+  #send(method, params, timeoutMs) {
     const id = `office-${++this.#seq}`;
     return new Promise((resolve, reject) => {
+      let sock = null;
+      let settled = false;
+      const done = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (sock) {
+          this.#live.delete(sock);
+          sock.destroy();
+        }
+        fn(arg);
+      };
       const timer = setTimeout(() => {
-        this.#pending.delete(id);
         const err = new Error(`timeout waiting for ${method}`);
         err.code = 'timeout';
-        reject(err);
+        done(reject, err);
       }, timeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
-      sock.write(`${JSON.stringify({ id, method, params })}\n`);
+
+      openSocket({
+        onLine: (msg) => {
+          if (msg.error) {
+            const err = new Error(msg.error.message || 'herdr api error');
+            err.code = msg.error.code;
+            done(reject, err);
+            return;
+          }
+          done(resolve, msg.result ?? {});
+        },
+        onClose: () => done(reject, new Error('herdr socket closed before it answered')),
+        onError: (err) => done(reject, err),
+      })
+        .then((opened) => {
+          if (settled) {
+            opened.destroy();
+            return;
+          }
+          sock = opened;
+          this.#live.add(sock);
+          sock.write(`${JSON.stringify({ id, method, params })}\n`);
+        })
+        .catch((err) => done(reject, err));
     });
   }
 
   close() {
-    this.#sock?.destroy();
-    this.#sock = null;
+    for (const sock of this.#live) sock.destroy();
+    this.#live.clear();
   }
 }
 

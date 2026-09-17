@@ -675,11 +675,18 @@ function scheduleRefresh() {
   }, 120);
 }
 
-// Reading a desk, carefully. The `visible` source is a plain screen snapshot
-// and always safe. The `recent` sources page through alternate-screen
-// scrollback, which the server only tolerates for an idle agent (and which can
-// drop the connection outright when it does not), so they are a bonus, not the
-// primary source.
+// Reading a desk. The `visible` source is a plain screen snapshot and is what
+// "what are you up to" means; the `recent` sources page through alternate-screen
+// scrollback, which is more history than the question asked for, so they are a
+// bonus on a quiet desk rather than the primary source.
+//
+// This used to say that a `recent` read against a busy agent could drop the
+// connection outright. It does not: measured against herdr 0.9.0 on 2026-09-17,
+// every source answers on a busy full-screen agent, at every line count up to the
+// ~1000 lines the server keeps. What was really being seen is that the server
+// closes the connection after every answer, whatever was asked. The try/catch
+// stays because a read can still fail for ordinary reasons and scrollback is
+// genuinely optional.
 async function readDesk(id, person) {
   const visible = await api.request('agent.read', { target: id, source: 'visible' });
   const screen = cleanOutput(visible?.read?.text ?? '');
@@ -695,8 +702,15 @@ async function readDesk(id, person) {
   return screen;
 }
 
-// agent.explain over the socket returns a huge rule-evaluation dump and can
-// hang up the connection mid-response, so shell out to the CLI for it instead.
+// agent.explain returns a huge rule-evaluation dump, tens of kilobytes for one
+// desk, so it is fetched per card and cached rather than polled.
+//
+// It goes through the CLI, which is no longer required: the note here used to say
+// the socket hung up mid-response on explain, and on herdr 0.9.0 on 2026-09-17 it
+// answers fine. The CLI is kept because it works and because a dump this size is
+// the one call worth keeping off the office's own socket, not because the socket
+// cannot do it. describeDetection already reads either shape, so moving it back is
+// a small change if the subprocess ever becomes the expensive part.
 const explainCache = new Map();
 function explainDesk(id) {
   const cached = explainCache.get(id);
@@ -773,8 +787,12 @@ async function loadDetail(id, { force = false } = {}) {
       loading: false,
       fetchedAt: Date.now(),
       output: [],
-      // agent_not_idle is the common one: full-screen agents will not give up
-      // scrollback while they are mid-turn.
+      // herdr's own code if it gave one, because the code is the useful part on a
+      // card: `agent_not_idle` and a socket that went away are different problems
+      // and the difference is not visible from the outside. Which codes actually
+      // turn up here is not known; the guess that used to be written down here
+      // (agent_not_idle, from full-screen agents refusing scrollback) did not
+      // survive being checked.
       summary: [`could not read this desk: ${err.code || err.message}`],
       detection: [],
       choice: null,

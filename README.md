@@ -730,6 +730,16 @@ in their repository. With no herdr installed those assertions skip rather than p
 because a machine without herdr genuinely cannot answer the question. What it proves is
 spelling and not meaning: conforming to the schema is no evidence that a feature works.
 
+`test/socket.test.mjs` covers the other end of the same gap, and needs no herdr: it
+stands up a fake one on a temp socket and holds the client to the wire's actual
+manners, including a server that closes after every answer and a server that does not.
+It exists because nothing tested the class every call goes through, so a wrong
+description of the wire sat in three comments from the first commit until somebody
+measured it. The assertion
+worth keeping is that a request reaches the server exactly once: a read that is sent
+twice is waste, but `agent.send_keys` sent twice is two keystrokes typed at somebody's
+agent.
+
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch
 rather than a release tag, so `main` is what strangers install and it has to stay
@@ -737,17 +747,16 @@ green.
 
 ## Known rough edges
 
-- **Reads that page scrollback can drop the connection.** On herdr 0.9.0, an
-  `agent.read` with a `recent` source against a busy full-screen agent can make the
-  server hang up mid-response instead of returning `agent_not_idle`. The office
-  defaults to the `visible` source and reconnects itself, so a bad desk costs you one
-  socket, not the room.
-- **`agent.explain` over the socket does the same thing**, so that call goes through
-  the `herdr` CLI (`HERDR_BIN_PATH`) instead of the socket.
-- **Three in-flight requests on one socket is one too many.** On herdr 0.9.0 the
-  server answers two concurrent requests and hangs up on the third, so a
-  `Promise.all` of three quietly loses the last one. The client queues requests
-  instead: callers fire whatever they like, the wire stays single file.
+- **A request/response socket answers exactly once and then closes.** Measured against
+  herdr 0.9.0 on 2026-09-17: one request, one answer, connection gone, whether or not
+  anything was concurrent. A second request written to the same socket gets `EPIPE`
+  even when written in the same tick as the first answer arriving. So the client opens
+  a connection per request and still sends them single file, and callers can fire
+  whatever they like concurrently. A raw `Promise.all` over one socket of your own
+  would keep the first answer and lose the rest.
+- **The event socket is the exception**: `events.subscribe` holds its connection open
+  and pushes, and one invalid entry rejects the whole batch and leaves it silent
+  forever, which looks exactly like nothing ever happening.
 - **Emoji and other ambiguous-width glyphs are stripped** from pane titles and screen
   text before drawing, because they wreck a fixed cell grid.
 - **`y` sends a real keystroke to a real agent.** The prompt shape is inferred, so on

@@ -1296,9 +1296,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     }
     fields.push(['tab', person.tabName || '(unnamed tab)', P.ink]);
     fields.push(['doing', person.title || '(no pane title)', P.soft]);
-    // In the room's own colour, which is what ties a wall you can see to a workspace
-    // you can name. Plain when the office has only one room.
-    fields.push(['where', [person.workspaceName, person.tabId, person.id].filter(Boolean).join(' · '), roomOf(view.rooms, person)?.ink || P.soft]);
+    // No workspace/tab/pane row. The card's own title already says the pane id, the
+    // tab has a row of its own two lines up, and a tab id is not a thing anybody
+    // reads: it was three identifiers spending a row to repeat what was on screen.
     fields.push(['cwd', person.cwd, P.soft]);
     // Only when there is one. A `branch: (none)` row on every desk in an untrusted
     // repo would be a permanent apology for a thing nobody asked about.

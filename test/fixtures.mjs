@@ -6,7 +6,7 @@
 import { Roster } from '../src/roster.mjs';
 import { stripAnsi } from '../src/text.mjs';
 import { assignRooms } from '../src/rooms.mjs';
-import { describeDetection } from '../src/summary.mjs';
+import { describeDetection, summarize } from '../src/summary.mjs';
 
 export { stripAnsi };
 
@@ -168,6 +168,22 @@ export const DETAILS = [
   [
     'long explanation',
     { ...detailFor('w1:p1', { shape: 'y/n', approve: ['y'], deny: ['n'] }), detection: LIVE_DETECTION },
+  ],
+  // A full said block, which is the tallest the summary section gets: three lines of
+  // an agent talking, the second and third indented under the label rather than
+  // repeating it. Every line here is longer than a narrow panel, so this is also the
+  // case where an indent and a truncation have to agree about the width.
+  [
+    'three said lines',
+    {
+      ...detailFor('w1:p1'),
+      summary: summarize({ status: 'idle', title: 'token refresh' }, [
+        'I have finished refactoring the token refresh path and split it in two.',
+        'The retry loop now backs off instead of hammering the endpoint every second.',
+        'Two of the integration tests were relying on the old timing, so I updated them.',
+        'Next I want to check whether the cache invalidation still behaves the same way.',
+      ]),
+    },
   ],
 ];
 

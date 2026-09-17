@@ -124,6 +124,35 @@ test('summarize leads with what they are stuck on', () => {
   );
 });
 
+test('the said lines are labelled once and line up under it', () => {
+  // Three lines of an agent talking read as the tail of one thought. Labelling each
+  // of them read as three unrelated remarks and spent eleven cells a line saying a
+  // thing already said, on the narrowest column in the office.
+  const said = [
+    'I have finished refactoring the token refresh path and split it in two.',
+    'The retry loop now backs off instead of hammering the endpoint every second.',
+    'Two of the integration tests were relying on the old timing, so I updated them.',
+    'Next I want to check whether the cache invalidation still behaves the same way.',
+  ];
+  const out = summarize({ status: 'idle' }, said);
+  assert.equal(out.length, 3, 'three of them, not two');
+  assert.equal(out.filter((l) => l.includes('last said:')).length, 1, 'said once');
+  assert.ok(out[0].startsWith('last said: '));
+  // The indent has to be exactly the label, or the block does not line up. Asserted
+  // against the label's own length rather than a number, so changing the wording
+  // cannot silently knock the alignment out.
+  const indent = ' '.repeat('last said: '.length);
+  for (const line of out.slice(1)) {
+    assert.ok(line.startsWith(indent), `not aligned: ${JSON.stringify(line)}`);
+    assert.ok(line.trim().length, 'an indent with nothing after it');
+  }
+  // And it is still the LAST three, oldest first, not the first three.
+  assert.deepEqual(
+    out.map((l) => l.replace('last said:', '').trim()),
+    said.slice(-3),
+  );
+});
+
 test('summarize says something even about an empty screen', () => {
   assert.deepEqual(summarize(null, []), ['nothing to report']);
   assert.deepEqual(summarize({ status: 'blocked' }, []), ['stuck waiting on you (could not spot the question)']);

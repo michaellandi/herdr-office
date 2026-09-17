@@ -115,8 +115,22 @@ export function approvalChoice(lines) {
   return { shape: 'unknown', approve: ['enter'], deny: ['esc'] };
 }
 
-// Two or three lines describing the person, in the order a human would want
-// them: what they are stuck on first, then what they were last saying.
+// The label goes on the first of the said lines and the rest are indented under it,
+// which is the only reason this is a constant rather than a string in place: the
+// indent has to be exactly as wide as the label or the block does not line up.
+const SAID = 'last said: ';
+
+// How many of them. Three reads as a paragraph, which is what the tail of an agent's
+// output is; two read as a pair of unrelated remarks.
+const SAID_LINES = 3;
+
+// A few lines describing the person, in the order a human would want them: what they
+// are stuck on first, then what they were last saying.
+//
+// The said lines are labelled once, not once each. Repeating "last said:" down the
+// block spent eleven cells per line saying a thing already said, on the narrowest
+// column in the office, and read as three separate utterances rather than as the tail
+// of one.
 export function summarize(person, outputLines) {
   const out = [];
   if (person?.status === 'blocked') {
@@ -126,7 +140,8 @@ export function summarize(person, outputLines) {
   if (person?.title) out.push(`pane title: ${person.title}`);
   const substantive = outputLines.filter((line) => line.length > 16 && !isNoise(line));
   const prose = substantive.filter(isProse);
-  for (const line of (prose.length ? prose : substantive).slice(-2)) out.push(`last said: ${line}`);
+  const said = (prose.length ? prose : substantive).slice(-SAID_LINES);
+  said.forEach((line, i) => out.push(i === 0 ? `${SAID}${line}` : `${' '.repeat(SAID.length)}${line}`));
   if (!out.length) out.push('nothing to report');
   return out;
 }

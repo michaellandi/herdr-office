@@ -28,6 +28,7 @@ import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
 import { Clocks } from './src/punchclock.mjs';
+import { load as loadState, save as saveState } from './src/state.mjs';
 import { branchFromList } from './src/branches.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
@@ -62,6 +63,11 @@ const OWN_PANE = process.env.HERDR_PANE_ID || '';
 
 const ANIM_MS = 320;
 const POLL_MS = 2000;
+// How often the whiteboard is written to disk. Not on every observe, which runs twice
+// a second and would put a file write on the poll path for numbers nobody has read
+// yet. Fifteen seconds is the most a crash can cost, measured in whiteboard rather
+// than in anything that matters, and the ordinary exit writes on the way out anyway.
+const SAVE_MS = 15000;
 const DETAIL_MS = 2500;
 // A bubble is one screen read per stuck desk, so it is cheap but not free: only
 // blocked desks are read, and only when their bubble has gone stale.
@@ -114,6 +120,10 @@ let events = null;
 // The pixel layers, when the pane can take them. Null the whole time in --demo and
 // --once, which have no socket and no pane to draw into respectively.
 let graphics = null;
+// The timer that writes the punch clock down. Null in --demo, whose numbers are made
+// up and must never land in the state file, and in --once, which is over before the
+// first tick would fire.
+let saveTimer = null;
 let selectedId = null;
 // The filter. `text` is what is typed, `editing` is whether the field has the
 // keyboard: an accepted filter keeps narrowing the floor after you have stopped
@@ -174,11 +184,33 @@ function leaveTerminal() {
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 }
 
+// Pick up this morning, if there was one. Called before the first `observe`, because
+// `restore` sets the floor that stops the desks about to walk in from being credited
+// with time already banked. Demo numbers are invented, so the demo never reads or
+// writes the real file.
+function openTheBooks() {
+  if (DEMO) return;
+  const saved = loadState();
+  if (saved) clocks.restore(saved);
+}
+
+// The other half. Synchronous and failure-swallowing all the way down, which is what
+// lets `quit` call it without spending any of its half-second budget.
+function closeTheBooks() {
+  if (DEMO) return;
+  saveState(clocks.snapshot());
+}
+
 function quit(code = 0, msg) {
   if (stopped) return;
   stopped = true;
   clearInterval(anim);
   clearInterval(poll);
+  clearInterval(saveTimer);
+  // Before the socket goes, and before anything that could throw. Everything since
+  // the last tick of SAVE_MS would otherwise be the one part of the day that the
+  // office watched and then forgot, and quitting is exactly when it happens.
+  closeTheBooks();
   events?.close();
   leaveTerminal();
   if (msg) process.stderr.write(`${msg}\n`);
@@ -1477,6 +1509,11 @@ async function main() {
     }
   }
 
+  // Before either path observes anything. `--once` restores but never saves: it is a
+  // single printed frame, so it should show the same whiteboard the live office would,
+  // and it has nothing of its own to add to it.
+  openTheBooks();
+
   if (ONCE) {
     clearInterval(anim);
     clearInterval(poll);
@@ -1503,6 +1540,11 @@ async function main() {
   }
 
   enterTerminal();
+  if (!DEMO) {
+    saveTimer = setInterval(closeTheBooks, SAVE_MS);
+    // The office should not be the reason a terminal will not close.
+    saveTimer.unref?.();
+  }
   // Asked once before the first frame, so the office either knows the cell size or
   // knows it is a text-only terminal by the time it has anything to draw. A pane id
   // is required and comes from the environment herdr started us in, so an office run

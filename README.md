@@ -498,10 +498,30 @@ a desk that has since closed is kept, so the office totals only ever go up: a to
 that dropped when somebody tidied up a tab would read as a bug rather than as a
 closed tab.
 
-Nothing is written to disk. The clock starts when you open the office and the
-numbers are about this session, which is what `open since 09:41` is there to say. A
-"today" that quietly reset whenever the office was reopened, or that spanned
-midnight, would be a worse lie than a smaller true number.
+The whiteboard survives a restart, but only until the end of the day. It is written
+to one small JSON file in the state directory herdr hands the plugin, so closing the
+pane and opening it again at 11:20 continues this morning rather than announcing that
+the morning never happened. A file written on another day is thrown away rather than
+added to: `open since 09:41` has to mean this morning, and a "today" that quietly
+spanned midnight would be a worse lie than a smaller true number.
+
+What never carries over is time nobody watched. The office is shut between a quit and
+the next open, so that gap goes in no bucket, and no interval is ever counted from
+before the office reopened. The consequence is deliberate and worth stating: the
+buckets add up to less than `open since` says, because `open since` is wall clock from
+when your day started and the buckets are only ever watched time. A hand that was
+already up when you reopened is not counted twice either, since it is the same prompt
+still waiting and it was counted before the office shut.
+
+Desk cards do not survive, only the office total. A pane id means nothing after a
+restart, so a desk's time is folded into the office numbers and its card starts again:
+`on shift 2h` for a desk this office met ninety seconds ago would be the office
+claiming to have watched something it did not.
+
+Run outside herdr, with no state directory, nothing is written and the clock simply
+starts when you do. That is also true of every way the file can go wrong. An
+unreadable, truncated, or half-written file is treated as no file at all, so the worst
+a bad state file can do is lose a morning's statistics, never the office.
 
 The whiteboard is furniture, so it hangs there only when the floor has a strip of
 wall to spare, and it is the first thing given up when there are more people than

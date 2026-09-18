@@ -207,6 +207,11 @@ test('the office draws the desks herdr told it about', async () => {
     assert.equal(office.stderr.trim(), '', 'a clean run should say nothing on stderr');
     assert.ok(office.onScreen('2 desks'), 'the header did not count the desks');
     assert.ok(office.onScreen('task 0') && office.onScreen('task 1'), 'the pane titles did not reach the cards');
+    // The last row of the frame, so this fails if the write is cut short rather than
+    // rendered short. A frame is about 25KB and a pipe buffer on macOS is 16KB, so an
+    // exit that does not wait for the flush loses everything below the header: the
+    // assertions above pass and the bottom half of the office is simply gone.
+    assert.ok(office.onScreen('hjkl walk'), 'the frame was truncated before its last row');
     // A render is a read. Nothing that changes anything should have been sent.
     assert.deepEqual(office.sent('agent.send_keys'), [], 'a single frame wrote to an agent');
     assert.deepEqual(office.sent('agent.prompt'), [], 'a single frame prompted an agent');

@@ -1754,7 +1754,13 @@ async function main() {
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });
-    process.stdout.write(renderFrame(view()).lines.join('\n') + '\n');
+    // Written *and flushed* before the exit. Whenever this render is being diffed,
+    // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
+    // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an
+    // exit on the next line truncates it. A frame is about 25KB against a 16KB buffer,
+    // so it truncates every time. CI found it as a frame whose header arrived and whose
+    // desks did not, on macOS and not on Linux, where a pipe write is synchronous.
+    await new Promise((resolve) => process.stdout.write(renderFrame(view()).lines.join('\n') + '\n', resolve));
     api?.close();
     events?.close();
     process.exit(0);

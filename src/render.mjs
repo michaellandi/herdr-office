@@ -2,10 +2,11 @@
 // an array of lines plus the hitboxes needed for mouse clicks and arrow-key
 // navigation. Nothing here talks to a socket or a terminal.
 import { padEnd, truncate, width, formatDuration } from './text.mjs';
-import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
+import { P, STATUS, paint, fill, status, identity, eventTint, headTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
 import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
+import { pressure, headBadge, headWords } from './head.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
@@ -136,6 +137,40 @@ const edge = (left, right, w, { borderFg, bold }) =>
 
 const BEZEL_TOP = '┌' + '─'.repeat(SCREEN_W) + '┐';
 const BEZEL_BOT = '└' + '─'.repeat(5) + '┬' + '─'.repeat(MON_W - 8) + '┘';
+// The monitor's top edge, with how full that head is written into it: `┌─ 73% ──────┐` in
+// place of `┌────────────┐`, and `┏━ 93% ━━━━━┓` for a head about to run out of room. See
+// src/head.mjs for where the number comes from and what the bands mean.
+//
+// This edge is where the number goes because it is the only surface on a desk that was
+// being drawn and saying nothing. The sticky note, the pile of paper, the keyboard and the
+// mug have the desk row; the tab card and the speech bubble have the wall above. Writing
+// into a line that already existed costs no cell, moves nothing, and leaves the desk the
+// width it was, which is why the width is asserted below rather than assumed.
+//
+// Neither the number nor the heavy edge is carried in colour, and that is the point of
+// both. A signal that exists only in hue does not exist in a monochrome terminal, over a
+// screen share that has eaten the colour, or for a good few per cent of the people who
+// would be looking at this floor. The tint is the alarm on top; the shape is the message.
+//
+// A desk with no reading keeps the plain edge. That is the whole of the difference between
+// "nobody has looked at this one yet" and "this one has plenty of room", which were
+// indistinguishable when the frame's colour was the only thing carrying this.
+const bezelTop = (used) => {
+  const heavy = pressure(used) === 'brimming';
+  const [left, bar, right] = heavy ? ['┏', '━', '┓'] : ['┌', '─', '┐'];
+  const label = headBadge(used);
+  if (!label) return left + bar.repeat(SCREEN_W) + right;
+  const written = `${bar} ${label} `;
+  const pad = SCREEN_W - [...written].length;
+  // A number too wide for the frame is not written into it. Cannot happen from a reading the
+  // roster has clamped to 0-100, but the frame is load bearing for every desk to the right.
+  if (pad < 0) return left + bar.repeat(SCREEN_W) + right;
+  return left + written + bar.repeat(pad) + right;
+};
+
+for (const used of [null, 0, 4, 73, 100]) {
+  if ([...bezelTop(used)].length !== [...BEZEL_TOP].length) throw new Error(`a monitor showing ${used} is not the width of a monitor`);
+}
 
 // Desk surface: a keyboard under the monitor, a mug, and a sticky note nobody
 // has read. Everything on the desk is placed relative to the monitor so the
@@ -305,10 +340,23 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   const art = (figure, monitor) => figure + ' '.repeat(MON_X - POSE_W) + monitor;
 
   const emoteFg = body.emote === 'skin' ? who.skin : st.fg;
+  // The monitor is their head, and how full it is is the colour of the frame around it.
+  //
+  // This is the only cell on a desk that was still free. The desk row is spoken for from
+  // end to end (a sticky note, the pile of paper, ten cells of keyboard, a mug), the wall
+  // above carries the tab card and whatever the desk is saying, and both text rows are
+  // full. The frame was doing nothing but being furniture, it is drawn in four places
+  // that are already one colour, and it surrounds the one part of a desk that stands for
+  // what the agent is thinking with. Nothing moves and nothing is added: a warm bezel is
+  // a desk that is filling up.
+  //
+  // The glass inside it is untouched, which is the division worth keeping: the screen says
+  // what this desk is doing and the frame says how much room it has left to do it in.
+  const bezel = headTint(pressure(person.head?.used)) || P.faint;
   const mon = [
-    { from: MON_X, to: INNER, fg: P.faint },
+    { from: MON_X, to: INNER, fg: bezel },
     { from: MON_X + 1, to: INNER - 1, fg: st.screen, bg: P.screen },
-    { from: INNER - 1, to: INNER, fg: P.faint },
+    { from: INNER - 1, to: INNER, fg: bezel },
   ];
 
   const plate = cells();
@@ -374,17 +422,17 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     blank(),
     card ? row(card.text, card.spans) : blank(),
     bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : blank(),
-    row(art(hair, BEZEL_TOP), [
+    row(art(hair, bezelTop(person.head?.used)), [
       { from: 0, to: POSE_W, fg: emoteFg },
       { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
       ...(bubble ? [{ from: TAIL_X, to: TAIL_X + 1, fg: P.bubble }] : []),
-      { from: MON_X, to: INNER, fg: P.faint },
+      { from: MON_X, to: INNER, fg: bezel },
     ]),
     row(art(body.rows[1], '│' + scr[0] + '│'), [{ from: 0, to: POSE_W, fg: who.skin }, ...mon]),
     row(art(body.rows[2], '│' + scr[1] + '│'), [{ from: 0, to: POSE_W, fg: who.shirt }, ...mon]),
     row(art(body.rows[ART_ROWS - 1], BEZEL_BOT), [
       { from: 0, to: POSE_W, fg: who.shirt },
-      { from: MON_X, to: INNER, fg: P.faint },
+      { from: MON_X, to: INNER, fg: bezel },
     ]),
     row(
       paper ? over(DESK_TOP, PAPER[paper - 1].repeat(paper + PAPER_MIN - 1), PAPER_X) : DESK_TOP,
@@ -1020,18 +1068,46 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // card, and how much is uncommitted is worth a column either way.
     const badge = !answerRoom ? dirtBadge(person.dirt?.files) : '';
     const head = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
-    const ref = [head, badge].filter(Boolean).join(' ');
-    const refRoom = ref && cols - b.w - 2 >= 16 + width(ref) + 2 ? width(ref) + 2 : 0;
+    // And how full they are, in the same column, as the same kind of chip. A row is where
+    // the compact list has to make its case, because a list of forty is exactly the floor
+    // where you cannot see a monitor bezel and do need to know which desks have room left.
+    const full = !answerRoom ? headBadge(person.head?.used) : '';
+    // The chips share this column with the tail, and the widest set that still leaves the
+    // tail sixteen cells is the one drawn.
+    //
+    // One at a time, rightmost first, rather than all or nothing over the three together.
+    // The old gate was all or nothing, and the cost of that showed up the day a third chip
+    // arrived: on a hundred-column list the branch and the pile had fitted for months and
+    // both vanished, because the set they were now measured in was ten cells wider. A
+    // reader must not lose something they had to make room for something they did not ask
+    // for, so the newest chip is the first to go and the branch is the last.
+    const chips = [
+      head ? { text: head, fg: P.faint } : null,
+      // Its own span so a conflicted checkout can say so here too, in the same tone the
+      // pile on the desk takes. Faint otherwise: this is context, not news.
+      badge ? { text: badge, fg: person.dirt?.conflicts ? SNAG_FG : P.faint } : null,
+      // In the band's own colour, which is the same colour the desk's monitor frame would
+      // be taking in the other view: one fact, one tone, whichever way you are looking at
+      // the floor.
+      full ? { text: full, fg: headTint(pressure(person.head?.used)) || P.faint } : null,
+    ].filter(Boolean);
+    let shown = [];
+    for (let keep = chips.length; keep > 0; keep -= 1) {
+      const candidate = chips.slice(0, keep);
+      if (cols - b.w - 2 >= 16 + width(candidate.map((c) => c.text).join(' ')) + 2) {
+        shown = candidate;
+        break;
+      }
+    }
+    const ref = shown.map((c) => c.text).join(' ');
+    const refRoom = ref ? width(ref) + 2 : 0;
     b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom - answerRoom)), {
       fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
       bold: Boolean(news),
     });
     if (refRoom) {
       b.gap(cols - 1 - width(ref));
-      if (head) b.add(badge ? `${head} ` : head, { fg: P.faint });
-      // Its own span so a conflicted checkout can say so here too, in the same tone the
-      // pile on the desk takes. Faint otherwise: this is context, not news.
-      if (badge) b.add(badge, { fg: person.dirt?.conflicts ? SNAG_FG : P.faint });
+      shown.forEach((chip, i) => b.add(i < shown.length - 1 ? `${chip.text} ` : chip.text, { fg: chip.fg }));
     }
     // Bracketed and accent-coloured like the buttons on a monitor and the ones on
     // the card, so the same thing looks the same in all three places.
@@ -1393,6 +1469,15 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     // is worth knowing and is why the label is `changes` and not `theirs`.
     const changes = dirtWords(person.dirt);
     if (changes) fields.push(['changes', changes, person.dirt?.conflicts ? SNAG_FG : P.ink]);
+    // How full their head is, in words and at every band, including the calm one. The
+    // floor plan is silent below half full because there is nothing to do about it from
+    // across the room; a card is the opposite case, since opening one is how you ask.
+    const full = headWords(person.head);
+    if (full) fields.push(['context', full, headTint(pressure(person.head.used)) || P.ink]);
+    // And what is doing the thinking, which comes off the same line as the percentage and
+    // is the other half of reading it: eighty per cent of a small window and eighty per
+    // cent of a large one are not the same amount of room.
+    if (person.head?.model) fields.push(['model', person.head.model, P.soft]);
     if (person.sessionId) fields.push(['session', person.sessionId, P.soft]);
   }
 

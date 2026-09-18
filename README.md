@@ -47,6 +47,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
 | `node office.mjs --no-git` | Never run git in anybody's checkout, so no desk shows uncommitted work |
+| `node office.mjs --no-context` | Never read anybody's screen for a context gauge, so no desk shows how full it is |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
@@ -488,6 +489,79 @@ unchanged. A checkout that will not answer, is not a repository, or is too slow 
 nothing rather than a guess, and that silence is remembered as an answer so the same
 directory is not re-asked every couple of seconds for the rest of the afternoon.
 
+## How full their head is
+
+Uncommitted work is how much an agent has done. This is how much room it has left to do
+any more in. A context window fills up all afternoon and then compacts, and a compaction
+is the moment an agent stops being the thing you briefed: it keeps a summary and loses
+the details, so the careful instruction you gave it two hours ago is now a sentence
+somebody paraphrased. The tell is always the same afterwards, and it is always noticed
+too late. An agent at ninety per cent is one you want to catch before it turns over, by
+letting it finish, by asking for the commit now, or by writing down the part of the brief
+you would hate to lose.
+
+The number is the message and the colour is the alarm. That split is the second attempt:
+the first version let the bands govern everything and drew nothing at all below fifty per
+cent, on the reasoning that there is nothing to do about thirty and a gauge on every desk
+would be furniture within a day. Run against a real floor of four desks, that came to one
+tinted frame two shades of dim apart from its neighbours and no number anywhere. It was a
+feature you had to be told was there in order to see it. The reasoning was right about
+noise and wrong about where noise comes from: a number written into a line that was
+already being drawn adds no cell and no colour, and reading it is optional in a way a
+coloured frame is not.
+
+So:
+
+- **The monitor's top edge carries the number**, `┌─ 73% ──────┐` in place of
+  `┌────────────┐`. That edge is the only surface on a desk that was being drawn and
+  saying nothing: the desk row is a sticky note, a pile of paper, a keyboard and a mug,
+  and the wall above it is a tab card and a speech bubble. Writing into it costs no cell
+  and leaves the desk the width it was, which is asserted rather than assumed because that
+  frame is load bearing for every desk to its right.
+- **A bare edge means nobody has looked yet**, which is the one thing worth keeping in the
+  shape rather than the colour. Under the old rule an unread desk and a desk with plenty of
+  room were identical on screen.
+- **The frame changes colour** at fifty, through rust to burnt orange, gaining lightness as
+  well as saturation at each step. The frame and not the glass, because the glass is
+  already what they are doing and the two facts have to stay separable. Under the raised
+  hand's amber at every band, which is the constraint that actually matters.
+- **A heavier edge**, `┏━ 93% ━━━━━┓`, above ninety, so the band where being able to see it
+  matters most does not depend on colour at all.
+- **A `76%` chip** next to the branch in the list view, dropped when the row needs the
+  space for somebody's raised hand instead. That is a decision about space, not about
+  whether the number was worth saying.
+- **A `context` row on the card**, in words, with the advice attached where there is any:
+  `65% full`, `81% full · not much room left`, `93% full · about to compact`. Plus a
+  `model` row, because which model is in that window is the other half of what the number
+  means, and it is on the same line of the same screen.
+- **`compacted` on the wall** when a window empties: news, in the same place as tests
+  passing and a commit landing, because it happened rather than being the case.
+
+There is no method for this either. `agent.list` carries a `tokens` field and on every
+live agent tested it was `undefined`, so the gauge is read where a human reads it: off the
+agent's own status line, on its own screen. Two families print one, `Context: 65%` in
+words and `◑ 58%` as a moon that fills up, and the number in both means used and not left
+(which is worth stating, because getting it backwards draws a fresh desk as a full one).
+It is one `agent.read --source visible` per desk, at most every 10s, four desks per pass,
+and it shares the read with the speech bubbles rather than asking twice.
+
+Two rules come with reading a screen nobody wrote for you, and `src/head.mjs` exists to
+hold both:
+
+- **Nothing but a number and a model name ever leaves that file.** A real status line is
+  whatever that agent felt like telling its owner, and on the machine this was built on
+  that included an auth countdown; elsewhere it is a spend figure, a branch, an absolute
+  path. The office draws two fields off it and the test for that asserts against the
+  parser's entire output rather than the fields it is known to have.
+- Only an anchored shape counts. A bare `94%` on a line is test coverage, a download, a
+  similarity index, and a gauge that read any of those would be a desk reporting somebody
+  else's number as the truth about an agent.
+
+`--no-context` turns it off entirely: no read, no colour, no chip, no row. It is the one
+feature that looks at every desk rather than only the ones with a hand up, which is
+exactly why it has an opt-out. An open card still quotes the screen back, because that is
+a read you asked for by opening it.
+
 ## Rooms, one per workspace
 
 A herdr session with three workspaces open is three separate bodies of work, and
@@ -771,8 +845,13 @@ it was entered, so the first sighting of an agent starts the clock.
   so the deduplication has to happen on this side; `reason` is the field that means
   anything.
 - Speech bubbles cost one `agent.read --source visible` per *stuck* desk, refreshed at
-  most every 6s. Nobody else is read until you open their desk, so a quiet office is
-  three calls every two seconds no matter how many agents you are running.
+  most every 6s. A quiet office is three calls every two seconds no matter how many
+  agents you are running.
+- The context gauge is the same call on desks that are not stuck, at most every 10s and
+  at most four desks per pass, stalest first, and off entirely under `--no-context`. The
+  two share one read: a desk with its hand up is already being looked at, and the
+  four-desk budget counts only the desks that would not have been read anyway. Two fields
+  come back off that screen and nothing else does. See "How full their head is".
 - Opening a desk reads `agent.read --source visible`: the current screen, which is
   exactly "what are you up to". For idle and done agents it also tries
   `recent_unwrapped` for more history.

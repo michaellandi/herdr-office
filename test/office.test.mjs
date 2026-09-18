@@ -480,6 +480,60 @@ test('no git runs in a directory nobody said was a checkout, or when asked not t
   }
 });
 
+test('the office reads how full a head is off the screen, unless it is told not to', async () => {
+  // The whole path, which no other test covers: a status line on a screen, through the
+  // parser, onto a desk. The reading is the office's own inference rather than anything
+  // herdr reports, and the screen is only read because something here asks for it, so
+  // this is the only place that can tell whether the two halves are wired together.
+  const GAUGE = 'Working on it\n  Opus | Context: 76% | session: 19h 03m';
+  const on = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    args: ['--once', '--detail'],
+    screenText: GAUGE,
+  });
+  try {
+    assert.equal(await on.exit(), 0, on.stderr);
+    assert.ok(on.sent('agent.read').length >= 1, 'nobody looked at a screen');
+    assert.ok(on.onScreen('76% full'), 'the card did not say how full the head was');
+    assert.ok(on.onScreen('opus'), 'the model off the status line did not reach the card');
+    // And nothing else off that line did. The trailing field here stands in for the auth
+    // countdown a real one carries, and the rule is that it never leaves the parser. It is
+    // on screen, in the panel that quotes the screen back verbatim, and that is the user
+    // looking at their own terminal and the whole point of that panel. What must not
+    // happen is it turning up anywhere the office wrote itself, so every line it appears
+    // on has to be the quoted status line and nothing else.
+    for (const line of on.screen().split('\n')) {
+      if (!line.includes('19h 03m')) continue;
+      assert.match(line, /Opus \| Context: 76% \| session: 19h 03m/, `a field off a status line reached a row the office wrote: ${line.trim()}`);
+    }
+    // This is the one feature that looks at every desk rather than only the ones with a
+    // hand up, so it is the one that had better not touch anything.
+    assert.deepEqual(on.sent('agent.send_keys'), []);
+    assert.deepEqual(on.sent('agent.prompt'), []);
+  } finally {
+    await on.stop();
+  }
+
+  const off = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    // No card, deliberately: an open card quotes the screen back and so reads one whatever
+    // this flag says, which is a thing the user asked for by opening it. The flag is about
+    // the reads nobody asked for, so the floor on its own is what has to be silent.
+    args: ['--once', '--no-context'],
+    screenText: GAUGE,
+  });
+  try {
+    assert.equal(await off.exit(), 0, off.stderr);
+    // Nothing drawn, and the stronger claim: nothing read. With the gauge off and no hand
+    // up there is no reason to look at anybody's screen, and the opt-out is only worth
+    // having if it is the reading it turns off rather than the drawing.
+    assert.deepEqual(off.sent('agent.read'), [], '--no-context read a screen anyway');
+    assert.ok(!off.onScreen('76%'), '--no-context drew a gauge anyway');
+  } finally {
+    await off.stop();
+  }
+});
+
 test('answering a raised hand sends exactly one keystroke', async () => {
   // `y` is the most dangerous key in the office: it answers a prompt the user has
   // not necessarily read, on a real agent. Sending it twice would answer the next

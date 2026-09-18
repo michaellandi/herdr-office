@@ -12,9 +12,9 @@ import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
 import { pile, PILE_MAX } from '../src/dirt.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, TRUSTS, NEWS, FILTERS, BRANCHES, DIRTS, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, TRUSTS, NEWS, FILTERS, BRANCHES, DIRTS, HEADS, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
 import { assignRooms, ROOM_TINTS } from '../src/rooms.mjs';
-import { fg } from '../src/theme.mjs';
+import { fg, HEAD, STATUS } from '../src/theme.mjs';
 
 function assertExact(view, label) {
   const { cols, rows } = view.size;
@@ -194,6 +194,130 @@ test('a pile of uncommitted work, at every size and every zoom', () => {
       assertExact(viewOf({ people: many, cols, rows, detail: DETAILS[3][1] }), `dirt=${label} 40 +card ${cols}x${rows}`);
     }
   }
+});
+
+test('a head filling up, at every size and every zoom', () => {
+  // How full a head is is drawn as the colour of a monitor frame, plus one heavier line at
+  // the top of the scale, plus a chip in the compact list and two rows on a card. The
+  // colour cannot move a cell, but the other three can, and the number behind all of them
+  // changes under the office while it is watching. So every band is rendered at every
+  // width rather than the two the demo happens to produce.
+  for (const head of HEADS) {
+    const label = head ? `${head.used}%` : 'unread';
+    const floor = officeRoster().people.map((p) => ({ ...p, head, branch: 'feature/sso', repo: 'herdr-office', dirt: { files: 148, conflicts: 1 } }));
+    const many = officeRoster(new Array(40).fill('working')).people.map((p) => ({ ...p, head, branch: 'feature/sso', repo: 'herdr-office', dirt: { files: 148, conflicts: 1 } }));
+    for (const [cols, rows] of SIZES) {
+      for (const zoom of ['auto', 'list', 'cubicle']) {
+        assertExact(viewOf({ people: floor, cols, rows, zoom }), `head=${label} zoom=${zoom} ${cols}x${rows}`);
+      }
+      // Two more rows on the card, and the panel's height is what the floor above it is
+      // measured against.
+      assertExact(viewOf({ people: floor, cols, rows, detail: { id: floor[0].id, read: null } }), `head=${label} +card ${cols}x${rows}`);
+      // Forty rows, each one carrying a branch, a count and a chip in the same column,
+      // which is the case where that column has to give way rather than overflow.
+      assertExact(viewOf({ people: many, cols, rows }), `head=${label} 40 ${cols}x${rows}`);
+      assertExact(viewOf({ people: many, cols, rows, detail: DETAILS[3][1] }), `head=${label} 40 +card ${cols}x${rows}`);
+    }
+  }
+});
+
+test('a full head is legible with the colour taken away', () => {
+  // A signal carried only in hue is no signal at all in a monochrome terminal, over a
+  // screen share that has crushed the palette, or for a fair number of the people who
+  // would be looking at this floor. So the number is written into the frame and the top
+  // band thickens it, and both are asserted on the stripped text, because a test that read
+  // the escape codes would pass for a frame nobody could read. This is the assertion that
+  // fails if this feature ever goes back to being a tint and nothing else.
+  const at = (used) => stripAnsi(
+    renderFrame(viewOf({ people: officeRoster(['working']).people.map((p) => ({ ...p, head: { used, model: 'opus' } })), cols: 105, rows: 45 })).lines.join('\n'),
+  );
+  assert.match(at(93), /┏━ 93% ━+┓/, 'a head about to compact draws the same monitor as an empty one');
+  // Every band below it says the number in a frame of ordinary weight.
+  for (const used of [0, 31, 58, 81]) {
+    assert.ok(!/┏━+┓/.test(at(used)), `${used}% drew the monitor a full head gets`);
+    assert.match(at(used), new RegExp(`┌─ ${used}% ─+┐`), `${used}% did not say so on its monitor`);
+  }
+  // A desk nobody has read yet keeps the bare frame, which is the difference between "no
+  // room to spare" and "no reading" being in the shape rather than only in the colour.
+  const unread = stripAnsi(
+    renderFrame(viewOf({ people: officeRoster(['working']).people.map((p) => ({ ...p, head: null })), cols: 105, rows: 45 })).lines.join('\n'),
+  );
+  assert.match(unread, /┌─+┐/, 'an unread desk lost its monitor');
+  assert.ok(!/┌─ \d+% /.test(unread), 'a desk nobody has read claimed a number anyway');
+  // The glass is the status, not the pressure: a working desk is still green inside a
+  // frame that has gone warm. Checked in colour, since that is the half that could
+  // quietly have been overwritten.
+  const hot = renderFrame(viewOf({ people: officeRoster(['working']).people.map((p) => ({ ...p, head: { used: 93, model: 'opus' } })), cols: 105, rows: 45 })).lines.join('\n');
+  assert.ok(hot.includes(fg(HEAD.brimming)), 'the frame never took the band colour');
+  assert.ok(hot.includes(fg(STATUS.working.screen)), 'a full head repainted the screen behind it');
+});
+
+test('the frame, the chip and the card all say the same thing', () => {
+  // One reading, three surfaces, and the one that matters here is the card: it is the only
+  // place the number is written out, so it is the only place a reader can check what the
+  // colour of a monitor frame was trying to tell them.
+  const people = officeRoster().people.map((p, i) => ({
+    ...p,
+    branch: 'main',
+    repo: 'herdr-office',
+    head: [null, { used: 22, model: 'opus' }, { used: 76, model: 'opus-4.8' }][i % 3],
+  }));
+  const list = renderFrame(viewOf({ people, cols: 200, rows: 60, zoom: 'list' })).lines.map(stripAnsi).join('\n');
+  assert.match(list, /@main 76%/, 'the chip went missing');
+  // Every reading, not only the ones worth worrying about: the number is what the office
+  // knows and the colour is what it thinks about it, and only the second one is an opinion.
+  assert.match(list, /@main 22%/, 'a desk with room to spare would not say how much');
+  const full = people.find((p) => p.head?.used === 76);
+  const card = renderFrame(viewOf({ people, cols: 200, rows: 60, detail: { id: full.id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.match(card, /context\s+76% full · not much room left/);
+  assert.match(card, /model\s+opus-4\.8/);
+  // And a card says it even when the floor would not: you opened this one to ask.
+  const calm = people.find((p) => p.head?.used === 22);
+  const quiet = renderFrame(viewOf({ people, cols: 200, rows: 60, detail: { id: calm.id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.match(quiet, /context\s+22% full/);
+  // And says only that. The clause on the end of the row is for a reading somebody might
+  // act on, and there is nothing to do about twenty-two per cent.
+  assert.ok(!quiet.includes('22% full ·'), 'a desk with room to spare was given advice about it');
+  // A desk nobody has read yet has no rows at all rather than an apology for one.
+  const unread = people.find((p) => !p.head);
+  const silent = renderFrame(viewOf({ people, cols: 200, rows: 60, detail: { id: unread.id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.ok(!/\bcontext\b/.test(silent), 'a desk with no reading still had a context row');
+});
+
+test('a new chip in the list never costs a reader the chips they already had', () => {
+  // The three chips share one column with the row's tail and the gate on that column used
+  // to be all or nothing over the set. Which meant the day the gauge arrived, every list
+  // narrow enough to fit `@main +3` and not `@main +3 82%` lost the branch and the pile
+  // too: two things a reader had for months, gone to make room for a third they had not
+  // asked for. So they are dropped one at a time, rightmost first.
+  const people = officeRoster(['idle']).people.map((p) => ({
+    ...p,
+    branch: 'main',
+    repo: 'herdr-office',
+    dirt: { files: 3, conflicts: 0 },
+    head: { used: 82, model: 'opus' },
+  }));
+  const row = (cols) => renderFrame(viewOf({ people, cols, rows: 40, zoom: 'list' })).lines
+    .map(stripAnsi).find((l) => /IDLE/.test(l)) || '';
+  const CHIPS = ['@main', '+3', '82%'];
+  const widths = [];
+  for (let cols = 60; cols <= 200; cols += 1) widths.push([cols, row(cols)]);
+
+  // Whatever fits is a prefix of that list, at every width. Which is the actual guarantee:
+  // there is no width where the gauge is on a row and the branch it displaced is not.
+  for (const [cols, r] of widths) {
+    const on = CHIPS.map((c) => r.includes(c));
+    const n = on.filter(Boolean).length;
+    assert.deepEqual(on, CHIPS.map((_, i) => i < n), `at ${cols} the chips were not a prefix: ${r.trim()}`);
+  }
+  // Not asserted: that chips only ever arrive as the row gets wider. They do not, and that
+  // is the row working as built rather than a bug to pin down here. The agent column and the
+  // tab column switch on at their own widths and spend the same cells, so a row at 65 can
+  // show a chip fewer than one at 63 and be right about it. The prefix is the guarantee.
+  assert.ok(widths.some(([, r]) => CHIPS.every((c) => r.includes(c))), 'no width fitted all three chips');
+  // And a width in the middle that keeps the branch and drops the gauge, or the prefix above
+  // is being satisfied by a row that simply never degrades.
+  assert.ok(widths.some(([, r]) => r.includes('@main') && !r.includes('82%')), 'no width ever dropped the gauge');
 });
 
 test('the pile, the badge and the card all say the same thing', () => {

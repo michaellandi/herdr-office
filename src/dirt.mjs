@@ -96,12 +96,16 @@ export function countDirt(stdout) {
   return { files, conflicts };
 }
 
-// The pile of paper on a desk, in cells.
+// The pile of paper on a desk, as a step on a scale: 0 for a clean checkout, then one
+// step per order of magnitude of work. How big a step is drawn is the renderer's
+// business (src/render.mjs turns a step into a width and a glyph); this is only the
+// judgement about how much counts as a lot.
 //
-// Buckets rather than a number, because the desk art has no room for digits and does
-// have room for a pile that visibly grows: one cell is "they have touched something",
-// five is "this is a large change and somebody is going to have to read it". The exact
-// number is a row in the card, which is where you go when the pile makes you curious.
+// Steps rather than a number, because the desk art has no room for digits and does have
+// room for a pile that visibly grows: the first step is "they have touched something",
+// the last is "this is a large change and somebody is going to have to read it". The
+// exact number is a row in the card, which is where you go when the pile makes you
+// curious.
 //
 // Roughly doubling, which is the shape of the question. The difference between one file
 // and three matters; the difference between forty and forty-five does not, and a scale

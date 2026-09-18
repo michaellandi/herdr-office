@@ -212,13 +212,13 @@ test('the pile, the badge and the card all say the same thing', () => {
   // one is a glyph the desk furniture does not use, so a single cell cannot be read as
   // another mug.
   const desks = renderFrame(viewOf({ people, cols: 200, rows: 60 })).lines.map(stripAnsi).join('\n');
-  assert.match(desks, /▄  ▃▃ /, 'a small pile');
-  assert.match(desks, /▄  █████/, 'a large one');
+  assert.match(desks, /▄  ▆▆▆ /, 'a small pile');
+  assert.match(desks, /▄  ██████/, 'a large one');
   // The smallest pile there is, which is the case that has to survive: one cell, in a
   // glyph the sticky note and the mug do not use, clear of both.
   const one = renderFrame(viewOf({ people: people.map((p) => ({ ...p, dirt: { files: 1, conflicts: 0 } })), cols: 200, rows: 60 })).lines.map(stripAnsi).join('\n');
-  assert.match(one, /▄  ▁ /, 'the smallest pile went missing');
-  assert.ok(!/▄ ▄/.test(one), 'a pile drawn in the desk furniture\'s own glyph is furniture');
+  assert.match(one, /▄  ▅▅ /, 'the smallest pile went missing');
+  assert.ok(!/▄ ▄/.test(one) && !/▄  ▃/.test(one), 'a pile drawn in the desk furniture\'s own glyph is furniture');
 
   // In the compact list, the number itself, next to the branch it belongs to. A clean
   // checkout says nothing rather than +0.

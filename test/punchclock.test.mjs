@@ -137,3 +137,167 @@ test('nonsense cannot bend the clock', () => {
   c.observe([{ id: 'p2', status: 'working' }], now);
   assert.equal(c.desk('p2', now).onShift, 0);
 });
+
+/* ------------------------------------------------------------- across restarts */
+
+test('a restart continues the morning instead of starting a new one', () => {
+  // The reason persistence exists. The whiteboard is the only part of the office that
+  // says what happened rather than what is happening, and reopening the pane at 11:20
+  // used to reset it to "open since 11:20 · worked 0s".
+  let now = 9 * 3600e3;
+  const first = new Clocks(() => now);
+  first.observe([desk('p1', 'working', now)], now);
+  now += 600e3;
+  first.observe([desk('p1', 'blocked', now)], now);
+  first.answer();
+  now += 120e3;
+  const saved = first.snapshot(now);
+
+  // Quit, five minutes go by, reopen. The same desk is still there, still blocked
+  // since the same moment.
+  now += 300e3;
+  const second = new Clocks(() => now);
+  second.restore(saved, now);
+  second.observe([desk('p1', 'blocked', 9 * 3600e3 + 600e3)], now);
+  const out = second.office(now);
+  // Seventeen minutes, not the twelve the office was actually watching. `open` is
+  // wall clock from when the day started, which is what "open since 09:00" claims and
+  // all it claims; the buckets below are the part that is only ever watched time.
+  assert.equal(out.open, 17 * 60e3, 'open since 09:00, not since the reopen');
+  assert.equal(out.worked, 600e3, 'the ten minutes of work survived');
+  assert.equal(out.waiting, 120e3, 'and so did the two minutes of waiting');
+  assert.equal(out.hands, 1);
+  assert.equal(out.answers, 1);
+  assert.equal(out.desks, 1, 'the desk is on the floor');
+  assert.equal(out.closed, 0, 'and is not also counted as having been and gone');
+});
+
+test('the five minutes the office was shut belong to nobody', () => {
+  // The one thing a naive restore gets wrong. The desk's `since` predates the
+  // restart, so closing its first interval off that timestamp would credit it with
+  // the gap AND with the time already banked before the save.
+  let now = 0;
+  const first = new Clocks(() => now);
+  first.observe([desk('p1', 'working', 0)], now);
+  now = 600e3;
+  const saved = first.snapshot(now);
+  assert.equal(saved.closed.spent.working, 600e3);
+
+  now = 900e3; // five minutes shut
+  const second = new Clocks(() => now);
+  second.restore(saved, now);
+  second.observe([desk('p1', 'working', 0)], now);
+  now = 960e3; // one more minute watched
+  second.observe([desk('p1', 'idle', now)], now);
+  const out = second.office(now);
+  assert.equal(out.worked, 660e3, 'ten minutes banked plus one watched, and not the gap');
+  const total = Object.values(out.spent).reduce((a, b) => a + b, 0);
+  assert.ok(total <= out.open, `${total}ms accounted for cannot exceed the ${out.open}ms session`);
+});
+
+test('a desk that does not come back keeps its time anyway', () => {
+  // Everything is folded into the closed totals on the way out, because a pane id
+  // means nothing after a restart. The work happened whether or not the pane did.
+  let now = 0;
+  const first = new Clocks(() => now);
+  first.observe([desk('p1', 'working', 0), desk('p2', 'blocked', 0)], now);
+  now = 300e3;
+  const second = new Clocks(() => now);
+  second.restore(first.snapshot(now), now);
+  second.observe([], now);
+  const out = second.office(now);
+  assert.equal(out.worked, 300e3);
+  assert.equal(out.waiting, 300e3);
+  assert.equal(out.hands, 1);
+  assert.equal(out.desks, 0);
+});
+
+test('reading the snapshot does not spend anything', () => {
+  // It runs on a timer while the office is open, so it has to be as safe to call as
+  // `office` is: banking the open interval would double it on the next tick.
+  let now = 0;
+  const c = new Clocks(() => now);
+  c.observe([desk('p1', 'working', 0)], now);
+  now = 60e3;
+  const once = c.snapshot(now);
+  for (let i = 0; i < 5; i += 1) c.snapshot(now);
+  assert.deepEqual(c.snapshot(now), once);
+  assert.equal(c.office(now).worked, 60e3);
+});
+
+test('a snapshot survives the trip through JSON', () => {
+  // It goes to disk and comes back, so anything that is a Map, a Set or an undefined
+  // in here is a number that quietly becomes zero on the next open.
+  let now = 1000;
+  const c = new Clocks(() => now);
+  c.observe([desk('p1', 'working', 1000), desk('p2', 'blocked', 1000)], now);
+  now = 61000;
+  const saved = c.snapshot(now);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved)), saved);
+});
+
+test('a mangled snapshot loses a field, not the morning', () => {
+  const base = () => new Clocks(() => 5000);
+  assert.equal(base().restore(null, 5000), false);
+  assert.equal(base().restore('nope', 5000), false);
+  assert.equal(base().restore(42, 5000), false);
+
+  // Missing everything but `opened`, which is the field a person actually reads.
+  const partial = base();
+  partial.restore({ opened: 1000 }, 5000);
+  assert.equal(partial.office(5000).open, 4000);
+  assert.equal(partial.office(5000).worked, 0);
+
+  // Negative, NaN, string and object numbers are all dropped rather than added.
+  const junk = base();
+  junk.restore(
+    {
+      opened: 'yesterday',
+      answers: -5,
+      closed: { spent: { working: 'lots', blocked: NaN, idle: -1 }, hands: {}, longest: undefined, desks: Infinity },
+    },
+    5000,
+  );
+  const out = junk.office(5000);
+  assert.equal(out.open, 0, 'an unreadable `opened` leaves the office opening now');
+  assert.equal(out.answers, 0);
+  assert.equal(out.worked, 0);
+  assert.equal(out.hands, 0);
+  assert.equal(out.longest, 0);
+  assert.equal(out.closed, 0);
+});
+
+test('a stored open time in the future is ignored', () => {
+  // A clock that moved between runs, or a state file copied off another machine.
+  // "open since" is rendered as a duration, and a negative one reads as a bug.
+  const c = new Clocks(() => 1000);
+  c.restore({ opened: 999999 }, 1000);
+  assert.ok(c.office(1000).open >= 0);
+  assert.equal(c.office(1000).open, 0);
+});
+
+test('a hand already up at the reopen is not a second hand', () => {
+  // The defect this rule was written for. Every blocked desk on the floor is a desk
+  // the reopened office has never met, so it counted each one as a fresh hand and the
+  // whiteboard said `hands 2` about one prompt nobody had answered yet.
+  let now = 0;
+  const first = new Clocks(() => now);
+  first.observe([desk('p1', 'blocked', 0)], now);
+  assert.equal(first.office(now).hands, 1);
+  now = 60e3;
+  const saved = first.snapshot(now);
+
+  now = 90e3;
+  const second = new Clocks(() => now);
+  second.restore(saved, now);
+  // Same prompt, same `since`, still waiting.
+  second.observe([desk('p1', 'blocked', 0)], now);
+  assert.equal(second.office(now).hands, 1, 'the same prompt is the same hand');
+
+  // A prompt raised after the reopen is genuinely new and does count, which is the
+  // half of this that a blanket "never count the first hand" would have got wrong.
+  now = 120e3;
+  second.observe([desk('p1', 'working', 100e3)], now);
+  second.observe([desk('p2', 'blocked', 110e3)], now);
+  assert.equal(second.office(now).hands, 2);
+});

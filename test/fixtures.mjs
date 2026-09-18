@@ -6,7 +6,7 @@
 import { Roster } from '../src/roster.mjs';
 import { stripAnsi } from '../src/text.mjs';
 import { assignRooms } from '../src/rooms.mjs';
-import { describeDetection } from '../src/summary.mjs';
+import { describeDetection, summarize } from '../src/summary.mjs';
 
 export { stripAnsi };
 
@@ -37,7 +37,7 @@ export function officeRoster(statuses = STATUSES) {
   const roster = new Roster();
   roster.setWorkspaces([{ workspace_id: 'w1', label: 'main' }]);
   roster.setTabs([
-    { tab_id: 'w1:t1', label: 'token-refresh' },
+    { tab_id: 'w1:t1', label: 'cache-warmer' },
     { tab_id: 'w1:t2', label: 'a-really-long-tab-name-that-overflows-its-card' },
     { tab_id: 'w1:t3', label: '' },
   ]);
@@ -81,7 +81,7 @@ export function roomyRoster(plan = [1, 1, 1, 2, 2, 3, 3], statuses = STATUSES) {
   const roster = new Roster();
   roster.setWorkspaces(WS_NAMES.map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1 })));
   roster.setTabs([
-    { tab_id: 't1', label: 'token-refresh', number: 1 },
+    { tab_id: 't1', label: 'cache-warmer', number: 1 },
     { tab_id: 't2', label: 'a-really-long-tab-name-that-overflows-its-card', number: 2 },
     { tab_id: 't3', label: '', number: 3 },
   ]);
@@ -161,6 +161,18 @@ export const DETAILS = [
   ['no choice yet', detailFor('w1:p1')],
   ['y/n', detailFor('w1:p1', { shape: 'y/n', approve: ['y'], deny: ['n'] })],
   ['unrecognised prompt', detailFor('w1:p1', { shape: 'unknown', approve: ['enter'], deny: ['esc'] })],
+  // A prompt that also offers a standing permission, which is a third row under the
+  // buttons and the longest text in the panel: the option's own wording, which comes
+  // off somebody's screen and can be as long as it likes.
+  [
+    'a standing grant on offer',
+    detailFor('w1:p1', {
+      shape: 'menu',
+      approve: ['1'],
+      deny: ['esc'],
+      always: { keys: ['2'], label: "Yes, and don't ask again for rm commands in /Users/somebody/a-rather-long-project-path" },
+    }),
+  ],
   ['desk has gone', detailFor('w1:pGONE', { shape: 'y/n', approve: ['y'], deny: ['n'] })],
   // A full-length explanation on a desk that is also waiting on an answer, which is
   // the panel's tightest case: the explanation is longer than a short pane has rows
@@ -168,6 +180,22 @@ export const DETAILS = [
   [
     'long explanation',
     { ...detailFor('w1:p1', { shape: 'y/n', approve: ['y'], deny: ['n'] }), detection: LIVE_DETECTION },
+  ],
+  // A full said block, which is the tallest the summary section gets: three lines of
+  // an agent talking, the second and third indented under the label rather than
+  // repeating it. Every line here is longer than a narrow panel, so this is also the
+  // case where an indent and a truncation have to agree about the width.
+  [
+    'three said lines',
+    {
+      ...detailFor('w1:p1'),
+      summary: summarize({ status: 'idle', title: 'cache warmer' }, [
+        'I have finished refactoring the cache warming path and split it in two.',
+        'The retry loop now backs off instead of hammering the endpoint every second.',
+        'Two of the integration tests were relying on the old timing, so I updated them.',
+        'Next I want to check whether the cache invalidation still behaves the same way.',
+      ]),
+    },
   ],
 ];
 
@@ -258,6 +286,21 @@ export const COMPOSES = [
   ['sending', { scope: 'one', id: 'w1:p3', name: 'Cass', text: 'rebase onto main', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
   ['nothing typed yet', { scope: 'one', id: 'w1:p3', name: 'Cass', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: 'nothing typed yet' }],
   ['a very long name', { scope: 'one', id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', text: 'go', to: [{ id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  // Answering a question in words. The extra row is the question itself, which came
+  // off somebody's screen and is therefore any length at all, so both a short ask
+  // and one far wider than the panel are here.
+  ['answering, nothing typed', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'shell requires approval', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering in words', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'Which approach do you want?', text: 'use the existing helper', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering a very long question', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'Do you want to overwrite the whole configuration file and restart everything, or keep the current one and merge the differences by hand?', text: LONG, to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering, sending', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'shell requires approval', text: 'the second one', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
+];
+
+// A standing permission armed and waiting on the confirm. The label is the menu's
+// own words, so it is as long as somebody else's screen made it.
+export const TRUSTS = [
+  ['none', null],
+  ['armed', { id: 'w1:p1', name: 'Ash', keys: ['2'], label: "Yes, and don't ask again for rm commands" }],
+  ['armed with a long label', { id: 'w1:p1', name: 'Ash', keys: ['2'], label: "Yes, and don't ask again for rm commands in /Users/somebody/a-rather-long-project-path that keeps going" }],
 ];
 
 // News over a desk: every kind, plus the two that are only a rendering problem (a
@@ -284,6 +327,21 @@ export const BRANCHES = [
   null,
 ];
 
+// Uncommitted work, as the reader hands it over: unread, clean, every step of the
+// pile, a conflicted tree (which is drawn in a different colour), and a number far
+// past the badge's cap. Applied to a floor the way branches are, since what the
+// renderer reads is the field rather than the cache behind it.
+export const DIRTS = [
+  null,
+  { files: 0, conflicts: 0 },
+  { files: 1, conflicts: 0 },
+  { files: 4, conflicts: 0 },
+  { files: 9, conflicts: 2 },
+  { files: 17, conflicts: 0 },
+  { files: 148, conflicts: 1 },
+  { files: 100000, conflicts: 0 },
+];
+
 export const FILTERS = [
   ['off', { filter: '', filtering: false }],
   ['field open, empty', { filter: '', filtering: true }],
@@ -292,10 +350,10 @@ export const FILTERS = [
   ['matches nobody', { filter: 'zzzz', filtering: false }],
   ['matches nobody, still typing', { filter: 'zzzz', filtering: true }],
   ['a silly long filter', { filter: 'a-filter-nobody-would-ever-type-but-here-we-are', filtering: true }],
-  ['a filter with spaces', { filter: 'group resolver', filtering: false }],
+  ['a filter with spaces', { filter: 'log parser', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -325,5 +383,6 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // tests were all written against.
     stats,
     shift,
+    trust,
   };
 }

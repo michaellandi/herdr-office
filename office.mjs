@@ -9,6 +9,8 @@
 //   node office.mjs --once     render one frame and exit (handy for diffing art)
 //   node office.mjs --quiet    no toast when somebody starts waiting on you
 //   node office.mjs --no-title leave the window title alone
+//   node office.mjs --no-graphics  text only, no pixel charts
+//   node office.mjs --no-git   do not run git in anybody's checkout
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -20,14 +22,18 @@ import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mj
 import { width } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
 import { readProcessTable, paneProcesses } from './src/ps.mjs';
-import { WATCH_PATTERN, eventFromMatch } from './src/events.mjs';
+import { WATCH_PATTERN, eventFromMatch, newsFromEvent } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
 import { Clocks } from './src/punchclock.mjs';
+import { load as loadState, save as saveState } from './src/state.mjs';
 import { branchFromList } from './src/branches.mjs';
+import { readDirt } from './src/dirt.mjs';
+import { Graphics, graphicsLog } from './src/graphics.mjs';
+import { timeChart, attentionStrip } from './src/charts.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -41,6 +47,20 @@ const NOTIFY = !argv.has('--quiet');
 // exactly why it is opt-out: it is somebody else's window, and a title is a
 // shared surface that other things may also care about.
 const TITLE = !argv.has('--no-title');
+// Pixels, in the two places a chart beats a sentence. Opt-out for the same reason
+// toasts are: the pane is asked once whether it can draw at all, and a terminal
+// that says no is never asked again, so there is nothing here for a default to
+// break. What it is opt-out *for* is taste: some people want a terminal to be
+// only text, and that is a preference, not a capability.
+const GRAPHICS = !argv.has('--no-graphics');
+// Whether the office may run `git status` in the checkouts its desks are sitting in, to
+// say how much is uncommitted. Opt-out rather than opt-in because it is the answer to
+// the question people actually have about a floor of agents, and because what it runs is
+// a read that cannot take a lock (see src/dirt.mjs). Opt-out at all because it is the
+// one thing the office does that is not a socket call: somebody watching agents on a
+// machine where git is expensive, or who would simply rather this pane never shelled
+// out into their repositories, gets to say no in one flag.
+const GIT = !argv.has('--no-git');
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -53,6 +73,11 @@ const OWN_PANE = process.env.HERDR_PANE_ID || '';
 
 const ANIM_MS = 320;
 const POLL_MS = 2000;
+// How often the whiteboard is written to disk. Not on every observe, which runs twice
+// a second and would put a file write on the poll path for numbers nobody has read
+// yet. Fifteen seconds is the most a crash can cost, measured in whiteboard rather
+// than in anything that matters, and the ordinary exit writes on the way out anyway.
+const SAVE_MS = 15000;
 const DETAIL_MS = 2500;
 // A bubble is one screen read per stuck desk, so it is cheap but not free: only
 // blocked desks are read, and only when their bubble has gone stale.
@@ -77,6 +102,33 @@ const CMD_PER_PASS = 4;
 // trade for a wall display.
 const BRANCH_MS = 30000;
 const BRANCH_PER_PASS = 2;
+// The pile of paper on a desk is one `git status` per checkout, so it is throttled and
+// capped the same way branches are, and cached against the same key. Twice as often as a
+// branch, because it moves the other way round: a branch changes once an afternoon and
+// the number of uncommitted files changes every time an agent writes a file, which on a
+// working floor is constantly. Fifteen seconds is close enough for a wall display and
+// far enough apart that the subprocess cost is nothing anybody can feel.
+const DIRT_MS = 15000;
+const DIRT_PER_PASS = 2;
+// How much of a desk's screen the server matches the watchlist against, counted up
+// from the bottom. This was 8, on the reasoning that news is the last thing printed,
+// and 8 is almost exactly wrong for the panes this office watches: an agent in a
+// full-screen UI keeps its input box and its hints at the bottom of the screen, so the
+// last eight lines are chrome and the test run is above them. Measured against a live
+// agent pane, a phrase plainly on screen produced no event at 4 or 8 lines and fired at
+// 12, which puts that pane's chrome at about ten rows.
+//
+// So the window has to clear the chrome, and 24 is that with room for another agent's
+// UI being taller. It is not the whole screen, deliberately. The match is edge
+// triggered: the server fires when the window starts matching and stays quiet while it
+// still does, so the wider the window the longer one old failure sitting on screen
+// suppresses everything after it. A window that scrolls is what keeps news arriving.
+//
+// Where exactly the sweet spot is between those two was not settled, and could not be
+// on the pane available to measure from: it renders in a way that kept the test phrase
+// on screen throughout, so the rollover timings from it say more about that agent's UI
+// than about the server. 24 is a reasoned floor, not a measured optimum.
+const MATCH_LINES = 24;
 
 // Global subscriptions: these need no pane_id. pane.agent_status_changed is
 // per-pane, so it gets added for every desk we know about and re-subscribed
@@ -102,6 +154,13 @@ const roster = new Roster();
 const clocks = new Clocks();
 let api = null;
 let events = null;
+// The pixel layers, when the pane can take them. Null the whole time in --demo and
+// --once, which have no socket and no pane to draw into respectively.
+let graphics = null;
+// The timer that writes the punch clock down. Null in --demo, whose numbers are made
+// up and must never land in the state file, and in --once, which is over before the
+// first tick would fire.
+let saveTimer = null;
 let selectedId = null;
 // The filter. `text` is what is typed, `editing` is whether the field has the
 // keyboard: an accepted filter keeps narrowing the floor after you have stopped
@@ -147,6 +206,11 @@ function enterTerminal() {
   process.stdin.on('data', onInput);
   process.stdout.on('resize', () => {
     prevLines = [];
+    // A resize moves the rectangles the pixel layers were placed into, so whatever
+    // is on screen is in the wrong place until the redraw lands. Uncovering the rows
+    // means the text comes back first and the picture goes over it again a frame
+    // later, rather than a stale chart sitting over a floor that has moved.
+    covered = new Set();
     draw();
   });
 }
@@ -157,24 +221,47 @@ function leaveTerminal() {
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 }
 
+// Pick up this morning, if there was one. Called before the first `observe`, because
+// `restore` sets the floor that stops the desks about to walk in from being credited
+// with time already banked. Demo numbers are invented, so the demo never reads or
+// writes the real file.
+function openTheBooks() {
+  if (DEMO) return;
+  const saved = loadState();
+  if (saved) clocks.restore(saved);
+}
+
+// The other half. Synchronous and failure-swallowing all the way down, which is what
+// lets `quit` call it without spending any of its half-second budget.
+function closeTheBooks() {
+  if (DEMO) return;
+  saveState(clocks.snapshot());
+}
+
 function quit(code = 0, msg) {
   if (stopped) return;
   stopped = true;
   clearInterval(anim);
   clearInterval(poll);
+  clearInterval(saveTimer);
+  // Before the socket goes, and before anything that could throw. Everything since
+  // the last tick of SAVE_MS would otherwise be the one part of the day that the
+  // office watched and then forgot, and quitting is exactly when it happens.
+  closeTheBooks();
   events?.close();
   leaveTerminal();
   if (msg) process.stderr.write(`${msg}\n`);
-  // The socket stays open just long enough to give the window title back, then
-  // goes regardless. Half a second is the whole budget: an office that would not
-  // quit because a title would not clear is worse than a stale title.
+  // The socket stays open just long enough to give the window title back and take
+  // the office's pixels down with it, then goes regardless. Half a second is the
+  // whole budget for both: an office that would not quit because a title would not
+  // clear is worse than a stale title, and the same goes for a leftover chart.
   const done = () => {
     api?.close();
     process.exit(code);
   };
   const bail = setTimeout(done, 500);
   bail.unref?.();
-  clearTitle()
+  Promise.all([clearTitle(), graphics?.clear() ?? Promise.resolve()])
     .catch(() => {})
     .then(() => {
       clearTimeout(bail);
@@ -225,14 +312,23 @@ function view() {
     busy,
     hire,
     compose,
+    trust,
   };
 }
 
 let hitboxes = [];
 let grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
 
+// Screen rows currently hidden behind a pixel layer. The renderer still produces
+// their text and the diff below still remembers it; the bytes are just never
+// written. An image occludes the cells underneath it rather than compositing with
+// them, so writing that row again would punch the text back through the middle of
+// the picture, and at 320ms the office would flicker between the two.
+let covered = new Set();
+
 function draw() {
-  const rendered = renderFrame(view());
+  const model = view();
+  const rendered = renderFrame(model);
   hitboxes = rendered.hitboxes;
   grid = rendered.grid;
   const { cols, rows } = size();
@@ -240,13 +336,62 @@ function draw() {
   for (let i = 0; i < rows; i += 1) {
     const line = rendered.lines[i] ?? '';
     if (prevLines[i] === line) continue;
+    // Remembered either way, so the diff stays honest about what the office has
+    // decided this row should say, whether or not it was allowed to say it.
+    prevLines[i] = line;
+    if (covered.has(i)) continue;
     // Only clear the tail when there is a tail. On a line that already fills the
     // row the cursor is sitting in the last column with a pending wrap, and an
     // erase-to-end-of-line there eats the character we just drew.
     out += `\x1b[${i + 1};1H${line}${width(line) < cols ? '\x1b[K' : ''}`;
-    prevLines[i] = line;
   }
   if (out) process.stdout.write(out);
+  paintPixels(model, rendered.regions);
+}
+
+// Turns the rectangles renderFrame volunteered into pixel layers. Runs after the
+// text has gone out, never before: the cells have to be on the screen before an
+// image is placed over them, or the first frame draws the picture and then paints
+// the floor on top of it.
+//
+// The mapping lives here rather than in src/graphics.mjs because this is the only
+// file that knows what the office is looking at. graphics.mjs moves pictures; it
+// has no opinion about what they are of.
+function paintPixels(model, regions) {
+  const caps = graphics?.caps;
+  const next = new Set();
+  graphicsLog(
+    `paint: graphics=${Boolean(graphics)} caps=${Boolean(caps)} visible=${caps?.visible} ` +
+      `regions=[${(regions || []).map((r) => `${r.kind} ${r.w}x${r.h}+${r.x},${r.y}`).join('; ') || 'none'}]`,
+  );
+  if (caps && caps.visible) {
+    const frames = [];
+    for (const region of regions || []) {
+      const drawn =
+        region.kind === 'strip'
+          ? // The WHOLE roster, not the filtered floor. The strip's entire job is to
+            // say what is not on screen, and a filter is the commonest reason for
+            // something not being on screen.
+            attentionStrip(roster.people, selectedId, region.w, region.h, caps)
+          : region.kind === 'board'
+            ? timeChart(model.stats, region.w, region.h, caps)
+            : null;
+      // A chart that decided its rectangle was too small to say anything returns
+      // null, and then the text it would have replaced simply stays.
+      if (!drawn) {
+        graphicsLog(`paint: ${region.kind} declined its ${region.w}x${region.h} rectangle`);
+        continue;
+      }
+      frames.push({ id: `office.${region.kind}`, region, ...drawn });
+      for (let y = region.y; y < region.y + region.h; y += 1) next.add(y);
+    }
+    graphics.sync(frames);
+  }
+  // A row that has just come out from behind a layer has to be written again. It was
+  // deliberately skipped while it was covered, so the diff believes the terminal
+  // already has it and would otherwise leave the picture sitting there.
+  for (const y of covered) if (!next.has(y)) prevLines[y] = null;
+  covered = next;
 }
 
 /* --------------------------------------------------------------------- data */
@@ -360,6 +505,29 @@ async function refreshBranches() {
   if (!ONCE) draw();
 }
 
+// How much is uncommitted in each checkout, via `git status` (see src/dirt.mjs for what
+// is run and why it cannot take a lock). Cached per working directory like the branch,
+// stalest first, a couple at a time.
+//
+// Only ever asked about a directory `worktree.list` has already said is a repository.
+// That is not an optimisation, it is the rule that keeps this contained: the office
+// never runs git speculatively in a directory somebody's pane happens to be sitting in,
+// only in checkouts the server has already told it are checkouts.
+async function refreshDirt() {
+  if (!GIT) return;
+  const dirs = [...new Set(roster.people.filter((p) => p.cwd && p.repo).map((p) => p.cwd))]
+    .filter((cwd) => roster.dirtAge(cwd) >= DIRT_MS)
+    .sort((a, b) => roster.dirtAge(b) - roster.dirtAge(a))
+    .slice(0, DIRT_PER_PASS);
+  if (!dirs.length) return;
+  for (const cwd of dirs) {
+    // readDirt always resolves: a checkout that will not answer is recorded as having
+    // nothing to say, so it is not asked again on the next pass.
+    roster.setDirt(cwd, await readDirt(cwd));
+  }
+  if (!ONCE) draw();
+}
+
 // Puts the headline count on the window itself, so the office is legible from a
 // tab bar or an alt-tab list with its pane nowhere in sight. Only ever sent when
 // the string actually changes: a title set twenty times a minute to the same
@@ -434,6 +602,7 @@ async function refresh() {
     refreshAsks();
     refreshCommands();
     refreshBranches();
+    refreshDirt();
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -472,6 +641,9 @@ function nudge() {
 // Per-pane status subscriptions have to be rebuilt when desks come and go.
 // Cheap: one extra socket, only when the set of pane ids actually changes.
 let subscribedTo = '';
+// The last thing the stream complained about, so a subscription the server will never
+// accept is said once rather than on every rebuild for the rest of the session.
+let streamComplaint = '';
 function syncSubscriptions() {
   if (DEMO) return;
   const ids = roster.people.map((p) => p.id).sort();
@@ -495,7 +667,7 @@ function syncSubscriptions() {
         pane_id,
         source: 'visible',
         match: { type: 'regex', value: WATCH_PATTERN },
-        lines: 8,
+        lines: MATCH_LINES,
         strip_ansi: true,
       },
     ]),
@@ -504,9 +676,18 @@ function syncSubscriptions() {
     .open(
       subs,
       (msg) => onServerEvent(msg),
-      () => {
+      (err) => {
         // Force a resubscribe on the next poll if the stream dies.
         subscribedTo = '';
+        // And say so, once, because this used to be discarded. The server rejects the
+        // whole subscribe request if any one descriptor in it is bad and then closes
+        // the stream, so a single renamed event name in a future protocol would leave
+        // the office quietly poll-only with nothing on screen to suggest why. Not
+        // fatal, which is why it is a note and not a quit: polling still works.
+        if (err?.message && err.message !== streamComplaint) {
+          streamComplaint = err.message;
+          note(`events: ${err.message}`, 6000);
+        }
       },
     )
     .catch((err) => note(`events: ${err.message}`));
@@ -516,17 +697,15 @@ function syncSubscriptions() {
 // the source of truth for state; an output match additionally puts a line of news
 // over the desk it came from.
 //
-// The matched output is never drawn. eventFromMatch turns it into one of the
-// office's own fixed labels or into nothing at all, so an error message with a
-// path or a token in it cannot end up on the wall (see src/events.mjs).
+// The matched output is never drawn. newsFromEvent turns it into one of the office's
+// own fixed labels or into nothing at all, so an error message with a path or a token
+// in it cannot end up on the wall. It also owns reading the stream's envelope, which
+// used to be done here and was wrong the whole time (see src/events.mjs).
 function onServerEvent(msg) {
-  const payload = msg?.result || msg?.event || msg;
-  if (payload?.type === 'output_matched' && payload.pane_id) {
-    const news = eventFromMatch(payload);
-    if (news && roster.find(payload.pane_id)) {
-      roster.setEvent(payload.pane_id, news.label, news.kind);
-      draw();
-    }
+  const news = newsFromEvent(msg);
+  if (news && roster.find(news.paneId)) {
+    roster.setEvent(news.paneId, news.label, news.kind);
+    draw();
   }
   scheduleRefresh();
 }
@@ -539,11 +718,18 @@ function scheduleRefresh() {
   }, 120);
 }
 
-// Reading a desk, carefully. The `visible` source is a plain screen snapshot
-// and always safe. The `recent` sources page through alternate-screen
-// scrollback, which the server only tolerates for an idle agent (and which can
-// drop the connection outright when it does not), so they are a bonus, not the
-// primary source.
+// Reading a desk. The `visible` source is a plain screen snapshot and is what
+// "what are you up to" means; the `recent` sources page through alternate-screen
+// scrollback, which is more history than the question asked for, so they are a
+// bonus on a quiet desk rather than the primary source.
+//
+// This used to say that a `recent` read against a busy agent could drop the
+// connection outright. It does not: measured against herdr 0.9.0 on 2026-09-17,
+// every source answers on a busy full-screen agent, at every line count up to the
+// ~1000 lines the server keeps. What was really being seen is that the server
+// closes the connection after every answer, whatever was asked. The try/catch
+// stays because a read can still fail for ordinary reasons and scrollback is
+// genuinely optional.
 async function readDesk(id, person) {
   const visible = await api.request('agent.read', { target: id, source: 'visible' });
   const screen = cleanOutput(visible?.read?.text ?? '');
@@ -559,8 +745,15 @@ async function readDesk(id, person) {
   return screen;
 }
 
-// agent.explain over the socket returns a huge rule-evaluation dump and can
-// hang up the connection mid-response, so shell out to the CLI for it instead.
+// agent.explain returns a huge rule-evaluation dump, tens of kilobytes for one
+// desk, so it is fetched per card and cached rather than polled.
+//
+// It goes through the CLI, which is no longer required: the note here used to say
+// the socket hung up mid-response on explain, and on herdr 0.9.0 on 2026-09-17 it
+// answers fine. The CLI is kept because it works and because a dump this size is
+// the one call worth keeping off the office's own socket, not because the socket
+// cannot do it. describeDetection already reads either shape, so moving it back is
+// a small change if the subprocess ever becomes the expensive part.
 const explainCache = new Map();
 function explainDesk(id) {
   const cached = explainCache.get(id);
@@ -637,8 +830,12 @@ async function loadDetail(id, { force = false } = {}) {
       loading: false,
       fetchedAt: Date.now(),
       output: [],
-      // agent_not_idle is the common one: full-screen agents will not give up
-      // scrollback while they are mid-turn.
+      // herdr's own code if it gave one, because the code is the useful part on a
+      // card: `agent_not_idle` and a socket that went away are different problems
+      // and the difference is not visible from the outside. Which codes actually
+      // turn up here is not known; the guess that used to be written down here
+      // (agent_not_idle, from full-screen agents refusing scrollback) did not
+      // survive being checked.
       summary: [`could not read this desk: ${err.code || err.message}`],
       detection: [],
       choice: null,
@@ -698,6 +895,79 @@ function toggleFollow() {
 // Answer an approval prompt without walking over to the pane. The keys come
 // from that desk's own screen (see approvalChoice), preferring the panel's read
 // when one is open because it is the fresher of the two.
+// The standing permission, armed but not granted.
+//
+// `y` answers one question and the next one comes back to you. This answers every
+// question of that kind from now on, and the office is not the thing that gets to
+// decide that quietly, so it is the only answer in here that takes two keys. What
+// is held is the digit AND the words the menu used, because both are checked again
+// at the last moment: the screen can change between arming and confirming, and a
+// digit that was option 3 a second ago must not be sent into a menu that has
+// since reordered.
+let trust = null;
+
+function cancelTrust() {
+  if (!trust) return;
+  trust = null;
+  prevLines = [];
+  draw();
+}
+
+// What the screen says right now, preferring the panel's read for the same reason
+// respond() does: it is the fresher of the two.
+function choiceFor(person) {
+  return (detail?.id === person.id ? detail.choice : null) || person.choice;
+}
+
+function armTrust() {
+  const person = roster.find(selectedId);
+  if (!person) return;
+  if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you`);
+  const choice = choiceFor(person);
+  if (!choice) return refuse(`still reading ${person.name}'s screen, try again in a second`);
+  if (!choice.always) return refuse(`${person.name}'s prompt does not offer a "don't ask again"`);
+  trust = { id: person.id, name: person.name, keys: choice.always.keys, label: choice.always.label };
+  // The card comes open with it, so the menu this digit is aimed at is on the
+  // screen before the confirm rather than being taken on trust.
+  if (detail?.id !== person.id) loadDetail(person.id, { force: true });
+  prevLines = [];
+  draw();
+}
+
+// Checked again here rather than only at arming time, because the two are seconds
+// apart and the agent's screen is not ours.
+async function confirmTrust() {
+  if (!trust) return;
+  const armed = trust;
+  const person = roster.find(armed.id);
+  if (!person || person.status !== 'blocked') {
+    trust = null;
+    return refuse(`${armed.name} is not waiting on you any more`);
+  }
+  const now = choiceFor(person)?.always;
+  if (!now || now.label !== armed.label || now.keys.join() !== armed.keys.join()) {
+    trust = null;
+    return refuse(`${armed.name}'s prompt changed, so nothing was sent`);
+  }
+  trust = null;
+  if (DEMO) {
+    note(`demo mode: would send ${armed.keys.join(' ')} to ${armed.name}`);
+    draw();
+    return;
+  }
+  try {
+    await api.request('agent.send_keys', { target: armed.id, keys: armed.keys });
+    clocks.answer();
+    note(`granted: ${truncateNote(armed.label)}`);
+    setTimeout(() => refresh(), 400);
+    if (detail?.id === armed.id) setTimeout(() => loadDetail(armed.id, { force: true }), 600);
+  } catch (err) {
+    note(`could not answer ${armed.name}: ${err.code || err.message}`);
+  }
+  prevLines = [];
+  draw();
+}
+
 async function respond(kind) {
   const person = roster.find(selectedId);
   if (!person) return;
@@ -705,7 +975,7 @@ async function respond(kind) {
     note(`${person.name} is not waiting on you`);
     return;
   }
-  const choice = (detail?.id === person.id ? detail.choice : null) || person.choice;
+  const choice = choiceFor(person);
   if (!choice) {
     note(`still reading ${person.name}'s screen, try again in a second`);
     return;
@@ -955,12 +1225,20 @@ function refuse(text) {
 
 function openCompose(scope) {
   if (compose) return;
-  const person = scope === 'one' ? roster.find(selectedId) : null;
+  const person = scope === 'all' ? null : roster.find(selectedId);
   if (scope === 'one') {
     if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
-    // The server rejects a blocked agent outright, before anything is sent. Saying
-    // so here is better than letting somebody type out a paragraph first.
-    if (person.status === 'blocked') return refuse(`${person.name} has a hand up: answer that first`);
+    // herdr rejects a prompt to a blocked agent with agent_blocked, before any
+    // input is sent. Saying so here is better than letting somebody type out a
+    // paragraph first, and `s` is the key that does reach them.
+    if (person.status === 'blocked') return refuse(`${person.name} has a hand up: press s to answer in words`);
+  }
+  // Answering in words. A waiting agent is the one case a prompt cannot reach, so
+  // this goes in as keystrokes instead, which is also the only way to answer a
+  // question that is not a yes or a no: "which of the two approaches" has no key.
+  if (scope === 'reply') {
+    if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
+    if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you: press a to give them a job`);
   }
   const { to, skipped } = scope === 'all'
     ? broadcastTargets(roster.people)
@@ -974,6 +1252,9 @@ function openCompose(scope) {
     scope,
     id: person?.id || null,
     name: person?.name || null,
+    // What they asked, so the answer is typed with the question on the screen. It
+    // is the desk's own bubble text, which is the short form of the ask.
+    ask: scope === 'reply' ? person.ask || null : null,
     text: '',
     to,
     skipped,
@@ -1023,6 +1304,7 @@ async function sendCompose() {
     draw();
     return;
   }
+  const replying = compose.scope === 'reply';
   compose = { ...compose, sending: true, confirm: false, error: null };
   prevLines = [];
   draw();
@@ -1032,7 +1314,12 @@ async function sendCompose() {
     side = await new ApiClient().open();
     for (const person of to) {
       try {
-        await side.request('agent.prompt', { target: person.id, text }, PROMPT_TIMEOUT_MS);
+        // A waiting agent takes typing, not a prompt. `pane.send_input` carries the
+        // words and the enter in one request, which matters: two requests would
+        // leave a window where half an answer is sitting in somebody's input box
+        // waiting for a submit that failed.
+        if (replying) await side.request('pane.send_input', { pane_id: person.id, text, keys: ['enter'] }, PROMPT_TIMEOUT_MS);
+        else await side.request('agent.prompt', { target: person.id, text }, PROMPT_TIMEOUT_MS);
       } catch (err) {
         failed.push(`${person.name} (${err.code || err.message})`);
       }
@@ -1044,9 +1331,12 @@ async function sendCompose() {
   }
   const sent = to.length - failed.length;
   compose = null;
-  if (!sent) note(`could not assign that: ${failed.join(', ')}`);
+  if (!sent) note(replying ? `could not answer that: ${failed.join(', ')}` : `could not assign that: ${failed.join(', ')}`);
   else if (failed.length) note(`sent to ${sent} of ${to.length}; not ${failed.join(', ')}`);
-  else note(to.length === 1 ? `${to[0].name} is on it` : `sent to all ${to.length}`);
+  else if (replying) {
+    note(`answered ${to[0].name}`);
+    clocks.answer();
+  } else note(to.length === 1 ? `${to[0].name} is on it` : `sent to all ${to.length}`);
   prevLines = [];
   draw();
   // They should be turning green about now, so do not wait out the poll to say so.
@@ -1079,6 +1369,11 @@ function onMouse(ev) {
   // answered somebody's approval prompt while you were writing a sentence would be
   // the worst kind of accident in here.
   if (compose) return;
+  // Same bargain for an armed standing permission. The keyboard is already down to
+  // enter and esc while one is armed, and leaving the mouse live would mean the [y]
+  // still under the pointer could answer for you with the grant still armed behind
+  // it, which is two answers to one question.
+  if (trust) return;
   const { drag: next, act } = nextDrag(drag, ev, hitboxes);
   drag = next;
   if (!act) return;
@@ -1140,6 +1435,9 @@ function onInput(chunk) {
   if (str === '\x1b') {
     // A desk in mid-air outranks the panel: esc puts it down first.
     if (drag) return cancelDrag();
+    // An armed standing permission outranks everything else esc could close, because
+    // it is the one piece of state where the next enter is irreversible.
+    if (trust) return cancelTrust();
     // Backing out of a confirm goes back to the text rather than throwing it away,
     // because "wait, who does this reach" should not cost you the paragraph.
     if (compose?.confirm) {
@@ -1171,6 +1469,15 @@ function onInput(chunk) {
     if (terms(filter).length) return closeFilter(true);
     prevLines = [];
     draw();
+    return;
+  }
+
+  // An armed standing permission has the keyboard, and only two keys mean anything.
+  // Everything else is swallowed rather than falling through to the floor: walking
+  // away with j while a grant is armed would leave it armed at a desk you are no
+  // longer standing at, and the next enter would go somewhere you did not mean.
+  if (trust) {
+    if (str === '\r' || str === '\n') confirmTrust();
     return;
   }
 
@@ -1257,6 +1564,8 @@ function onInput(chunk) {
     else if (selectedId) loadDetail(selectedId, { force: true });
   } else if (str === 'y') respond('approve');
   else if (str === 'n') respond('deny');
+  else if (str === 'Y') armTrust();
+  else if (str === 's') openCompose('reply');
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
   else if (str === 'F') toggleFollow();
@@ -1346,6 +1655,19 @@ const DEMO_BRANCHES = ['main', 'feature/sso', 'fix/flaky-tests', 'renovate/deps'
 
 const DEMO_COMMANDS = ['npm test', 'cargo build', 'git rebase', 'pytest -x --last-failed', 'tsc', 'make'];
 
+// Uncommitted work, at every size the pile has: a clean checkout, a couple of files, a
+// change nobody is going to enjoy reviewing, and one with a conflict in it. Null is in
+// here too, because a directory git would not answer about is the ordinary case for
+// anybody running the office over a pane that is not in a repository.
+const DEMO_DIRT = [
+  { files: 0, conflicts: 0 },
+  { files: 2, conflicts: 0 },
+  { files: 31, conflicts: 0 },
+  null,
+  { files: 7, conflicts: 1 },
+  { files: 12, conflicts: 0 },
+];
+
 // News is normally driven by `pane.output_matched`, which the demo has no server
 // for, so a couple of lines are fed through the real classifier rather than
 // having their labels written out here. That way the demo cannot show a label the
@@ -1357,6 +1679,7 @@ function demoExtras() {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
+    roster.setDirt(person.cwd, DEMO_DIRT[i % DEMO_DIRT.length]);
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {
@@ -1376,6 +1699,13 @@ const anim = setInterval(() => {
   // minutes and a stale "tests passed" would sit there the whole time.
   roster.expireEvents();
   draw();
+  // Not for the cell size, which never changes, but for whether anybody is looking:
+  // that flips when somebody switches tab, and nothing else in the office would
+  // notice. It sits on the frame rather than the 2s poll because the delay this
+  // controls is one a person sits through, watching a whiteboard that has no chart on
+  // it yet. Throttles itself, swallows its own failures, and is never awaited, so a
+  // server without graphics costs one question once and then stops being asked.
+  graphics?.poll();
 }, ANIM_MS);
 
 const poll = setInterval(refresh, POLL_MS);
@@ -1395,6 +1725,11 @@ async function main() {
     }
   }
 
+  // Before either path observes anything. `--once` restores but never saves: it is a
+  // single printed frame, so it should show the same whiteboard the live office would,
+  // and it has nothing of its own to add to it.
+  openTheBooks();
+
   if (ONCE) {
     clearInterval(anim);
     clearInterval(poll);
@@ -1411,16 +1746,40 @@ async function main() {
       clocks.observe(roster.people);
       await refreshAsks();
       await refreshCommands();
+      // Awaited here where the live office fires them off, because a single printed
+      // frame is the thing used to look at the art: a branch and a pile of paper that
+      // only ever arrive on the second poll would never be in it.
+      await refreshBranches();
+      await refreshDirt();
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });
-    process.stdout.write(renderFrame(view()).lines.join('\n') + '\n');
+    // Written *and flushed* before the exit. Whenever this render is being diffed,
+    // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
+    // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an
+    // exit on the next line truncates it. A frame is about 25KB against a 16KB buffer,
+    // so it truncates every time. CI found it as a frame whose header arrived and whose
+    // desks did not, on macOS and not on Linux, where a pipe write is synchronous.
+    await new Promise((resolve) => process.stdout.write(renderFrame(view()).lines.join('\n') + '\n', resolve));
     api?.close();
     events?.close();
     process.exit(0);
   }
 
   enterTerminal();
+  if (!DEMO) {
+    saveTimer = setInterval(closeTheBooks, SAVE_MS);
+    // The office should not be the reason a terminal will not close.
+    saveTimer.unref?.();
+  }
+  // Asked once before the first frame, so the office either knows the cell size or
+  // knows it is a text-only terminal by the time it has anything to draw. A pane id
+  // is required and comes from the environment herdr started us in, so an office run
+  // by hand outside herdr is simply text, which is correct.
+  if (GRAPHICS && api && OWN_PANE) {
+    graphics = new Graphics(api, OWN_PANE);
+    await graphics.probe();
+  }
   await refresh();
   draw();
 }

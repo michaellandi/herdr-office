@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, BRANCHES, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { pile, PILE_MAX } from '../src/dirt.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, TRUSTS, NEWS, FILTERS, BRANCHES, DIRTS, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
 import { assignRooms, ROOM_TINTS } from '../src/rooms.mjs';
 import { fg } from '../src/theme.mjs';
 
@@ -169,6 +170,87 @@ test('the branch gives up its space before the job does', () => {
   const stuck = officeRoster(['blocked']).people.map((p) => ({ ...p, branch: 'renovate/bump-everything-all-at-once-please' }));
   const text = renderFrame(viewOf({ people: stuck, cols: 105, rows: 45 })).lines.map(stripAnsi).join('\n');
   assert.match(text, /shell requires approval/);
+});
+
+test('a pile of uncommitted work, at every size and every zoom', () => {
+  // The pile sits on the desk row between the sticky note and the keyboard, and the
+  // badge that replaces it in the compact list shares the branch's column. Both are
+  // drawn from a number that an agent changes while the office is watching, so every
+  // width the pile can be is checked rather than the two a demo happens to produce.
+  for (const dirt of DIRTS) {
+    const label = dirt ? `${dirt.files}/${dirt.conflicts}` : 'unread';
+    const floor = officeRoster().people.map((p) => ({ ...p, dirt, branch: 'feature/sso', repo: 'herdr-office' }));
+    const many = officeRoster(new Array(40).fill('working')).people.map((p) => ({ ...p, dirt, branch: 'feature/sso', repo: 'herdr-office' }));
+    for (const [cols, rows] of SIZES) {
+      for (const zoom of ['auto', 'list', 'cubicle']) {
+        assertExact(viewOf({ people: floor, cols, rows, zoom }), `dirt=${label} zoom=${zoom} ${cols}x${rows}`);
+      }
+      // The card grows a row for this, and the panel's height is what the floor above
+      // it is measured against.
+      assertExact(viewOf({ people: floor, cols, rows, detail: { id: floor[0].id, read: null } }), `dirt=${label} +card ${cols}x${rows}`);
+      assertExact(viewOf({ people: many, cols, rows }), `dirt=${label} 40 ${cols}x${rows}`);
+      // And with a raised hand's answer rows in the way, which is the case where the
+      // badge gives its space up rather than taking it.
+      assertExact(viewOf({ people: many, cols, rows, detail: DETAILS[3][1] }), `dirt=${label} 40 +card ${cols}x${rows}`);
+    }
+  }
+});
+
+test('the pile, the badge and the card all say the same thing', () => {
+  // Three surfaces, one number, and the point of this is that it is the checkout's
+  // number rather than the person's: fed through the roster the way the poll does it,
+  // so two desks in one tree agree and a desk in another does not.
+  const roomy = roomyRoster([1, 1, 2, 2, 3, 3, 3]);
+  roomy.setDirt('/Users/you/Desktop/projects/repo1', { files: 0, conflicts: 0 });
+  roomy.setDirt('/Users/you/Desktop/projects/repo2', { files: 3, conflicts: 0 });
+  roomy.setDirt('/Users/you/Desktop/projects/repo3', { files: 148, conflicts: 1 });
+  const people = roomy.people.map((p) => ({ ...p, branch: 'main', repo: 'herdr-office' }));
+  const piles = people.map((p) => pile(p.dirt?.files));
+  assert.deepEqual([...new Set(piles)].sort(), [0, 2, PILE_MAX], 'the fixture should show three different piles');
+
+  // On the desk grid, the pile is wider *and* taller with the work, and the smallest
+  // one is a glyph the desk furniture does not use, so a single cell cannot be read as
+  // another mug.
+  const desks = renderFrame(viewOf({ people, cols: 200, rows: 60 })).lines.map(stripAnsi).join('\n');
+  assert.match(desks, /▄  ▆▆▆ /, 'a small pile');
+  assert.match(desks, /▄  ██████/, 'a large one');
+  // The smallest pile there is, which is the case that has to survive: one cell, in a
+  // glyph the sticky note and the mug do not use, clear of both.
+  const one = renderFrame(viewOf({ people: people.map((p) => ({ ...p, dirt: { files: 1, conflicts: 0 } })), cols: 200, rows: 60 })).lines.map(stripAnsi).join('\n');
+  assert.match(one, /▄  ▅▅ /, 'the smallest pile went missing');
+  assert.ok(!/▄ ▄/.test(one) && !/▄  ▃/.test(one), 'a pile drawn in the desk furniture\'s own glyph is furniture');
+
+  // In the compact list, the number itself, next to the branch it belongs to. A clean
+  // checkout says nothing rather than +0.
+  const list = renderFrame(viewOf({ people, cols: 200, rows: 60, zoom: 'list' })).lines.map(stripAnsi).join('\n');
+  assert.match(list, /@main \+3\b/);
+  assert.match(list, /@main \+148\b/);
+  assert.ok(!list.includes('+0'), list);
+
+  // And on the card, in words, for whichever desk is open.
+  const busy = people.find((p) => p.dirt?.files === 148);
+  const card = renderFrame(viewOf({ people, cols: 200, rows: 60, detail: { id: busy.id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.match(card, /changes\s+148 uncommitted · 1 conflicted/);
+  const clean = people.find((p) => p.dirt?.files === 0);
+  const tidy = renderFrame(viewOf({ people, cols: 200, rows: 60, detail: { id: clean.id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.match(tidy, /changes\s+nothing uncommitted/);
+  // A checkout nobody has read yet has no row at all, rather than a hedge.
+  const unread = people.map((p) => ({ ...p, dirt: null }));
+  const quiet = renderFrame(viewOf({ people: unread, cols: 200, rows: 60, detail: { id: unread[0].id, read: null } })).lines.map(stripAnsi).join('\n');
+  assert.ok(!/\bchanges\b/.test(quiet), quiet);
+});
+
+test('a pile of paper never paints over a raised hand, or costs it a cell', () => {
+  // The desk row the paper lives on is the same row the sticky note and the keyboard
+  // are on, and a stuck desk's ask hangs above it. The pile is furniture: it must not
+  // move anything, and it must not recolour a desk that is asking for something.
+  const stuck = officeRoster(['blocked']).people;
+  const bare = renderFrame(viewOf({ people: stuck, cols: 105, rows: 45 })).lines;
+  const piled = renderFrame(viewOf({ people: stuck.map((p) => ({ ...p, dirt: { files: 148, conflicts: 1 } })), cols: 105, rows: 45 })).lines;
+  assert.equal(piled.length, bare.length);
+  piled.forEach((line, i) => assert.equal(width(line), width(bare[i]), `line ${i} changed width`));
+  const text = piled.map(stripAnsi).join('\n');
+  assert.match(text, /shell requires approval/, 'the ask still owns the wall');
 });
 
 test('every zoom level, at every size, still fills the pane exactly', () => {
@@ -360,6 +442,23 @@ test('assigning work, in every state the field can be in', () => {
   for (const [cols, rows] of SIZES) {
     assertExact(viewOf({ people, cols, rows, compose, detail: DETAILS[3][1] }), `compose+detail ${cols}x${rows}`);
     assertExact(viewOf({ people, cols, rows, compose, hire: HIRES[2][1] }), `compose+hire ${cols}x${rows}`);
+  }
+});
+
+test('a standing permission, armed, in every size the footer has', () => {
+  // The armed grant puts the menu's own wording in two places at once: the footer
+  // hint and the card's third answer row. Both are text off somebody else's screen,
+  // which is the kind that does not fit, and the footer is the one row that cannot
+  // afford to overflow because everything else is measured against it.
+  //
+  // The card is opened alongside it, since arming pulls the card open on purpose:
+  // the confirm is supposed to happen with the menu on screen.
+  const granting = DETAILS.find(([name]) => name === 'a standing grant on offer')[1];
+  for (const [cols, rows] of SIZES) {
+    for (const [name, trust] of TRUSTS) {
+      assertExact(viewOf({ people, cols, rows, trust }), `trust=${name} ${cols}x${rows}`);
+      assertExact(viewOf({ people, cols, rows, trust, detail: granting }), `trust=${name} +card ${cols}x${rows}`);
+    }
   }
 });
 

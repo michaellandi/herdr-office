@@ -99,24 +99,75 @@ const YES_NO = /[[(]\s*y(?:es)?\s*\/\s*n(?:o)?/i;
 const MENU_YES = /^\s*[❯>▶*·\s]*1[.)]\s*(?:yes|allow|approve|proceed|continue|ok\b)/i;
 const MENU_ANY = /^\s*[❯>▶*·\s]*1[.)]\s+\S/;
 
+// The "yes, and stop asking me" option, which is a different promise from yes.
+//
+// Yes answers this one question. This one changes what the agent will do without
+// asking for the rest of the session, and sometimes for every session after it, so
+// it is never what `approve` resolves to and never what a misread digit can reach
+// by accident: it is only ever offered when this line is genuinely on the screen,
+// and the caller shows the line before sending anything.
+//
+// The digit is captured rather than assumed to be 2. It usually is, but reading it
+// off the menu costs nothing and a hardcoded 2 aimed at a menu that ordered its
+// options differently would pick some unrelated option, which is the one failure
+// this feature must not have.
+const MENU_ALWAYS = /^\s*[❯>▶*·\s]*(\d)[.)]\s*(?=.*(?:don'?t ask again|do not ask again|and don'?t ask|always allow|allow always|stop asking))(.*)$/i;
+
+// A yes of some kind has to be the start of it. "3. No, and don't ask again" is a
+// deny that stops asking, which is a real option in some menus and emphatically
+// not the one this key is for.
+const ALWAYS_IS_YES = /^\s*(?:yes|allow|approve|proceed|continue|ok\b|always)/i;
+
+export function alwaysOption(lines) {
+  for (const line of (lines || []).slice(-40)) {
+    const m = MENU_ALWAYS.exec(line);
+    if (!m) continue;
+    const label = m[2].replace(/\s+/g, ' ').trim();
+    if (!ALWAYS_IS_YES.test(label)) continue;
+    return { keys: [m[1]], label };
+  }
+  return null;
+}
+
 export function approvalChoice(lines) {
   const tail = (lines || []).slice(-40);
+  // Offered alongside whatever shape the prompt turns out to be, because a menu
+  // that has this option still has a plain yes at 1 and that is what `y` sends.
+  const always = alwaysOption(tail);
   if (tail.some((line) => YES_NO.test(line))) {
-    return { shape: 'y/n', approve: ['y'], deny: ['n'] };
+    return { shape: 'y/n', approve: ['y'], deny: ['n'], always };
   }
   if (tail.some((line) => MENU_YES.test(line))) {
-    return { shape: 'menu', approve: ['1'], deny: ['esc'] };
+    return { shape: 'menu', approve: ['1'], deny: ['esc'], always };
   }
   if (tail.some((line) => MENU_ANY.test(line))) {
     // A numbered menu whose first entry we cannot read as a yes. Enter takes
     // whatever is highlighted, which is the agent's own default.
-    return { shape: 'menu?', approve: ['enter'], deny: ['esc'] };
+    //
+    // No always here even if a line matched. If the menu is unreadable enough that
+    // the first option cannot be identified as a yes, a digit read out of the same
+    // menu is not trustworthy enough to grant a standing permission with.
+    return { shape: 'menu?', approve: ['enter'], deny: ['esc'], always: null };
   }
-  return { shape: 'unknown', approve: ['enter'], deny: ['esc'] };
+  return { shape: 'unknown', approve: ['enter'], deny: ['esc'], always: null };
 }
 
-// Two or three lines describing the person, in the order a human would want
-// them: what they are stuck on first, then what they were last saying.
+// The label goes on the first of the said lines and the rest are indented under it,
+// which is the only reason this is a constant rather than a string in place: the
+// indent has to be exactly as wide as the label or the block does not line up.
+const SAID = 'last said: ';
+
+// How many of them. Three reads as a paragraph, which is what the tail of an agent's
+// output is; two read as a pair of unrelated remarks.
+const SAID_LINES = 3;
+
+// A few lines describing the person, in the order a human would want them: what they
+// are stuck on first, then what they were last saying.
+//
+// The said lines are labelled once, not once each. Repeating "last said:" down the
+// block spent eleven cells per line saying a thing already said, on the narrowest
+// column in the office, and read as three separate utterances rather than as the tail
+// of one.
 export function summarize(person, outputLines) {
   const out = [];
   if (person?.status === 'blocked') {
@@ -126,7 +177,8 @@ export function summarize(person, outputLines) {
   if (person?.title) out.push(`pane title: ${person.title}`);
   const substantive = outputLines.filter((line) => line.length > 16 && !isNoise(line));
   const prose = substantive.filter(isProse);
-  for (const line of (prose.length ? prose : substantive).slice(-2)) out.push(`last said: ${line}`);
+  const said = (prose.length ? prose : substantive).slice(-SAID_LINES);
+  said.forEach((line, i) => out.push(i === 0 ? `${SAID}${line}` : `${' '.repeat(SAID.length)}${line}`));
   if (!out.length) out.push('nothing to report');
   return out;
 }

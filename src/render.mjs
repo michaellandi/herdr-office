@@ -5,7 +5,12 @@ import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
+import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
+// Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
+// one divide the same numbers the same way and cannot disagree about which slice won a
+// rounding contest.
+import { allot } from './charts.mjs';
 import {
   pose,
   screen,
@@ -139,6 +144,42 @@ const KEYS_X = MON_X + 1;
 const MUG_X = MON_X + 12;
 const NOTE_X = 1;
 const DESK_TOP = over(over(over(' '.repeat(INNER), '▃'.repeat(10), KEYS_X), '▄', MUG_X), '▄', NOTE_X);
+// Work that has been done and not committed, as a pile of paper spreading across the
+// desk. It starts three cells clear of the sticky note, which is scenery and stays
+// scenery: a prop that quietly became a gauge would mean every desk in the office had
+// been reporting something all along.
+//
+// The desk in front of a person is the widest empty stretch on a card, so this is the
+// one signal that costs nothing in a room that is already fighting over its
+// twenty-seven cells. It is also the reason the pile is a shape rather than a number:
+// there is no room for digits here, and the exact count is a row on the card, one
+// keystroke away. A desk with paper all over it is the thing you are meant to notice
+// from across the room.
+//
+// It grows in both directions, and the smallest one still has to be readable from
+// across the room, which took two goes to get right. Width alone made the first step a
+// single `▄` two cells from a sticky note drawn with that same glyph: it read as more
+// furniture rather than as news. Height alone made it a single `▁`, which on a live
+// floor where every desk had one or two files changed was a row of specks nobody could
+// see. So the scale starts at two cells and a glyph tall enough to have a shape, and
+// each step is wider and, until it runs out of glyph, taller: `▅▅`, `▆▆▆`, `▇▇▇▇`,
+// `█████`, `██████`. Two of the eight block heights are unavailable here whatever they
+// would have looked like: `▄` is the mug and the sticky note, and `▃` is the keyboard
+// ten cells further along the same row.
+const PAPER_X = NOTE_X + 3;
+const PAPER_MIN = 2;
+const PAPER = ['▅', '▆', '▇', '█', '█'];
+// One glyph per step of the scale in src/dirt.mjs, checked here rather than trusted,
+// because the failure is an undrawn pile on a busy desk: the office would look calm.
+if (PAPER.length !== PILE_MAX) throw new Error(`the pile has ${PILE_MAX} steps and ${PAPER.length} glyphs`);
+// And the widest pile has to fit the desk it is on, between the sticky note and the
+// keyboard, or the row it is drawn onto would be the wrong length.
+if (PAPER_X + PILE_MAX + PAPER_MIN - 1 > KEYS_X) throw new Error('the pile reaches the keyboard');
+// A pile the colour of paper, until something in the checkout is conflicted, at which
+// point it takes the same tone a broken build's slab does. Nothing else about it
+// changes: a conflict is a fact about the same pile, not another pile.
+const PAPER_FG = '#dcd6c8';
+const SNAG_FG = eventTint('broke').ink;
 const DESK_FRONT = over(' '.repeat(INNER), '───', MON_X + 5);
 
 // Both slabs stuck on the cubicle wall, the tab card and the speech bubble, hang
@@ -299,6 +340,11 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // entirely rather than squeezed when that would leave the job unreadable: on a
   // twenty-seven cell line, half a branch name and half a sentence is two lies where
   // there could have been one truth.
+  // How much is uncommitted in this checkout, as cells of paper on the desk. Drawn on
+  // the desk row below, and worked out here because the row is built inside a list
+  // literal where a statement cannot go.
+  const paper = pile(person.dirt?.files);
+
   const foot = cells();
   const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
   const roomForRef = ref && INNER - width(ref) - 1 >= TASK_MIN;
@@ -341,9 +387,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       { from: MON_X, to: INNER, fg: P.faint },
     ]),
     row(
-      DESK_TOP,
+      paper ? over(DESK_TOP, PAPER[paper - 1].repeat(paper + PAPER_MIN - 1), PAPER_X) : DESK_TOP,
       [
         { from: NOTE_X, to: NOTE_X + 1, fg: '#f2d98a' },
+        ...(paper ? [{ from: PAPER_X, to: PAPER_X + paper + PAPER_MIN - 1, fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG }] : []),
         { from: KEYS_X, to: KEYS_X + 10, fg: P.keys },
         { from: MUG_X, to: MUG_X + 1, fg: '#e9e4d9' },
       ],
@@ -499,6 +546,13 @@ function keyHints(view) {
   // the footer says that and nothing else rather than listing keys that are on
   // hold until the mouse button comes back up.
   if (view.drag?.active) return [['drop', 'on a desk to swap the panes'], ['esc', 'put it back']];
+  // An armed grant says what it will grant, in the menu's own words, because that is
+  // the sentence the user is agreeing to and the footer is the one row always on
+  // screen. Truncated by the footer if it has to be, which is why the card carries
+  // it in full as well.
+  if (view.trust) {
+    return [['enter', `allow "${view.trust.label}" from now on`], ['esc', 'never mind']];
+  }
   // With the assign field open every key is a letter in it, so the footer must not
   // go on advertising the floor. The confirm step is the one place enter reaches
   // more than one agent, and it says so in as many words.
@@ -509,7 +563,7 @@ function keyHints(view) {
       return [['enter', `send it to ${n} ${n === 1 ? 'person' : 'people'}`], ['esc', 'back to the text']];
     }
     return [
-      ['type', 'what they should do'],
+      ['type', view.compose.scope === 'reply' ? 'your answer' : 'what they should do'],
       ['enter', view.compose.scope === 'all' ? 'review who gets it' : 'send it'],
       ['^w', 'last word'],
       ['^u', 'clear'],
@@ -551,7 +605,12 @@ function keyHints(view) {
   const filtered = terms(view.filter).length > 0 && !view.detail;
   return [
     ...(vacant ? [['enter', 'hire somebody for this desk']] : []),
-    ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
+    // `s` sits with y and n because it is the third way to answer, and it is the one
+    // that works when the question is not a yes or a no. The standing grant is only
+    // advertised when the screen genuinely offers it, so the footer never promises a
+    // key that would send a digit into a menu with no such option.
+    ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny'], ['s', 'answer in words']] : []),
+    ...(selected?.status === 'blocked' && selected?.choice?.always ? [['Y', 'always allow']] : []),
     ...(filtered ? [['esc', 'show everyone']] : []),
     ['hjkl', 'walk'],
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
@@ -627,12 +686,29 @@ const MARGIN = 2;
 // the strip under the desks, it appears when the room has a wall to hang it on, and
 // it is the first thing the band gives up when the pane gets small. Nothing about
 // the office's state is ONLY on the whiteboard.
-// Four rows, which is the height of a pot plant: the tallest thing that still
-// hangs on a five-row strip of wall, so the board is up in most panes rather than
-// only in a maximised one. Two lines of writing is also about as much as anybody
-// reads off a wall in passing.
+// Five rows: a frame, two lines of writing, and one bar between them. Two lines is
+// about as much as anybody reads off a wall in passing, and the fifth row is the
+// most the wall band can give without the board crowding out the plants.
+//
+// The bar row is drawn in cells like everything else, as whole blocks in the status
+// colours, and it is the one row of this board a pixel layer is allowed to take
+// (see the regions list in renderFrame). That ordering is deliberate: the coarse bar
+// is the real fallback rather than an empty row waiting for a picture, so a terminal
+// with no graphics is not missing anything, it just gets the proportion to the
+// nearest thirty-sixth instead of the nearest pixel.
 const WB_W = 40; // the whole board, borders included
 const WB_TEXT = WB_W - 4;
+// The order the header already counts statuses in, so the bar and the counts above
+// it read left to right the same way.
+const WB_ORDER = ['working', 'blocked', 'idle', 'done', 'unknown'];
+// A prop row's colour is named rather than given as a hex, so the names have to
+// resolve to both palette entries and status colours. `status.blocked` is the amber a
+// blocked desk is drawn in, so the bar matches the desks it is summarising.
+const colour = (name) =>
+  name.startsWith('status.') ? (STATUS[name.slice(7)] || STATUS.unknown).fg : P[name];
+// Where the bar sits inside `rows`, so the caller can hand exactly that row to a
+// pixel layer without counting lines here and there separately.
+const WB_BAR_ROW = 2;
 
 export function whiteboard(stats, now) {
   if (!stats) return null;
@@ -656,9 +732,30 @@ export function whiteboard(stats, now) {
   // A second, not a millisecond: on the first frame of a session the worst wait is
   // however long ago the last poll was, and "worst 0s" is not a statistic.
   if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest)}`);
+  // The coarse bar: whole cells in the status colours, in the same left-to-right
+  // order the header counts them. A cell is the smallest thing this can be wrong by,
+  // which is the whole argument for the pixel layer that covers it, and is also why
+  // the bar is here at all rather than the row being left blank for one.
+  const split = allot(WB_ORDER.map((k) => Math.max(0, (stats.spent || {})[k] || 0)), WB_TEXT);
+  const barFg = [];
+  let bar = '';
+  WB_ORDER.forEach((key, i) => {
+    for (let n = 0; n < split[i]; n += 1) {
+      bar += '\u2588';
+      barFg.push(key);
+    }
+  });
+  // A session with no time in it yet gets the empty track rather than a bar of
+  // nothing, for the same reason the board refuses to hang at all until there is a
+  // number on it: an empty picture reads as broken, an empty track reads as early.
+  const barRow = bar ? line(padEnd(bar, WB_TEXT)) : line('');
+  // Two cells of frame and padding on the left before the bar starts, so the colours
+  // line up under the words they belong to.
+  const barStyle = bar ? ['plastic', 'plastic', ...barFg.map((k) => `status.${k}`)] : 'soft';
   const rows = [
     `\u250c ${title} ` + '\u2500'.repeat(Math.max(0, WB_W - 4 - width(title))) + '\u2510',
     line(spent),
+    barRow,
     line(hands.join(' \u00b7 ')),
     '\u2514' + '\u2500'.repeat(WB_W - 2) + '\u2518',
   ];
@@ -670,7 +767,8 @@ export function whiteboard(stats, now) {
     w: WB_W,
     h: rows.length,
     rows,
-    rowFg: ['plastic', 'soft', 'soft', 'plastic'],
+    barRow: WB_BAR_ROW,
+    rowFg: ['plastic', 'soft', barStyle, 'soft', 'plastic'],
     // A surface, rather than writing directly on the wall: the spaces inside the
     // frame are part of the board, which is what makes it read as one.
     bg: 'paper',
@@ -724,7 +822,12 @@ function propRow(placed, y, cols) {
   for (const { p, x, y: py } of placed) {
     const r = y - py;
     if (r < 0 || r >= p.h) continue;
-    const hex = P[p.rowFg[r]];
+    // A row's colour is normally one name for the whole row. The whiteboard's bar row
+    // needs a name per cell, because a stacked bar in five colours is the one thing
+    // on a prop that cannot be a single colour and still mean anything.
+    const style = p.rowFg[r];
+    const perCell = Array.isArray(style);
+    const rowHex = perCell ? null : P[style];
     // A prop with a surface (the whiteboard) owns every cell of its box, spaces
     // included, or the wall would show through between its words.
     const back = p.bg ? P[p.bg] : null;
@@ -733,7 +836,9 @@ function propRow(placed, y, cols) {
       if (back) backs[x + i] = back;
       if (ch === ' ') return;
       chars[x + i] = ch;
-      colours[x + i] = hex;
+      // Past the end of a per-cell list the row falls back to its last colour, so a
+      // bar shorter than its row cannot leave uncoloured cells behind it.
+      colours[x + i] = perCell ? colour(style[i] ?? style[style.length - 1]) : rowHex;
     });
   }
   const spans = [];
@@ -757,13 +862,20 @@ function propRow(placed, y, cols) {
 // join between the two and the furniture has something to stand against. The top
 // row of the band is the trim along that join, which is why the furniture starts
 // one row lower.
+// Returns where the whiteboard ended up, in floor-local cells, or null when it did
+// not go up at all. Only the whiteboard, because it is the only piece of furniture
+// with numbers on it: src/graphics.mjs draws a real chart inside its frame when the
+// terminal can take one, and it can only do that if something tells it which
+// rectangle the frame is currently occupying. Nobody else needs to know, so this
+// stays a return value rather than becoming state.
 function decorate(lines, cols, floorRows, minY, board = null) {
   const bandTop = Math.max(minY, floorRows - BAND_H);
   const bandH = Math.min(floorRows - bandTop, BAND_H);
   const placed = furnish(cols, bandTop + 1, bandH - 1, board);
-  if (!placed.length) return;
+  if (!placed.length) return null;
   const trim = paint('▔'.repeat(cols), [], { fg: P.trim, bg: P.backWall });
   for (let y = bandTop; y < floorRows; y += 1) lines[y] = y === bandTop ? trim : propRow(placed, y, cols);
+  return board ? placed.find((at) => at.p === board) || null : null;
 }
 
 /* --------------------------------------------------------------------- floor */
@@ -900,7 +1012,15 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // on the card as well, and this is the only place in the list you can answer
     // from. The gap in the branch column reads as "this row is asking you something",
     // which is the right thing for it to say.
-    const ref = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    // A row has no desk to put paper on, so here the same fact is a number, riding in
+    // the branch's column: `@main +12`. It is the one place in the office the count is
+    // visible without opening a card, which is what the compact list is for, and it
+    // takes the branch's chances with the space rather than its own. A checkout with no
+    // branch to name still shows its badge: the reason there is no branch is on the
+    // card, and how much is uncommitted is worth a column either way.
+    const badge = !answerRoom ? dirtBadge(person.dirt?.files) : '';
+    const head = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    const ref = [head, badge].filter(Boolean).join(' ');
     const refRoom = ref && cols - b.w - 2 >= 16 + width(ref) + 2 ? width(ref) + 2 : 0;
     b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom - answerRoom)), {
       fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
@@ -908,7 +1028,10 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     });
     if (refRoom) {
       b.gap(cols - 1 - width(ref));
-      b.add(ref, { fg: P.faint });
+      if (head) b.add(badge ? `${head} ` : head, { fg: P.faint });
+      // Its own span so a conflicted checkout can say so here too, in the same tone the
+      // pile on the desk takes. Faint otherwise: this is context, not news.
+      if (badge) b.add(badge, { fg: person.dirt?.conflicts ? SNAG_FG : P.faint });
     }
     // Bracketed and accent-coloured like the buttons on a monitor and the ones on
     // the card, so the same thing looks the same in all three places.
@@ -1117,7 +1240,9 @@ function composePanel(view, panelRows) {
   const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
   const body = [];
 
-  const who = compose.scope === 'all' ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}` : `assign · ${compose.name || compose.id}`;
+  const who = compose.scope === 'all'
+    ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}`
+    : `${compose.scope === 'reply' ? 'answer' : 'assign'} · ${compose.name || compose.id}`;
   const head = cells();
   head.add('╭─ ');
   head.add(truncate(who, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
@@ -1126,9 +1251,22 @@ function composePanel(view, panelRows) {
   head.add('╮');
   body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
 
+  // The question, above the answer, and above the field so it reads in that order.
+  // An answer typed from memory is how you end up replying "the second one" to a
+  // menu that has since redrawn itself. Dropped on a panel with no room, because the
+  // field it belongs to matters more than the label on it.
+  const asking = compose.ask && panelRows >= 6;
+  if (asking) {
+    const b = cells();
+    b.add('re', { fg: P.faint });
+    b.add('  ');
+    b.add(truncate(compose.ask, Math.max(0, TEXT - b.w)), { fg: P.soft });
+    body.push(row(b.out().text, b.out().spans));
+  }
+
   // The field. Three rows at most, and only as many as the panel can spare, with
   // the end of what you typed always visible because that is where the cursor is.
-  const fieldRows = Math.max(1, Math.min(3, panelRows - 4));
+  const fieldRows = Math.max(1, Math.min(3, panelRows - 4 - (asking ? 1 : 0)));
   const lines = wrapField(compose.text, TEXT - 2, fieldRows);
   lines.forEach((text, i) => {
     const b = cells();
@@ -1167,7 +1305,9 @@ function composePanel(view, panelRows) {
         ? `enter to send this to ${to.length} ${to.length === 1 ? 'person' : 'people'} · esc to go back`
         : compose.scope === 'all'
           ? 'type it out · enter to review who gets it · esc to drop it'
-          : 'type it out · enter to send it · esc to drop it';
+          : compose.scope === 'reply'
+            ? 'type your answer · enter sends it and the return key · esc to drop it'
+            : 'type it out · enter to send it · esc to drop it';
     body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: compose.confirm ? STATUS.blocked.fg : P.faint }]));
   }
   body.push(edge('╰', '╯', PW, chrome));
@@ -1239,13 +1379,20 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     }
     fields.push(['tab', person.tabName || '(unnamed tab)', P.ink]);
     fields.push(['doing', person.title || '(no pane title)', P.soft]);
-    // In the room's own colour, which is what ties a wall you can see to a workspace
-    // you can name. Plain when the office has only one room.
-    fields.push(['where', [person.workspaceName, person.tabId, person.id].filter(Boolean).join(' · '), roomOf(view.rooms, person)?.ink || P.soft]);
+    // No workspace/tab/pane row. The card's own title already says the pane id, the
+    // tab has a row of its own two lines up, and a tab id is not a thing anybody
+    // reads: it was three identifiers spending a row to repeat what was on screen.
     fields.push(['cwd', person.cwd, P.soft]);
     // Only when there is one. A `branch: (none)` row on every desk in an untrusted
     // repo would be a permanent apology for a thing nobody asked about.
     if (person.branch) fields.push(['branch', person.repo ? `${person.branch} · ${person.repo}` : person.branch, P.ink]);
+    // The real number behind the pile of paper on the desk, which is the whole reason
+    // the pile can be a shape. Only for a checkout git actually answered about, so this
+    // row is never an apology for a directory that is not a repository, and it is the
+    // checkout's number rather than this person's: two desks in one tree share it, which
+    // is worth knowing and is why the label is `changes` and not `theirs`.
+    const changes = dirtWords(person.dirt);
+    if (changes) fields.push(['changes', changes, person.dirt?.conflicts ? SNAG_FG : P.ink]);
     if (person.sessionId) fields.push(['session', person.sessionId, P.soft]);
   }
 
@@ -1299,7 +1446,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   // accounted for, and describeDetection returns its lines most-explanatory first
   // so what gets clipped is the least useful end.
   if (detail.detection?.length) {
-    const answerRows = person?.status === 'blocked' && detail.choice ? 2 : 0;
+    // Two rows for the rule and the keys, three when the prompt also offers a
+    // standing grant, so the explanation yields to it rather than pushing it off.
+    const answerRows = person?.status === 'blocked' && detail.choice ? (detail.choice.always ? 3 : 2) : 0;
     const budget = floorRows - body.length - answerRows - 4;
     if (budget > 0) section('why herdr thinks so', detail.detection.slice(0, budget), { fg: P.dim });
   }
@@ -1330,6 +1479,23 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     if (detail.choice.shape === 'unknown') b.add('   (no prompt recognised)', { fg: P.faint });
     b.gap(TEXT);
     body.push(row(b.out().text, b.out().spans));
+
+    // The standing grant gets its own row and no hitbox. Every other answer in the
+    // office is clickable; this one is the sentence you cannot take back, and a
+    // click target for it is exactly the stray click there is no undoing. It is only
+    // drawn when the menu on the screen above actually offers it.
+    const always = detail.choice.always;
+    const armed = view.trust?.id === person.id;
+    if (always && body.length < floorRows) {
+      const t = cells();
+      t.add('  ');
+      t.add('[Y]', { fg: armed ? STATUS.blocked.fg : P.accent, bold: true });
+      t.add(' ');
+      t.add(armed ? 'enter to allow' : 'always allow', { fg: STATUS.blocked.fg, bold: true });
+      t.add(`  ${always.label}`, { fg: armed ? P.ink : P.dim });
+      t.gap(TEXT);
+      body.push(row(t.out().text, t.out().spans));
+    }
   }
 
   // The screen dump is the one part worth losing. In the split layout the panel
@@ -1377,6 +1543,17 @@ export function renderFrame(view) {
   const startRow = out.length;
   const hitboxes = [];
   const grid = { cols: 0, rows: 0, ids: [], menuCols: 1, menuVisible: 0 };
+  // Rectangles of cells the office is willing to give up to a pixel layer, in
+  // screen coordinates, the same way hitboxes are. An image occludes whatever text
+  // is under it, so this list is the whole permission system: a region is only in
+  // here if what it currently holds is decoration, or is a picture of a number that
+  // a chart says better. Everything else on the screen is words, and words stay
+  // cells. See src/graphics.mjs.
+  const regions = [];
+  // The spacer under the header bar. It is a row of carpet and nothing else, it is
+  // always there, and it is directly beneath the counts, which is exactly where a
+  // strip about who needs you belongs.
+  if (rows >= 2) regions.push({ kind: 'strip', x: 0, y: 1, w: cols, h: 1 });
 
   const stepX = TILE_W + GAP_X;
   const stepY = TILE_H + GAP_Y;
@@ -1488,7 +1665,14 @@ export function renderFrame(view) {
     const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
-    decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, whiteboard(view.stats, view.now));
+    const board = whiteboard(view.stats, view.now);
+    const hung = decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, board);
+    // Only the bar row, not the writing. The first version of this took both interior
+    // rows and so deleted `worked 12m · waiting 3m` to draw a picture of it, which
+    // left proportions with nothing to say which colour meant "waiting". The board now
+    // carries its own coarse bar in cells, and this region is that bar: a layer may
+    // only take cells that were already a picture, never cells that were words.
+    if (hung) regions.push({ kind: 'board', x: hung.x + 1, y: startRow + hung.y + board.barRow, w: WB_W - 2, h: 1 });
     if (pages > 1 && floorRows > 0) {
       // One desk to a floor is a desk, not a floor, and saying "floor 3 of 7" while
       // exactly one person is on the screen reads as six missing colleagues.
@@ -1510,5 +1694,5 @@ export function renderFrame(view) {
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
-  return { lines: out.slice(0, rows), hitboxes, grid };
+  return { lines: out.slice(0, rows), hitboxes, grid, regions };
 }

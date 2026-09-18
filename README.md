@@ -45,6 +45,8 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
+| `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
+| `node office.mjs --no-git` | Never run git in anybody's checkout, so no desk shows uncommitted work |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
@@ -75,6 +77,8 @@ would rather not.
 | `^w` / `^u` (typing) | delete the last word / clear the field |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
+| `s` | answer them in words, for a question that is not a yes or a no |
+| `Y` | allow it from now on, when the prompt offers that. Arms, and `enter` grants |
 | `/` | filter the floor: names, kinds, tabs, directories, statuses |
 | `F` | shepherd mode: walk to hands as they go up |
 | `z` | zoom: floor plan, list view, one desk |
@@ -272,6 +276,50 @@ process that wrote it would be worse than no title at all. If herdr reports ther
 is no foreground window to title, nothing is remembered as set, so it goes out
 again when a window comes back. `--no-title` switches the whole thing off.
 
+## Pixels, in two places
+
+A terminal cell holds a word, a colour and one of eight block glyphs. That is
+enough to say `worked 3h40m - waiting 12m30s`, and not enough to show you that the
+waiting was a fifth of the session without you doing the division. So where the
+office has a proportion to show, and only there, it draws one in pixels through
+`pane.graphics.set` and lets herdr worry about which escape sequence your terminal
+speaks.
+
+Two layers, and neither may cover a word. An image occludes the cells underneath it
+instead of compositing with them, so a layer only ever lands on cells that were
+already blank or already a picture:
+
+- **The whiteboard's bar row** becomes a stacked bar of where the session's time
+  actually went, with quarter marks over it. That row already holds the same bar
+  drawn in whole cells, so the layer buys resolution rather than information, and
+  the two lines of writing above and below it are untouched. The frame and the
+  `open since 09:41` title stay in cells, because they are words.
+- **The blank row under the header** becomes one tick per desk in the whole
+  session, grouped by room, with a raised hand drawn taller. The floor plan pages,
+  and until now the only thing saying the other two floors existed was the words
+  "keep walking for the rest". This says which of them has somebody waiting.
+
+Nothing in the graphics layer draws text. Words are cells, proportions are pixels,
+which keeps every rule the office has about what may reach a screen in exactly one
+place.
+
+The first version of the whiteboard layer got this wrong in a way worth recording:
+it covered both interior rows, so it deleted `worked 3h40m - waiting 12m30s` in
+order to draw a picture of it, and what was left was five colours with nothing to
+say which one meant waiting. A chart that costs you the legend explaining it is a
+worse whiteboard. Hence the rule above, and hence the coarse cell bar underneath.
+
+It is opt-out rather than opt-in because there is nothing here for a default to
+break. The pane is asked once, with `pane.graphics.info`, whether it can draw at
+all; a terminal that says no is never asked again and the text renderer is already
+correct. An image occludes the cells under it, so the renderer volunteers the
+rectangles it is willing to lose and graphics may not touch anything else. A
+picture whose numbers moved but whose pixels would not is never sent, because the
+floor repaints three times a second and the charts do not. Three failures in a row
+switch the whole thing off for the rest of the run, and quitting takes the pixels
+down with it. `--no-graphics` is for taste, not for safety: some people want a
+terminal to be only text.
+
 ## Finding one desk in twenty
 
 `/` opens a filter and the floor simply has fewer people on it: `2 of 20 desks` in
@@ -384,6 +432,62 @@ branch. A ref name is author-controlled text, so it is put through the same wash
 tab names and terminal titles: one line, no control characters, thirty-two
 characters at the outside.
 
+## How much they have changed
+
+The branch says where an agent is working. This says how much it has done there: the
+number of things changed in that checkout and not yet committed. It is the question
+you are left with once you can see who is busy, because "working for twenty minutes"
+means two very different things depending on whether anything came of it. A desk with
+nothing uncommitted has been reading; a desk with forty files changed has been busy
+in a way somebody is going to have to review.
+
+Three surfaces, one number, sized to the space each one has:
+
+- **A pile of paper on the desk**, clear of the sticky note. One cell for a file or
+  two, five for a large change, roughly doubling in between: the difference between one
+  file and three is worth a cell, the difference between forty and forty-five is not.
+  It grows wider and taller together, `▅▅ ▆▆▆ ▇▇▇▇ █████ ██████`, and that took two
+  goes: the first version drew every size in the same glyph the mug and the sticky note
+  are drawn in, so the commonest case read as more furniture, and the second made the
+  smallest step a single `▁` that on a real floor was a speck nobody could see. The
+  scale starts at two cells for that reason. The pile turns the colour of bad news if
+  anything in that tree is conflicted.
+- **A `+12` badge** next to the branch in the list view, which is the only place the
+  actual number is visible without opening anything. Capped at three digits, because
+  the branch and the badge share whatever the row has spare and a column that could
+  be six digits wide would jump about while you read it.
+- **A `changes` row on the card**, in words: `12 uncommitted`, or
+  `7 uncommitted · 2 conflicted`, or `nothing uncommitted`, which is said out loud
+  because a clean tree is a real answer and often the one you were hoping for.
+
+There is no method for this. `worktree.list` knows a path and a branch and nothing
+about the state of the tree, so this is the office's second and last subprocess after
+the `ps`: one `git status --porcelain=v1` per checkout, cached against the directory
+(two desks in one tree are one question) for fifteen seconds, a couple of directories
+per pass. Only in directories `worktree.list` has already called checkouts, which is
+not an optimisation but the rule that keeps it contained: the office never runs git
+speculatively in a directory a pane happens to be sitting in.
+
+Two guarantees come with running git in a repository somebody's agent is working in,
+and `src/dirt.mjs` exists to hold both:
+
+- **It cannot take a lock.** `git status` ordinarily refreshes the index and writes it
+  back, which means taking `index.lock`. On a timer, in a checkout where an agent is
+  committing, that makes somebody else's commit fail with a message about a lock file
+  and the office is the last place anyone would look for the cause.
+  `--no-optional-locks` is not optional here, and `core.fsmonitor=false` is the same
+  rule one step out: a status in a repo configured for it can start a daemon, and a
+  wall display has no business leaving a process behind in your repository.
+- **No path ever leaves that file.** Same rule as the process table: what comes out is
+  counts. Not a file name, not the first few entries. A repository's file names are as
+  private as its contents and this pane gets screen-shared, so the office draws how
+  many and the way to see which is the tool that was already going to tell you.
+
+`--no-git` turns it off entirely: no subprocess, no pile, no row, everything else
+unchanged. A checkout that will not answer, is not a repository, or is too slow gets
+nothing rather than a guess, and that silence is remembered as an answer so the same
+directory is not re-asked every couple of seconds for the rest of the afternoon.
+
 ## Rooms, one per workspace
 
 A herdr session with three workspaces open is three separate bodies of work, and
@@ -453,10 +557,30 @@ a desk that has since closed is kept, so the office totals only ever go up: a to
 that dropped when somebody tidied up a tab would read as a bug rather than as a
 closed tab.
 
-Nothing is written to disk. The clock starts when you open the office and the
-numbers are about this session, which is what `open since 09:41` is there to say. A
-"today" that quietly reset whenever the office was reopened, or that spanned
-midnight, would be a worse lie than a smaller true number.
+The whiteboard survives a restart, but only until the end of the day. It is written
+to one small JSON file in the state directory herdr hands the plugin, so closing the
+pane and opening it again at 11:20 continues this morning rather than announcing that
+the morning never happened. A file written on another day is thrown away rather than
+added to: `open since 09:41` has to mean this morning, and a "today" that quietly
+spanned midnight would be a worse lie than a smaller true number.
+
+What never carries over is time nobody watched. The office is shut between a quit and
+the next open, so that gap goes in no bucket, and no interval is ever counted from
+before the office reopened. The consequence is deliberate and worth stating: the
+buckets add up to less than `open since` says, because `open since` is wall clock from
+when your day started and the buckets are only ever watched time. A hand that was
+already up when you reopened is not counted twice either, since it is the same prompt
+still waiting and it was counted before the office shut.
+
+Desk cards do not survive, only the office total. A pane id means nothing after a
+restart, so a desk's time is folded into the office numbers and its card starts again:
+`on shift 2h` for a desk this office met ninety seconds ago would be the office
+claiming to have watched something it did not.
+
+Run outside herdr, with no state directory, nothing is written and the clock simply
+starts when you do. That is also true of every way the file can go wrong. An
+unreadable, truncated, or half-written file is treated as no file at all, so the worst
+a bad state file can do is lose a morning's statistics, never the office.
 
 The whiteboard is furniture, so it hangs there only when the floor has a strip of
 wall to spare, and it is the first thing given up when there are more people than
@@ -506,6 +630,39 @@ mouse, and on a row that is asking you something they take the column the branch
 would have had. On a pane too narrow for them nothing is drawn and nothing is
 clickable there: `y` and `n` still work, and a hitbox with no button under it would
 be an approval sent from a blank patch of screen.
+
+### When yes and no are not the answer
+
+Plenty of questions are not approvals. "Which of these two approaches do you want" has
+no key, and until `s` the only thing to do was press `f` and go and type it yourself,
+which is the one thing the office exists to save you. `s` opens a field on the waiting
+desk with the question above it, and what you type goes in as keystrokes.
+
+It has to be keystrokes. `agent.prompt` is how `a` and `A` give somebody a job, and
+herdr rejects it outright with `agent_blocked` when the agent is waiting on a prompt,
+before any input is sent, which is exactly the case here. So an answer goes as one
+`pane.send_input` carrying the words and the return key together. One call rather than
+two on purpose: two would leave a window where half an answer sits in somebody's input
+box waiting for a submit that already failed.
+
+### Allowing it from now on
+
+Some prompts offer a third option: yes, and stop asking. `y` never picks it, and that
+is deliberate, because it is a different promise from yes. Yes answers one question.
+That answers every question of the same kind from here on, sometimes past the end of
+the session, and it is not the office's decision to make quietly.
+
+So it has its own key. `Y` arms it and `enter` grants it, and while it is armed the
+footer is down to those two keys and the mouse does nothing, because the `[y]` still
+under the pointer would otherwise be a second answer to the same question. It is only
+ever offered when that option is genuinely on the agent's screen, and the digit is read
+off the menu rather than assumed to be `2`: on a menu that put "no, and tell me what to
+do differently" at 2, a hardcoded digit would deny the command under a key labelled
+"always allow". Both the digit and the option's own wording are checked again at the
+moment you confirm, since the screen belongs to the agent and can change in the seconds
+between arming and granting. The card and the footer both quote that wording, so the
+sentence you are agreeing to is the agent's own. It is the one answer in the office
+with no button, for the same reason the assign field has none.
 
 ## Why does it think that
 
@@ -601,6 +758,12 @@ it was entered, so the first sighting of an agent starts the clock.
   thousand processes. The name comes from `ucomm` rather than off the front of the
   arguments, which is not fussiness: splitting the arguments made every Kiro desk
   report `Kiro`, off a path with a space in it.
+- Uncommitted work is not in the API at all: it is one
+  `git --no-optional-locks -c core.fsmonitor=false status --porcelain=v1` per checkout,
+  at most every 15s and at most two checkouts per pass, only in directories
+  `worktree.list` has already called checkouts, bounded at 1.5s and a megabyte, and
+  off entirely under `--no-git`. Counts come back; paths never do. See "How much they
+  have changed" for why each of those flags is there.
 - The window title is `client.window_title.set`, sent only when the string changes,
   and `client.window_title.clear` on the way out with a 500ms budget: an office that
   would not quit because a title would not clear is worse than a stale title. Note
@@ -647,11 +810,45 @@ Two rules that are easy to break by accident:
   U+257F) and block elements (U+2580 to U+259F). Geometric Shapes start at U+25A0 and
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
-- **`y`, `n` and `a` send real input to real agents.** Never test approve, deny or
-  assign against a live office; `--demo` prints what it would have sent instead.
-  `test/summary.test.mjs` covers the prompt reading, including the one case that
-  matters most: the "yes, and don't ask again" menu option must never be the one
-  picked automatically.
+- **`y`, `n`, `s`, `Y` and `a` send real input to real agents.** Never test approve,
+  deny, answer, grant or assign against a live office; `--demo` prints what it would
+  have sent instead, and `test/office.test.mjs` sends them for real down a socket no
+  agent is listening on. `test/summary.test.mjs` covers the prompt reading, including
+  the one case that matters most: the "yes, and don't ask again" menu option must
+  never be the one `y` picks, and when `Y` does reach it the digit comes off the menu
+  rather than from a guess.
+
+One test in the suite talks to the world. `test/protocol.test.mjs` runs `herdr api
+schema --json` and holds every request in the source to it: the method names, the
+parameters, the event descriptors, the read sources. It exists because most of what
+this office can say is only said when somebody presses a key, so a request the server
+would reject and a request nobody ever sends look identical from inside a test suite,
+and the news labels spent their whole life in exactly that gap. It is also the only
+check that covers the paths a test cannot run, since sending `agent.prompt` or
+`worktree.create` for real means typing into somebody's live agent and making a branch
+in their repository. With no herdr installed those assertions skip rather than pass,
+because a machine without herdr genuinely cannot answer the question. What it proves is
+spelling and not meaning: conforming to the schema is no evidence that a feature works.
+
+`test/socket.test.mjs` covers the other end of the same gap, and needs no herdr: it
+stands up a fake one on a temp socket and holds the client to the wire's actual
+manners, including a server that closes after every answer and a server that does not.
+It exists because nothing tested the class every call goes through, so a wrong
+description of the wire sat in three comments from the first commit until somebody
+measured it. The assertion worth keeping is that a request reaches the server exactly
+once: a read that is sent twice is waste, but `agent.send_keys` sent twice is two
+keystrokes typed at somebody's agent.
+
+`test/office.test.mjs` runs the office itself. It spawns `office.mjs` as a child
+process pointed at a fake herdr, types keys on its stdin and reads frames off its
+stdout, which works because the office only asks for raw mode when stdin is a tty and
+honours `COLUMNS`/`LINES` when stdout is not. Every other test in the suite covers a
+function in `src/`; this one covers the seam between the office and the wire, which was
+the one place a bug could sit with everything else green, and did. It is also how the
+write paths get exercised at all: a fake server can be sent `agent.prompt` and
+`agent.send_keys` without a real agent receiving anything, so the tests can assert the
+thing that actually matters, which is that a standup reaches each person exactly once
+and `y` is one keystroke.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch
@@ -660,17 +857,16 @@ green.
 
 ## Known rough edges
 
-- **Reads that page scrollback can drop the connection.** On herdr 0.9.0, an
-  `agent.read` with a `recent` source against a busy full-screen agent can make the
-  server hang up mid-response instead of returning `agent_not_idle`. The office
-  defaults to the `visible` source and reconnects itself, so a bad desk costs you one
-  socket, not the room.
-- **`agent.explain` over the socket does the same thing**, so that call goes through
-  the `herdr` CLI (`HERDR_BIN_PATH`) instead of the socket.
-- **Three in-flight requests on one socket is one too many.** On herdr 0.9.0 the
-  server answers two concurrent requests and hangs up on the third, so a
-  `Promise.all` of three quietly loses the last one. The client queues requests
-  instead: callers fire whatever they like, the wire stays single file.
+- **A request/response socket answers exactly once and then closes.** Measured against
+  herdr 0.9.0 on 2026-09-17: one request, one answer, connection gone, whether or not
+  anything was concurrent. A second request written to the same socket gets `EPIPE`
+  even when written in the same tick as the first answer arriving. So the client opens
+  a connection per request and still sends them single file, and callers can fire
+  whatever they like concurrently. A raw `Promise.all` over one socket of your own
+  would keep the first answer and lose the rest.
+- **The event socket is the exception**: `events.subscribe` holds its connection open
+  and pushes, and one invalid entry rejects the whole batch and leaves it silent
+  forever, which looks exactly like nothing ever happening.
 - **Emoji and other ambiguous-width glyphs are stripped** from pane titles and screen
   text before drawing, because they wreck a fixed cell grid.
 - **`y` sends a real keystroke to a real agent.** The prompt shape is inferred, so on

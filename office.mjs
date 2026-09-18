@@ -10,6 +10,7 @@
 //   node office.mjs --quiet    no toast when somebody starts waiting on you
 //   node office.mjs --no-title leave the window title alone
 //   node office.mjs --no-graphics  text only, no pixel charts
+//   node office.mjs --no-git   do not run git in anybody's checkout
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -30,6 +31,7 @@ import { assignRooms } from './src/rooms.mjs';
 import { Clocks } from './src/punchclock.mjs';
 import { load as loadState, save as saveState } from './src/state.mjs';
 import { branchFromList } from './src/branches.mjs';
+import { readDirt } from './src/dirt.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
 
@@ -51,6 +53,14 @@ const TITLE = !argv.has('--no-title');
 // break. What it is opt-out *for* is taste: some people want a terminal to be
 // only text, and that is a preference, not a capability.
 const GRAPHICS = !argv.has('--no-graphics');
+// Whether the office may run `git status` in the checkouts its desks are sitting in, to
+// say how much is uncommitted. Opt-out rather than opt-in because it is the answer to
+// the question people actually have about a floor of agents, and because what it runs is
+// a read that cannot take a lock (see src/dirt.mjs). Opt-out at all because it is the
+// one thing the office does that is not a socket call: somebody watching agents on a
+// machine where git is expensive, or who would simply rather this pane never shelled
+// out into their repositories, gets to say no in one flag.
+const GIT = !argv.has('--no-git');
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -92,6 +102,14 @@ const CMD_PER_PASS = 4;
 // trade for a wall display.
 const BRANCH_MS = 30000;
 const BRANCH_PER_PASS = 2;
+// The pile of paper on a desk is one `git status` per checkout, so it is throttled and
+// capped the same way branches are, and cached against the same key. Twice as often as a
+// branch, because it moves the other way round: a branch changes once an afternoon and
+// the number of uncommitted files changes every time an agent writes a file, which on a
+// working floor is constantly. Fifteen seconds is close enough for a wall display and
+// far enough apart that the subprocess cost is nothing anybody can feel.
+const DIRT_MS = 15000;
+const DIRT_PER_PASS = 2;
 // How much of a desk's screen the server matches the watchlist against, counted up
 // from the bottom. This was 8, on the reasoning that news is the last thing printed,
 // and 8 is almost exactly wrong for the panes this office watches: an agent in a
@@ -487,6 +505,29 @@ async function refreshBranches() {
   if (!ONCE) draw();
 }
 
+// How much is uncommitted in each checkout, via `git status` (see src/dirt.mjs for what
+// is run and why it cannot take a lock). Cached per working directory like the branch,
+// stalest first, a couple at a time.
+//
+// Only ever asked about a directory `worktree.list` has already said is a repository.
+// That is not an optimisation, it is the rule that keeps this contained: the office
+// never runs git speculatively in a directory somebody's pane happens to be sitting in,
+// only in checkouts the server has already told it are checkouts.
+async function refreshDirt() {
+  if (!GIT) return;
+  const dirs = [...new Set(roster.people.filter((p) => p.cwd && p.repo).map((p) => p.cwd))]
+    .filter((cwd) => roster.dirtAge(cwd) >= DIRT_MS)
+    .sort((a, b) => roster.dirtAge(b) - roster.dirtAge(a))
+    .slice(0, DIRT_PER_PASS);
+  if (!dirs.length) return;
+  for (const cwd of dirs) {
+    // readDirt always resolves: a checkout that will not answer is recorded as having
+    // nothing to say, so it is not asked again on the next pass.
+    roster.setDirt(cwd, await readDirt(cwd));
+  }
+  if (!ONCE) draw();
+}
+
 // Puts the headline count on the window itself, so the office is legible from a
 // tab bar or an alt-tab list with its pane nowhere in sight. Only ever sent when
 // the string actually changes: a title set twenty times a minute to the same
@@ -561,6 +602,7 @@ async function refresh() {
     refreshAsks();
     refreshCommands();
     refreshBranches();
+    refreshDirt();
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -1613,6 +1655,19 @@ const DEMO_BRANCHES = ['main', 'feature/sso', 'fix/flaky-tests', 'renovate/deps'
 
 const DEMO_COMMANDS = ['npm test', 'cargo build', 'git rebase', 'pytest -x --last-failed', 'tsc', 'make'];
 
+// Uncommitted work, at every size the pile has: a clean checkout, a couple of files, a
+// change nobody is going to enjoy reviewing, and one with a conflict in it. Null is in
+// here too, because a directory git would not answer about is the ordinary case for
+// anybody running the office over a pane that is not in a repository.
+const DEMO_DIRT = [
+  { files: 0, conflicts: 0 },
+  { files: 2, conflicts: 0 },
+  { files: 31, conflicts: 0 },
+  null,
+  { files: 7, conflicts: 1 },
+  { files: 12, conflicts: 0 },
+];
+
 // News is normally driven by `pane.output_matched`, which the demo has no server
 // for, so a couple of lines are fed through the real classifier rather than
 // having their labels written out here. That way the demo cannot show a label the
@@ -1624,6 +1679,7 @@ function demoExtras() {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
+    roster.setDirt(person.cwd, DEMO_DIRT[i % DEMO_DIRT.length]);
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {
@@ -1690,6 +1746,11 @@ async function main() {
       clocks.observe(roster.people);
       await refreshAsks();
       await refreshCommands();
+      // Awaited here where the live office fires them off, because a single printed
+      // frame is the thing used to look at the art: a branch and a pile of paper that
+      // only ever arrive on the second poll would never be in it.
+      await refreshBranches();
+      await refreshDirt();
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });

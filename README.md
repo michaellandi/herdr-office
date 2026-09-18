@@ -46,6 +46,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
+| `node office.mjs --no-git` | Never run git in anybody's checkout, so no desk shows uncommitted work |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
@@ -431,6 +432,57 @@ branch. A ref name is author-controlled text, so it is put through the same wash
 tab names and terminal titles: one line, no control characters, thirty-two
 characters at the outside.
 
+## How much they have changed
+
+The branch says where an agent is working. This says how much it has done there: the
+number of things changed in that checkout and not yet committed. It is the question
+you are left with once you can see who is busy, because "working for twenty minutes"
+means two very different things depending on whether anything came of it. A desk with
+nothing uncommitted has been reading; a desk with forty files changed has been busy
+in a way somebody is going to have to review.
+
+Three surfaces, one number, sized to the space each one has:
+
+- **A pile of paper on the desk**, next to the sticky note. One cell for a file or
+  two, five for a large change, roughly doubling in between: the difference between
+  one file and three is worth a cell, the difference between forty and forty-five is
+  not. It turns the colour of bad news if anything in that tree is conflicted.
+- **A `+12` badge** next to the branch in the list view, which is the only place the
+  actual number is visible without opening anything. Capped at three digits, because
+  the branch and the badge share whatever the row has spare and a column that could
+  be six digits wide would jump about while you read it.
+- **A `changes` row on the card**, in words: `12 uncommitted`, or
+  `7 uncommitted · 2 conflicted`, or `nothing uncommitted`, which is said out loud
+  because a clean tree is a real answer and often the one you were hoping for.
+
+There is no method for this. `worktree.list` knows a path and a branch and nothing
+about the state of the tree, so this is the office's second and last subprocess after
+the `ps`: one `git status --porcelain=v1` per checkout, cached against the directory
+(two desks in one tree are one question) for fifteen seconds, a couple of directories
+per pass. Only in directories `worktree.list` has already called checkouts, which is
+not an optimisation but the rule that keeps it contained: the office never runs git
+speculatively in a directory a pane happens to be sitting in.
+
+Two guarantees come with running git in a repository somebody's agent is working in,
+and `src/dirt.mjs` exists to hold both:
+
+- **It cannot take a lock.** `git status` ordinarily refreshes the index and writes it
+  back, which means taking `index.lock`. On a timer, in a checkout where an agent is
+  committing, that makes somebody else's commit fail with a message about a lock file
+  and the office is the last place anyone would look for the cause.
+  `--no-optional-locks` is not optional here, and `core.fsmonitor=false` is the same
+  rule one step out: a status in a repo configured for it can start a daemon, and a
+  wall display has no business leaving a process behind in your repository.
+- **No path ever leaves that file.** Same rule as the process table: what comes out is
+  counts. Not a file name, not the first few entries. A repository's file names are as
+  private as its contents and this pane gets screen-shared, so the office draws how
+  many and the way to see which is the tool that was already going to tell you.
+
+`--no-git` turns it off entirely: no subprocess, no pile, no row, everything else
+unchanged. A checkout that will not answer, is not a repository, or is too slow gets
+nothing rather than a guess, and that silence is remembered as an answer so the same
+directory is not re-asked every couple of seconds for the rest of the afternoon.
+
 ## Rooms, one per workspace
 
 A herdr session with three workspaces open is three separate bodies of work, and
@@ -701,6 +753,12 @@ it was entered, so the first sighting of an agent starts the clock.
   thousand processes. The name comes from `ucomm` rather than off the front of the
   arguments, which is not fussiness: splitting the arguments made every Kiro desk
   report `Kiro`, off a path with a space in it.
+- Uncommitted work is not in the API at all: it is one
+  `git --no-optional-locks -c core.fsmonitor=false status --porcelain=v1` per checkout,
+  at most every 15s and at most two checkouts per pass, only in directories
+  `worktree.list` has already called checkouts, bounded at 1.5s and a megabyte, and
+  off entirely under `--no-git`. Counts come back; paths never do. See "How much they
+  have changed" for why each of those flags is there.
 - The window title is `client.window_title.set`, sent only when the string changes,
   and `client.window_title.clear` on the way out with a 500ms budget: an office that
   would not quit because a title would not clear is worse than a stale title. Note

@@ -69,6 +69,11 @@ export class Roster {
     // `worktree.list` answers: two desks in the same checkout share one answer and
     // therefore one call.
     this.branches = new Map(); // cwd -> { branch, repo, at }
+    // Keyed by working directory for a stronger reason than the branches are: how much
+    // is uncommitted is a fact about the checkout and not about the person. Two agents
+    // in one checkout genuinely do share a pile of paper, and drawing them the same is
+    // the truth about a situation somebody probably wants to know they are in.
+    this.dirt = new Map(); // cwd -> { counts: { files, conflicts } | null, at }
   }
 
   setWorkspaces(workspaces = []) {
@@ -179,6 +184,27 @@ export class Roster {
     return entry ? this.clock() - entry.at : Infinity;
   }
 
+  // How much is uncommitted in a working directory (see src/dirt.mjs). `null` counts as
+  // an answer, exactly as a null branch does: "git would not tell us" has to be
+  // distinguishable from "not asked yet", or every directory that is not a repository
+  // gets a subprocess spent on it on every pass forever.
+  setDirt(cwd, counts = null) {
+    if (!cwd) return;
+    const clean = counts && Number.isFinite(Number(counts.files))
+      ? { files: Math.max(0, Math.floor(Number(counts.files))), conflicts: Math.max(0, Math.floor(Number(counts.conflicts) || 0)) }
+      : null;
+    this.dirt.set(cwd, { counts: clean, at: this.clock() });
+    for (const person of this.people) {
+      if (person.cwd !== cwd) continue;
+      person.dirt = clean;
+    }
+  }
+
+  dirtAge(cwd) {
+    const entry = this.dirt.get(cwd);
+    return entry ? this.clock() - entry.at : Infinity;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -238,6 +264,7 @@ export class Roster {
           cwd: a.cwd || '',
           branch: this.branches.get(a.cwd || '')?.branch || null,
           repo: this.branches.get(a.cwd || '')?.repo || null,
+          dirt: this.dirt.get(a.cwd || '')?.counts || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
         };

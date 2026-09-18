@@ -141,6 +141,52 @@ test('a command lives on a desk only while that desk is working', () => {
   assert.equal(roster.commandAge('w1:p1'), Infinity);
 });
 
+test('a pile of paper belongs to the checkout, not to the person', () => {
+  // Uncommitted work is a fact about a working directory, so it is cached against one
+  // and every desk sitting in that directory gets it. Two agents in one checkout really
+  // do share a pile of paper, and being able to see that is worth having.
+  const roster = new Roster();
+  roster.update([agent('w1:p1', { cwd: '/repo' }), agent('w1:p2', { cwd: '/repo' }), agent('w1:p3', { cwd: '/elsewhere' })]);
+  assert.equal(roster.find('w1:p1').dirt, null);
+  assert.equal(roster.dirtAge('/repo'), Infinity);
+
+  roster.setDirt('/repo', { files: 12, conflicts: 1 });
+  assert.deepEqual(roster.find('w1:p1').dirt, { files: 12, conflicts: 1 });
+  assert.deepEqual(roster.find('w1:p2').dirt, { files: 12, conflicts: 1 }, 'the other desk in the same tree');
+  assert.equal(roster.find('w1:p3').dirt, null, 'and nobody outside it');
+  assert.ok(roster.dirtAge('/repo') < 1000);
+
+  // Survives a poll, like a command does: the checkout is only read every few seconds,
+  // so the answer has to outlive the polls in between.
+  roster.update([agent('w1:p1', { cwd: '/repo' })]);
+  assert.deepEqual(roster.find('w1:p1').dirt, { files: 12, conflicts: 1 });
+
+  // A clean tree is zero, and zero is not the same as unknown: the card says "nothing
+  // uncommitted" for one and draws no row at all for the other.
+  roster.setDirt('/repo', { files: 0, conflicts: 0 });
+  assert.deepEqual(roster.find('w1:p1').dirt, { files: 0, conflicts: 0 });
+
+  // "git would not say" is recorded as an answer too, or a directory that is not a
+  // repository costs a subprocess on every pass forever.
+  roster.setDirt('/repo', null);
+  assert.equal(roster.find('w1:p1').dirt, null);
+  assert.ok(roster.dirtAge('/repo') < 1000);
+
+  // Nonsense from anywhere is dropped rather than drawn: a count is a whole number of
+  // things, and a card is not the place to find out it was a string.
+  roster.setDirt('/repo', { files: 'lots' });
+  assert.equal(roster.find('w1:p1').dirt, null);
+  roster.setDirt('/repo', { files: -4, conflicts: -1 });
+  assert.deepEqual(roster.find('w1:p1').dirt, { files: 0, conflicts: 0 });
+  roster.setDirt('/repo', { files: 3.7 });
+  assert.deepEqual(roster.find('w1:p1').dirt, { files: 3, conflicts: 0 });
+
+  // A pane with no directory has nothing to key on, and asking about '' would be asking
+  // about the office's own working directory.
+  roster.setDirt('', { files: 5 });
+  assert.equal(roster.dirt.has(''), false);
+});
+
 test('news over a desk puts itself away', () => {
   // News is not state: nothing downstream will ever tell us the tests stopped
   // having passed, so the only thing that clears it is the clock. A fake one here,

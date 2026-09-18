@@ -327,6 +327,21 @@ export const BRANCHES = [
   null,
 ];
 
+// Uncommitted work, as the reader hands it over: unread, clean, every step of the
+// pile, a conflicted tree (which is drawn in a different colour), and a number far
+// past the badge's cap. Applied to a floor the way branches are, since what the
+// renderer reads is the field rather than the cache behind it.
+export const DIRTS = [
+  null,
+  { files: 0, conflicts: 0 },
+  { files: 1, conflicts: 0 },
+  { files: 4, conflicts: 0 },
+  { files: 9, conflicts: 2 },
+  { files: 17, conflicts: 0 },
+  { files: 148, conflicts: 1 },
+  { files: 100000, conflicts: 0 },
+];
+
 export const FILTERS = [
   ['off', { filter: '', filtering: false }],
   ['field open, empty', { filter: '', filtering: true }],

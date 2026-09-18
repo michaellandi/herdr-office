@@ -49,9 +49,10 @@ const desk = (id, status, i, extra = {}) => ({
 // Deliberate, and the reason these tests can see a duplicate at all. The real
 // herdr resets instead, so on the machine this was found on the duplicate was
 // dropped by the kernel and looked like nothing was wrong.
-async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here' } = {}) {
+async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-office-run-'));
   const sockPath = path.join(dir, 's');
+  const gitLog = path.join(dir, 'git-calls');
   const asked = [];
   let out = '';
 
@@ -64,6 +65,10 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
       'tab.list': { tabs: [{ tab_id: 'w1:t1', label: 'work', number: 1 }] },
       'agent.list': { agents },
       'agent.read': { read: { text: screenText } },
+      // Off by default: without it every desk has a cwd and no repository, which is
+      // what most of these tests want. With it, the office knows the directory is a
+      // checkout, which is the gate on running git in it at all.
+      'worktree.list': worktrees ?? {},
     })[method] ?? {};
 
   const live = new Set();
@@ -110,6 +115,25 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
     LINES: String(rows),
   });
 
+  // A git that is not git: it records how it was called and prints whatever porcelain
+  // the test asked for. So the assertion is about a real subprocess with real arguments,
+  // and no repository on this machine is read to make it.
+  if (git != null) {
+    const fake = path.join(dir, 'fake-git');
+    fs.writeFileSync(
+      fake,
+      `#!/usr/bin/env node\n`
+      + `require('fs').appendFileSync(${JSON.stringify(gitLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');\n`
+      + `process.stdout.write(${JSON.stringify(git)});\n`,
+    );
+    fs.chmodSync(fake, 0o755);
+    env.HERDR_OFFICE_GIT = fake;
+  } else {
+    // Nothing on the box should be able to answer, so a test that did not ask for git
+    // cannot accidentally read a real checkout.
+    env.HERDR_OFFICE_GIT = path.join(dir, 'no-git-here');
+  }
+
   const child = spawn(process.execPath, ['office.mjs', ...args], { cwd: ROOT, env, stdio: ['pipe', 'pipe', 'pipe'] });
   // Once, at spawn time. A second `child.on('close')` added after the event has
   // already fired never resolves, which hangs the run rather than failing it.
@@ -129,6 +153,8 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
     },
     screen: () => out.replace(ANSI, ''),
     sent: (method) => asked.filter((a) => a.method === method),
+    // Every argument list the office handed to git, in order.
+    gitCalls: () => (fs.existsSync(gitLog) ? fs.readFileSync(gitLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),
     type: (keys) => child.stdin.write(keys),
     // Poll rather than sleep: a fixed wait is either flaky or slow, and on a
     // failure the message has to say what the office was showing instead.
@@ -370,6 +396,82 @@ test('a prompt with no standing option cannot grant one', async () => {
     assert.deepEqual(office.sent('agent.send_keys'), [], 'a digit was sent to a y/n prompt');
   } finally {
     await office.stop();
+  }
+});
+
+// A checkout, as `worktree.list` describes one, and a status for the fake git to print.
+const WORKTREES = { source: { repo_name: 'repo' }, worktrees: [{ path: '/somewhere/repo', branch: 'refs/heads/feature/sso' }] };
+const STATUS = ['UU src/render.mjs', ' M office.mjs', '?? notes/', 'M  src/dirt.mjs'].join('\n');
+
+test('a checkout the office was told about gets counted, and read as a guest', async () => {
+  // The seam this covers is the one src/dirt.mjs cannot: whether the office actually
+  // runs the arguments that file promises, in the directories it says it will, having
+  // first been told those directories are repositories. `worktree.list` is answered here
+  // for the first time, so this also runs the branch path end to end.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0), desk('w1:p2', 'idle', 1)],
+    args: ['--once', '--detail'],
+    worktrees: WORKTREES,
+    git: STATUS,
+  });
+  try {
+    assert.equal(await office.exit(), 0, `--once did not exit cleanly: ${office.stderr}`);
+    assert.equal(office.stderr.trim(), '', 'a clean run should say nothing on stderr');
+    // The branch came off the socket and the count came off git, on the same card.
+    assert.ok(office.onScreen('feature/sso'), 'the branch never reached the screen');
+    assert.ok(office.onScreen('4 uncommitted · 1 conflicted'), `the count never reached the card: ${office.screen().slice(-600)}`);
+
+    // Two desks, one checkout, one subprocess: this is cached against the directory
+    // rather than the person, and a floor of twenty agents in one repo must not be
+    // twenty gits.
+    const calls = office.gitCalls();
+    assert.equal(calls.length, 1, `ran git ${calls.length} times for one checkout`);
+    // The flags dirt.mjs promises, verified where it counts: on a real argument vector
+    // handed to a real process.
+    assert.ok(calls[0].includes('--no-optional-locks'), calls[0].join(' '));
+    assert.ok(calls[0].includes('core.fsmonitor=false'), calls[0].join(' '));
+    assert.deepEqual(calls[0].slice(calls[0].indexOf('-C'), calls[0].indexOf('-C') + 2), ['-C', '/somewhere/repo']);
+    // And nothing about the count went back to herdr. The office reads a checkout; it
+    // does not tell anybody what it found.
+    assert.deepEqual(office.sent('agent.send_keys'), []);
+    assert.deepEqual(office.sent('agent.prompt'), []);
+  } finally {
+    await office.stop();
+  }
+});
+
+test('no git runs in a directory nobody said was a checkout, or when asked not to', async () => {
+  // Two gates, both worth having. The office is sitting in whatever directory a pane
+  // happens to be in, which might be a home directory or somebody else's project, so it
+  // only ever asks about directories the server has already called checkouts. And
+  // --no-git turns the whole thing off for anybody who would rather it did not run.
+  const bare = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    args: ['--once'],
+    git: STATUS,
+  });
+  try {
+    assert.equal(await bare.exit(), 0, bare.stderr);
+    assert.deepEqual(bare.gitCalls(), [], 'git ran in a directory that was never called a repository');
+  } finally {
+    await bare.stop();
+  }
+
+  const off = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    args: ['--once', '--detail', '--no-git'],
+    worktrees: WORKTREES,
+    git: STATUS,
+  });
+  try {
+    assert.equal(await off.exit(), 0, off.stderr);
+    assert.deepEqual(off.gitCalls(), [], '--no-git ran git anyway');
+    // The rest of the office is unaffected: the branch still comes off the socket, and
+    // the card simply has no row about changes.
+    assert.ok(off.onScreen('feature/sso'), 'the branch went missing with --no-git');
+    assert.ok(!off.onScreen('uncommitted'), 'a card claimed something about a checkout nobody read');
+  } finally {
+    await off.stop();
   }
 });
 

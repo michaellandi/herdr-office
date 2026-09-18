@@ -5,6 +5,7 @@ import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
+import { pile, dirtBadge, dirtWords } from './dirt.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
@@ -143,6 +144,24 @@ const KEYS_X = MON_X + 1;
 const MUG_X = MON_X + 12;
 const NOTE_X = 1;
 const DESK_TOP = over(over(over(' '.repeat(INNER), '▃'.repeat(10), KEYS_X), '▄', MUG_X), '▄', NOTE_X);
+// Work that has been done and not committed, as a pile of paper spreading across the
+// desk. It starts two cells clear of the sticky note, which is scenery and stays
+// scenery: a prop that quietly became a gauge would mean every desk in the office had
+// been reporting something all along.
+//
+// The desk in front of a person is the widest empty stretch on a card, so this is the
+// one signal that costs nothing in a room that is already fighting over its
+// twenty-seven cells. It is also the reason the pile is a shape rather than a number:
+// there is no room for digits here, and the exact count is a row on the card, one
+// keystroke away. A desk with paper all over it is the thing you are meant to notice
+// from across the room.
+const PAPER_X = NOTE_X + 2;
+const PAPER = '▄';
+// A pile the colour of paper, until something in the checkout is conflicted, at which
+// point it takes the same tone a broken build's slab does. Nothing else about it
+// changes: a conflict is a fact about the same pile, not another pile.
+const PAPER_FG = '#dcd6c8';
+const SNAG_FG = eventTint('broke').ink;
 const DESK_FRONT = over(' '.repeat(INNER), '───', MON_X + 5);
 
 // Both slabs stuck on the cubicle wall, the tab card and the speech bubble, hang
@@ -303,6 +322,11 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // entirely rather than squeezed when that would leave the job unreadable: on a
   // twenty-seven cell line, half a branch name and half a sentence is two lies where
   // there could have been one truth.
+  // How much is uncommitted in this checkout, as cells of paper on the desk. Drawn on
+  // the desk row below, and worked out here because the row is built inside a list
+  // literal where a statement cannot go.
+  const paper = pile(person.dirt?.files);
+
   const foot = cells();
   const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
   const roomForRef = ref && INNER - width(ref) - 1 >= TASK_MIN;
@@ -345,9 +369,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       { from: MON_X, to: INNER, fg: P.faint },
     ]),
     row(
-      DESK_TOP,
+      paper ? over(DESK_TOP, PAPER.repeat(paper), PAPER_X) : DESK_TOP,
       [
         { from: NOTE_X, to: NOTE_X + 1, fg: '#f2d98a' },
+        ...(paper ? [{ from: PAPER_X, to: PAPER_X + paper, fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG }] : []),
         { from: KEYS_X, to: KEYS_X + 10, fg: P.keys },
         { from: MUG_X, to: MUG_X + 1, fg: '#e9e4d9' },
       ],
@@ -969,7 +994,15 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // on the card as well, and this is the only place in the list you can answer
     // from. The gap in the branch column reads as "this row is asking you something",
     // which is the right thing for it to say.
-    const ref = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    // A row has no desk to put paper on, so here the same fact is a number, riding in
+    // the branch's column: `@main +12`. It is the one place in the office the count is
+    // visible without opening a card, which is what the compact list is for, and it
+    // takes the branch's chances with the space rather than its own. A checkout with no
+    // branch to name still shows its badge: the reason there is no branch is on the
+    // card, and how much is uncommitted is worth a column either way.
+    const badge = !answerRoom ? dirtBadge(person.dirt?.files) : '';
+    const head = !answerRoom && person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
+    const ref = [head, badge].filter(Boolean).join(' ');
     const refRoom = ref && cols - b.w - 2 >= 16 + width(ref) + 2 ? width(ref) + 2 : 0;
     b.add(truncate(tail, Math.max(0, cols - b.w - 2 - refRoom - answerRoom)), {
       fg: person.status === 'blocked' ? st.fg : news ? eventTint(news.kind).ink : P.soft,
@@ -977,7 +1010,10 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     });
     if (refRoom) {
       b.gap(cols - 1 - width(ref));
-      b.add(ref, { fg: P.faint });
+      if (head) b.add(badge ? `${head} ` : head, { fg: P.faint });
+      // Its own span so a conflicted checkout can say so here too, in the same tone the
+      // pile on the desk takes. Faint otherwise: this is context, not news.
+      if (badge) b.add(badge, { fg: person.dirt?.conflicts ? SNAG_FG : P.faint });
     }
     // Bracketed and accent-coloured like the buttons on a monitor and the ones on
     // the card, so the same thing looks the same in all three places.
@@ -1332,6 +1368,13 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     // Only when there is one. A `branch: (none)` row on every desk in an untrusted
     // repo would be a permanent apology for a thing nobody asked about.
     if (person.branch) fields.push(['branch', person.repo ? `${person.branch} · ${person.repo}` : person.branch, P.ink]);
+    // The real number behind the pile of paper on the desk, which is the whole reason
+    // the pile can be a shape. Only for a checkout git actually answered about, so this
+    // row is never an apology for a directory that is not a repository, and it is the
+    // checkout's number rather than this person's: two desks in one tree share it, which
+    // is worth knowing and is why the label is `changes` and not `theirs`.
+    const changes = dirtWords(person.dirt);
+    if (changes) fields.push(['changes', changes, person.dirt?.conflicts ? SNAG_FG : P.ink]);
     if (person.sessionId) fields.push(['session', person.sessionId, P.soft]);
   }
 

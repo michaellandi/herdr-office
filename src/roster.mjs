@@ -74,6 +74,11 @@ export class Roster {
     // in one checkout genuinely do share a pile of paper, and drawing them the same is
     // the truth about a situation somebody probably wants to know they are in.
     this.dirt = new Map(); // cwd -> { counts: { files, conflicts } | null, at }
+    // How full each agent's context window is (see src/head.mjs). Keyed by pane, unlike
+    // the two above: this is the one fact here that is genuinely about the agent rather
+    // than about the checkout it is sitting in. Kept as the parse returned it, `session`
+    // and all, because the previous reading is what turns the next one into news.
+    this.heads = new Map(); // pane_id -> { gauge: { used, model, session } | null, at }
   }
 
   setWorkspaces(workspaces = []) {
@@ -205,6 +210,36 @@ export class Roster {
     return entry ? this.clock() - entry.at : Infinity;
   }
 
+  // How full one agent's head is (see src/head.mjs). `null` is an answer here for the
+  // same reason it is for a branch and for a checkout, and it does more work: a screen
+  // that says nothing about its context window and a read that failed both land here as
+  // null, which both rate limits the retry and takes the tint off a monitor the office
+  // can no longer vouch for. An agent that exits and leaves a shell behind in its pane
+  // stops reporting, and one read later its desk stops claiming to know.
+  setHead(id, gauge = null) {
+    if (!id) return;
+    const clean = gauge && Number.isFinite(Number(gauge.used))
+      ? {
+        used: Math.max(0, Math.min(100, Math.round(Number(gauge.used)))),
+        model: gauge.model || null,
+        session: gauge.session || null,
+      }
+      : null;
+    this.heads.set(id, { gauge: clean, at: this.clock() });
+    const person = this.find(id);
+    if (person) person.head = clean;
+  }
+
+  headAge(id) {
+    const entry = this.heads.get(id);
+    return entry ? this.clock() - entry.at : Infinity;
+  }
+
+  // The last reading, for the caller that wants to compare it with the next one.
+  head(id) {
+    return this.heads.get(id)?.gauge || null;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -265,6 +300,7 @@ export class Roster {
           branch: this.branches.get(a.cwd || '')?.branch || null,
           repo: this.branches.get(a.cwd || '')?.repo || null,
           dirt: this.dirt.get(a.cwd || '')?.counts || null,
+          head: this.heads.get(id)?.gauge || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
         };
@@ -276,6 +312,11 @@ export class Roster {
     });
 
     for (const id of [...this.states.keys()]) if (!seen.has(id)) this.states.delete(id);
+    // Pane keyed caches go with the pane. The cwd keyed ones do not: a checkout outlives
+    // the desk that was sitting in it, and the next desk to open there inherits an answer
+    // that is still true. A context window does not work like that, and a stale one left
+    // behind under a reused pane id would be somebody else's number entirely.
+    for (const id of [...this.heads.keys()]) if (!seen.has(id)) this.heads.delete(id);
     return newlyBlocked.filter((id) => seen.has(id));
   }
 

@@ -342,6 +342,24 @@ export const DIRTS = [
   { files: 100000, conflicts: 0 },
 ];
 
+// How full each head is, as the parser hands it over: unread, then one reading in every
+// band the gauge has, then the two ends of the scale. Applied to a floor the way the dirt
+// is, since what the renderer reads is the field rather than the cache behind it.
+//
+// The model is on some of these and not others, because it comes off the same status line
+// and not every agent names one there.
+export const HEADS = [
+  null,
+  { used: 0, model: 'opus' },
+  { used: 31, model: null },
+  { used: 58, model: 'opus-4.8' },
+  { used: 81, model: 'sonnet' },
+  { used: 93, model: 'opus' },
+  // The longest model name that can reach a card, which is the parser's cap rather than a
+  // made-up string: src/head.mjs clips what it takes off a status line to sixteen cells.
+  { used: 100, model: 'opus-4.8-2026090' },
+];
+
 export const FILTERS = [
   ['off', { filter: '', filtering: false }],
   ['field open, empty', { filter: '', filtering: true }],

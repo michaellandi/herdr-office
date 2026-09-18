@@ -11,6 +11,7 @@
 //   node office.mjs --no-title leave the window title alone
 //   node office.mjs --no-graphics  text only, no pixel charts
 //   node office.mjs --no-git   do not run git in anybody's checkout
+//   node office.mjs --no-context  do not read how full anybody's context window is
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -32,6 +33,7 @@ import { Clocks } from './src/punchclock.mjs';
 import { load as loadState, save as saveState } from './src/state.mjs';
 import { branchFromList } from './src/branches.mjs';
 import { readDirt } from './src/dirt.mjs';
+import { parseGauge, compactionNews } from './src/head.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
 
@@ -61,6 +63,13 @@ const GRAPHICS = !argv.has('--no-graphics');
 // machine where git is expensive, or who would simply rather this pane never shelled
 // out into their repositories, gets to say no in one flag.
 const GIT = !argv.has('--no-git');
+// Whether the office may read how full each agent's context window is (see src/head.mjs).
+// On by default because it is the question a floor of agents cannot otherwise answer, and
+// opt-out because of what it costs on the wire: this is the one feature that reads the
+// visible screen of every desk on a rotation rather than only the desks with their hands
+// up. Nothing off those screens is drawn or kept, and somebody who would still rather this
+// pane were not looking gets to say so in one flag.
+const HEAD = !argv.has('--no-context');
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -110,6 +119,19 @@ const BRANCH_PER_PASS = 2;
 // far enough apart that the subprocess cost is nothing anybody can feel.
 const DIRT_MS = 15000;
 const DIRT_PER_PASS = 2;
+// How full a head is comes off the same screen read as the bubble over a stuck desk, so on
+// a floor where everybody is blocked it is free. Everywhere else it is one extra
+// `agent.read` per desk per window, which is the cheapest call the office makes: the
+// visible screen is a few kilobytes and the server has it in hand.
+//
+// Ten seconds, which is not about how fast the number moves. It climbs about a point a
+// minute under a working agent, so for the gauge itself a minute would do. It is about the
+// one thing that moves it sharply: a compaction is detected by comparing two readings, and
+// a compaction you hear about a minute after it happened is history rather than news. Four
+// desks a pass keeps a floor of twenty inside a minute even when none of the reads are
+// shared with a bubble.
+const GAUGE_MS = 10000;
+const GAUGE_PER_PASS = 4;
 // How much of a desk's screen the server matches the watchlist against, counted up
 // from the bottom. This was 8, on the reasoning that news is the last thing printed,
 // and 8 is almost exactly wrong for the panes this office watches: an agent in a
@@ -435,23 +457,65 @@ function shepherd() {
   if (detail) loadDetail(selectedId, { force: true });
 }
 
-// Ask every stuck desk what it wants, so the floor plan can put it in a bubble
-// without the user having to open each one.
-async function refreshAsks() {
-  const blocked = roster.people.filter((p) => p.status === 'blocked');
+// What is on each desk's screen, for the two things the office takes off one: what a
+// stuck desk is asking for, and how full every desk's head is.
+//
+// One read serves both, which is the whole reason they are in the same function. A stuck
+// desk is read often, because the bubble over its head is the most useful thing on the
+// floor and it is the thing a person is waiting on. Everybody else is read on a slow
+// rotation for the gauge alone. A desk due for both is read once, and the per-pass cap
+// counts only the desks that would not have been read anyway: the gauge is free on the
+// desks that were already talking.
+async function refreshScreens() {
+  const dueAsks = roster.people.filter((p) => p.status === 'blocked' && roster.askAge(p.id) >= ASK_MS);
+  const asking = new Set(dueAsks.map((p) => p.id));
+  // Stalest first, so a floor with more desks than one pass allows rotates through them
+  // fairly instead of starving the ones at the bottom. Every desk counts, not just the
+  // working ones: an idle agent that is ninety per cent full is precisely the desk you
+  // were about to hand the next job to.
+  const dueGauges = HEAD
+    ? roster.people
+      .filter((p) => !asking.has(p.id) && roster.headAge(p.id) >= GAUGE_MS)
+      .sort((a, b) => roster.headAge(b.id) - roster.headAge(a.id))
+      .slice(0, GAUGE_PER_PASS)
+    : [];
+  const due = [...dueAsks, ...dueGauges];
+  if (!due.length) return;
   await Promise.all(
-    blocked.map(async (person) => {
-      if (roster.askAge(person.id) < ASK_MS) return;
+    due.map(async (person) => {
+      let text = null;
       try {
         const res = await api.request('agent.read', { target: person.id, source: 'visible' });
-        const lines = cleanOutput(res?.read?.text ?? '');
-        roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines));
+        text = res?.read?.text ?? '';
       } catch {
         // A desk that will not talk keeps whatever it last said.
       }
+      if (asking.has(person.id) && text != null) {
+        const lines = cleanOutput(text);
+        roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines));
+      }
+      if (HEAD) readHead(person, text);
     }),
   );
-  if (blocked.length && !ONCE) draw();
+  if (!ONCE) draw();
+}
+
+// How full this desk's head is, off the screen we already have (see src/head.mjs for what
+// is looked for and what is thrown away, which is everything else on that line).
+//
+// A read that failed and a screen that says nothing about its context window are recorded
+// the same way, as null: both mean the office does not know, both stop the desk claiming a
+// number it can no longer vouch for, and both are stored as answers so the same desk is
+// not asked again on the next pass.
+function readHead(person, text) {
+  const before = roster.head(person.id);
+  const after = text == null ? null : parseGauge(text, person.sessionId);
+  roster.setHead(person.id, after);
+  // A window that emptied itself, hung over the desk like any other piece of news. Worked
+  // out here rather than in the roster because it is a fact about two readings, and the
+  // roster only ever holds one.
+  const news = compactionNews(before, after);
+  if (news) roster.setEvent(person.id, news.label, news.kind);
 }
 
 // Ask the working desks what they are actually running, so the monitor can say
@@ -599,7 +663,7 @@ async function refresh() {
     ensureSelection();
     shepherd();
     syncSubscriptions();
-    refreshAsks();
+    refreshScreens();
     refreshCommands();
     refreshBranches();
     refreshDirt();
@@ -1668,6 +1732,22 @@ const DEMO_DIRT = [
   { files: 12, conflicts: 0 },
 ];
 
+// How full each head is, at every band the gauge has: room to spare, half gone, tight,
+// and one desk about to compact. Null is in here because an agent whose status line says
+// nothing about its context window is the ordinary case for anything the parser in
+// src/head.mjs does not recognise, and that desk has to look like a desk.
+//
+// The model names are real ones off the two families that print this, because the demo's
+// job is to show what the office can actually produce.
+const DEMO_HEADS = [
+  { used: 22, model: 'opus' },
+  { used: 58, model: 'opus-4.8' },
+  { used: 81, model: 'sonnet' },
+  null,
+  { used: 93, model: 'opus' },
+  { used: 47, model: 'haiku' },
+];
+
 // News is normally driven by `pane.output_matched`, which the demo has no server
 // for, so a couple of lines are fed through the real classifier rather than
 // having their labels written out here. That way the demo cannot show a label the
@@ -1680,6 +1760,7 @@ function demoExtras() {
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
     roster.setDirt(person.cwd, DEMO_DIRT[i % DEMO_DIRT.length]);
+    if (HEAD) roster.setHead(person.id, DEMO_HEADS[i % DEMO_HEADS.length]);
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {
@@ -1744,7 +1825,7 @@ async function main() {
       const list = await api.request('agent.list', {});
       roster.update(list.agents || []);
       clocks.observe(roster.people);
-      await refreshAsks();
+      await refreshScreens();
       await refreshCommands();
       // Awaited here where the live office fires them off, because a single printed
       // frame is the thing used to look at the art: a branch and a pile of paper that

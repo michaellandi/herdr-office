@@ -141,6 +141,58 @@ test('a command lives on a desk only while that desk is working', () => {
   assert.equal(roster.commandAge('w1:p1'), Infinity);
 });
 
+test('how full a head is belongs to the person, and leaves with them', () => {
+  // The other way round from the pile of paper below, and for a reason worth keeping
+  // straight: a checkout is a place and two desks in it share everything about it, but a
+  // context window is the agent's own and two agents in one directory have nothing to do
+  // with each other's.
+  const roster = new Roster();
+  roster.update([agent('w1:p1', { cwd: '/repo' }), agent('w1:p2', { cwd: '/repo' })]);
+  assert.equal(roster.find('w1:p1').head, null);
+  assert.equal(roster.headAge('w1:p1'), Infinity);
+
+  roster.setHead('w1:p1', { used: 65, model: 'opus', session: 'abc' });
+  assert.deepEqual(roster.find('w1:p1').head, { used: 65, model: 'opus', session: 'abc' });
+  assert.equal(roster.find('w1:p2').head, null, 'a reading is not shared with the desk next door');
+  assert.ok(roster.headAge('w1:p1') < 1000);
+  // Handed back whole, because the next reading is only news in comparison with this one.
+  assert.deepEqual(roster.head('w1:p1'), { used: 65, model: 'opus', session: 'abc' });
+
+  // Survives a poll. The screen behind it is read every few seconds and the floor is
+  // redrawn twice a second, so a reading that did not outlive a poll would flicker.
+  roster.update([agent('w1:p1', { cwd: '/repo' }), agent('w1:p2', { cwd: '/repo' })]);
+  assert.equal(roster.find('w1:p1').head?.used, 65);
+  // And a change of state, unlike the ask and the running command: an agent that stops
+  // working does not forget what it was told.
+  roster.update([agent('w1:p1', { cwd: '/repo', agent_status: 'idle' })]);
+  assert.equal(roster.find('w1:p1').head?.used, 65);
+
+  // "the screen said nothing about it" is recorded as an answer, the same way a null
+  // command and an unreadable checkout are, and it takes the tint off the monitor: a
+  // desk the office can no longer vouch for must stop claiming a number.
+  roster.setHead('w1:p1', null);
+  assert.equal(roster.find('w1:p1').head, null);
+  assert.ok(roster.headAge('w1:p1') < 1000);
+
+  // Nonsense is dropped rather than drawn, and a real reading is pinned to the scale it
+  // is drawn on: a monitor frame has four bands and no room for a hundred and ten.
+  roster.setHead('w1:p1', { used: 'most of it' });
+  assert.equal(roster.find('w1:p1').head, null);
+  roster.setHead('w1:p1', { used: 110 });
+  assert.equal(roster.find('w1:p1').head.used, 100);
+  roster.setHead('w1:p1', { used: -5 });
+  assert.equal(roster.find('w1:p1').head.used, 0);
+  roster.setHead('w1:p1', { used: 64.6 });
+  assert.equal(roster.find('w1:p1').head.used, 65);
+
+  // And when the desk goes, the reading goes with it. A pane id can come back around,
+  // and inheriting a stale window from whoever sat here last would be one desk reporting
+  // another's number.
+  roster.update([agent('w1:p2', { cwd: '/repo' })]);
+  assert.equal(roster.headAge('w1:p1'), Infinity);
+  assert.equal(roster.head('w1:p1'), null);
+});
+
 test('a pile of paper belongs to the checkout, not to the person', () => {
   // Uncommitted work is a fact about a working directory, so it is cached against one
   // and every desk sitting in that directory gets it. Two agents in one checkout really

@@ -75,6 +75,31 @@ export const EVENT = {
 
 export const eventTint = (kind) => EVENT[kind] || EVENT.good;
 
+// How full a head is, as the colour of the monitor frame around it (see src/head.mjs for
+// where the number comes from and what the bands mean). The calm band is missing on
+// purpose: there is no colour for it and the frame stays the `faint` it has always been, so
+// a desk with room to think raises nothing. It still says its number, in the frame itself.
+// Colour here is the alarm; the number is the message, and the two are separate.
+//
+// Warm, because the two hues that already mean something in this room are not available:
+// amber is a raised hand and must never be imitated by furniture, and green is a working
+// monitor. So the scale runs through rust to a burnt orange, which nothing else here is.
+//
+// The first version of these was a full step darker, on the reasoning that a floor of full
+// heads should read as a warm room rather than a row of alarms. Held up against `faint`
+// (#4a5566) on a real floor, the first band was a hue change between two equally dim
+// colours and simply did not register as a change at all. So each step now gains lightness
+// as well as saturation, and the first one clears `faint` by enough that a tinted frame
+// reads as deliberate next to an untinted one. Still under the raised-hand amber
+// (#ffc14d) at every band, which is the constraint that actually matters.
+export const HEAD = {
+  filling: '#a89060',
+  hot: '#d1934f',
+  brimming: '#ef6b43',
+};
+
+export const headTint = (band) => HEAD[band] || null;
+
 export const STATUS = {
   working: { label: 'WORKING', fg: '#5ce08a', screen: '#7cf0a6' },
   blocked: { label: 'NEEDS YOU', fg: '#ffc14d', screen: '#ffd67a', hot: '#fff0c2' },

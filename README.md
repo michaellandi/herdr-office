@@ -443,10 +443,13 @@ in a way somebody is going to have to review.
 
 Three surfaces, one number, sized to the space each one has:
 
-- **A pile of paper on the desk**, next to the sticky note. One cell for a file or
-  two, five for a large change, roughly doubling in between: the difference between
-  one file and three is worth a cell, the difference between forty and forty-five is
-  not. It turns the colour of bad news if anything in that tree is conflicted.
+- **A pile of paper on the desk**, clear of the sticky note. One cell for a file or
+  two, five for a large change, roughly doubling in between: the difference between one
+  file and three is worth a cell, the difference between forty and forty-five is not.
+  It grows taller as well as wider, `▁▃▅▆█`, which is not decoration: the first version
+  drew every size in the same glyph the mug and the sticky note are drawn in, and a
+  one-cell pile was invisible because it read as more furniture. The pile turns the
+  colour of bad news if anything in that tree is conflicted.
 - **A `+12` badge** next to the branch in the list view, which is the only place the
   actual number is visible without opening anything. Capped at three digits, because
   the branch and the badge share whatever the row has spare and a column that could

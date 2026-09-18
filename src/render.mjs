@@ -5,7 +5,7 @@ import { padEnd, truncate, width, formatDuration } from './text.mjs';
 import { P, STATUS, paint, fill, status, identity, eventTint } from './theme.mjs';
 import { wrapField, describeTargets } from './compose.mjs';
 import { terms } from './filter.mjs';
-import { pile, dirtBadge, dirtWords } from './dirt.mjs';
+import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
@@ -145,7 +145,7 @@ const MUG_X = MON_X + 12;
 const NOTE_X = 1;
 const DESK_TOP = over(over(over(' '.repeat(INNER), '▃'.repeat(10), KEYS_X), '▄', MUG_X), '▄', NOTE_X);
 // Work that has been done and not committed, as a pile of paper spreading across the
-// desk. It starts two cells clear of the sticky note, which is scenery and stays
+// desk. It starts three cells clear of the sticky note, which is scenery and stays
 // scenery: a prop that quietly became a gauge would mean every desk in the office had
 // been reporting something all along.
 //
@@ -155,8 +155,17 @@ const DESK_TOP = over(over(over(' '.repeat(INNER), '▃'.repeat(10), KEYS_X), '�
 // there is no room for digits here, and the exact count is a row on the card, one
 // keystroke away. A desk with paper all over it is the thing you are meant to notice
 // from across the room.
-const PAPER_X = NOTE_X + 2;
-const PAPER = '▄';
+//
+// It grows in both directions, and the second one is what makes it legible. Width alone
+// meant the smallest pile was a single `▄` two cells from a sticky note drawn with the
+// same glyph, which read as more furniture rather than as news; a first draft of this
+// shipped that way and could not be seen at all. So each step up the scale is a taller
+// glyph as well as a wider one, and one cell of a low block is unmistakably not a mug.
+const PAPER_X = NOTE_X + 3;
+const PAPER = ['▁', '▃', '▅', '▆', '█'];
+// One glyph per step of the scale in src/dirt.mjs, checked here rather than trusted,
+// because the failure is an undrawn pile on a busy desk: the office would look calm.
+if (PAPER.length !== PILE_MAX) throw new Error(`the pile has ${PILE_MAX} steps and ${PAPER.length} glyphs`);
 // A pile the colour of paper, until something in the checkout is conflicted, at which
 // point it takes the same tone a broken build's slab does. Nothing else about it
 // changes: a conflict is a fact about the same pile, not another pile.
@@ -369,7 +378,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       { from: MON_X, to: INNER, fg: P.faint },
     ]),
     row(
-      paper ? over(DESK_TOP, PAPER.repeat(paper), PAPER_X) : DESK_TOP,
+      paper ? over(DESK_TOP, PAPER[paper - 1].repeat(paper), PAPER_X) : DESK_TOP,
       [
         { from: NOTE_X, to: NOTE_X + 1, fg: '#f2d98a' },
         ...(paper ? [{ from: PAPER_X, to: PAPER_X + paper, fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG }] : []),

@@ -37,7 +37,7 @@ export function officeRoster(statuses = STATUSES) {
   const roster = new Roster();
   roster.setWorkspaces([{ workspace_id: 'w1', label: 'main' }]);
   roster.setTabs([
-    { tab_id: 'w1:t1', label: 'token-refresh' },
+    { tab_id: 'w1:t1', label: 'cache-warmer' },
     { tab_id: 'w1:t2', label: 'a-really-long-tab-name-that-overflows-its-card' },
     { tab_id: 'w1:t3', label: '' },
   ]);
@@ -81,7 +81,7 @@ export function roomyRoster(plan = [1, 1, 1, 2, 2, 3, 3], statuses = STATUSES) {
   const roster = new Roster();
   roster.setWorkspaces(WS_NAMES.map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1 })));
   roster.setTabs([
-    { tab_id: 't1', label: 'token-refresh', number: 1 },
+    { tab_id: 't1', label: 'cache-warmer', number: 1 },
     { tab_id: 't2', label: 'a-really-long-tab-name-that-overflows-its-card', number: 2 },
     { tab_id: 't3', label: '', number: 3 },
   ]);
@@ -189,8 +189,8 @@ export const DETAILS = [
     'three said lines',
     {
       ...detailFor('w1:p1'),
-      summary: summarize({ status: 'idle', title: 'token refresh' }, [
-        'I have finished refactoring the token refresh path and split it in two.',
+      summary: summarize({ status: 'idle', title: 'cache warmer' }, [
+        'I have finished refactoring the cache warming path and split it in two.',
         'The retry loop now backs off instead of hammering the endpoint every second.',
         'Two of the integration tests were relying on the old timing, so I updated them.',
         'Next I want to check whether the cache invalidation still behaves the same way.',
@@ -350,7 +350,7 @@ export const FILTERS = [
   ['matches nobody', { filter: 'zzzz', filtering: false }],
   ['matches nobody, still typing', { filter: 'zzzz', filtering: true }],
   ['a silly long filter', { filter: 'a-filter-nobody-would-ever-type-but-here-we-are', filtering: true }],
-  ['a filter with spaces', { filter: 'group resolver', filtering: false }],
+  ['a filter with spaces', { filter: 'log parser', filtering: false }],
 ];
 
 export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null }) {

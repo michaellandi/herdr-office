@@ -118,7 +118,7 @@ test('typing in the field', () => {
 
 test('a filter cannot invent people', () => {
   // Whatever it does, it is always a subset of the room, in the same order.
-  for (const query of ['waiting', 'a', 'zzz', 'claude', 'group resolver', '/', '  a  ']) {
+  for (const query of ['waiting', 'a', 'zzz', 'claude', 'log parser', '/', '  a  ']) {
     const out = filterPeople(people, query);
     assert.ok(out.length <= people.length, query);
     const order = people.filter((p) => out.includes(p));

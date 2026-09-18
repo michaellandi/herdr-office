@@ -192,7 +192,7 @@ test('the said lines are labelled once and line up under it', () => {
   // of them read as three unrelated remarks and spent eleven cells a line saying a
   // thing already said, on the narrowest column in the office.
   const said = [
-    'I have finished refactoring the token refresh path and split it in two.',
+    'I have finished refactoring the cache warming path and split it in two.',
     'The retry loop now backs off instead of hammering the endpoint every second.',
     'Two of the integration tests were relying on the old timing, so I updated them.',
     'Next I want to check whether the cache invalidation still behaves the same way.',

@@ -76,6 +76,8 @@ would rather not.
 | `^w` / `^u` (typing) | delete the last word / clear the field |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
+| `s` | answer them in words, for a question that is not a yes or a no |
+| `Y` | allow it from now on, when the prompt offers that. Arms, and `enter` grants |
 | `/` | filter the floor: names, kinds, tabs, directories, statuses |
 | `F` | shepherd mode: walk to hands as they go up |
 | `z` | zoom: floor plan, list view, one desk |
@@ -572,6 +574,39 @@ would have had. On a pane too narrow for them nothing is drawn and nothing is
 clickable there: `y` and `n` still work, and a hitbox with no button under it would
 be an approval sent from a blank patch of screen.
 
+### When yes and no are not the answer
+
+Plenty of questions are not approvals. "Which of these two approaches do you want" has
+no key, and until `s` the only thing to do was press `f` and go and type it yourself,
+which is the one thing the office exists to save you. `s` opens a field on the waiting
+desk with the question above it, and what you type goes in as keystrokes.
+
+It has to be keystrokes. `agent.prompt` is how `a` and `A` give somebody a job, and
+herdr rejects it outright with `agent_blocked` when the agent is waiting on a prompt,
+before any input is sent, which is exactly the case here. So an answer goes as one
+`pane.send_input` carrying the words and the return key together. One call rather than
+two on purpose: two would leave a window where half an answer sits in somebody's input
+box waiting for a submit that already failed.
+
+### Allowing it from now on
+
+Some prompts offer a third option: yes, and stop asking. `y` never picks it, and that
+is deliberate, because it is a different promise from yes. Yes answers one question.
+That answers every question of the same kind from here on, sometimes past the end of
+the session, and it is not the office's decision to make quietly.
+
+So it has its own key. `Y` arms it and `enter` grants it, and while it is armed the
+footer is down to those two keys and the mouse does nothing, because the `[y]` still
+under the pointer would otherwise be a second answer to the same question. It is only
+ever offered when that option is genuinely on the agent's screen, and the digit is read
+off the menu rather than assumed to be `2`: on a menu that put "no, and tell me what to
+do differently" at 2, a hardcoded digit would deny the command under a key labelled
+"always allow". Both the digit and the option's own wording are checked again at the
+moment you confirm, since the screen belongs to the agent and can change in the seconds
+between arming and granting. The card and the footer both quote that wording, so the
+sentence you are agreeing to is the agent's own. It is the one answer in the office
+with no button, for the same reason the assign field has none.
+
 ## Why does it think that
 
 The office asserts a state for every desk, and a state can be wrong. A desk reading
@@ -712,12 +747,13 @@ Two rules that are easy to break by accident:
   U+257F) and block elements (U+2580 to U+259F). Geometric Shapes start at U+25A0 and
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
-- **`y`, `n` and `a` send real input to real agents.** Never test approve, deny or
-  assign against a live office; `--demo` prints what it would have sent instead, and
-  `test/office.test.mjs` sends them for real down a socket no agent is listening on.
-  `test/summary.test.mjs` covers the prompt reading, including the one case that
-  matters most: the "yes, and don't ask again" menu option must never be the one
-  picked automatically.
+- **`y`, `n`, `s`, `Y` and `a` send real input to real agents.** Never test approve,
+  deny, answer, grant or assign against a live office; `--demo` prints what it would
+  have sent instead, and `test/office.test.mjs` sends them for real down a socket no
+  agent is listening on. `test/summary.test.mjs` covers the prompt reading, including
+  the one case that matters most: the "yes, and don't ask again" menu option must
+  never be the one `y` picks, and when `Y` does reach it the digit comes off the menu
+  rather than from a guess.
 
 One test in the suite talks to the world. `test/protocol.test.mjs` runs `herdr api
 schema --json` and holds every request in the source to it: the method names, the

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { renderFrame, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { matches as matchFilter } from '../src/filter.mjs';
-import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, NEWS, FILTERS, BRANCHES, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, DRAGS, HIRES, COMPOSES, TRUSTS, NEWS, FILTERS, BRANCHES, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
 import { assignRooms, ROOM_TINTS } from '../src/rooms.mjs';
 import { fg } from '../src/theme.mjs';
 
@@ -360,6 +360,23 @@ test('assigning work, in every state the field can be in', () => {
   for (const [cols, rows] of SIZES) {
     assertExact(viewOf({ people, cols, rows, compose, detail: DETAILS[3][1] }), `compose+detail ${cols}x${rows}`);
     assertExact(viewOf({ people, cols, rows, compose, hire: HIRES[2][1] }), `compose+hire ${cols}x${rows}`);
+  }
+});
+
+test('a standing permission, armed, in every size the footer has', () => {
+  // The armed grant puts the menu's own wording in two places at once: the footer
+  // hint and the card's third answer row. Both are text off somebody else's screen,
+  // which is the kind that does not fit, and the footer is the one row that cannot
+  // afford to overflow because everything else is measured against it.
+  //
+  // The card is opened alongside it, since arming pulls the card open on purpose:
+  // the confirm is supposed to happen with the menu on screen.
+  const granting = DETAILS.find(([name]) => name === 'a standing grant on offer')[1];
+  for (const [cols, rows] of SIZES) {
+    for (const [name, trust] of TRUSTS) {
+      assertExact(viewOf({ people, cols, rows, trust }), `trust=${name} ${cols}x${rows}`);
+      assertExact(viewOf({ people, cols, rows, trust, detail: granting }), `trust=${name} +card ${cols}x${rows}`);
+    }
   }
 });
 

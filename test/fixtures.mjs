@@ -161,6 +161,18 @@ export const DETAILS = [
   ['no choice yet', detailFor('w1:p1')],
   ['y/n', detailFor('w1:p1', { shape: 'y/n', approve: ['y'], deny: ['n'] })],
   ['unrecognised prompt', detailFor('w1:p1', { shape: 'unknown', approve: ['enter'], deny: ['esc'] })],
+  // A prompt that also offers a standing permission, which is a third row under the
+  // buttons and the longest text in the panel: the option's own wording, which comes
+  // off somebody's screen and can be as long as it likes.
+  [
+    'a standing grant on offer',
+    detailFor('w1:p1', {
+      shape: 'menu',
+      approve: ['1'],
+      deny: ['esc'],
+      always: { keys: ['2'], label: "Yes, and don't ask again for rm commands in /Users/somebody/a-rather-long-project-path" },
+    }),
+  ],
   ['desk has gone', detailFor('w1:pGONE', { shape: 'y/n', approve: ['y'], deny: ['n'] })],
   // A full-length explanation on a desk that is also waiting on an answer, which is
   // the panel's tightest case: the explanation is longer than a short pane has rows
@@ -274,6 +286,21 @@ export const COMPOSES = [
   ['sending', { scope: 'one', id: 'w1:p3', name: 'Cass', text: 'rebase onto main', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
   ['nothing typed yet', { scope: 'one', id: 'w1:p3', name: 'Cass', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: 'nothing typed yet' }],
   ['a very long name', { scope: 'one', id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', text: 'go', to: [{ id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  // Answering a question in words. The extra row is the question itself, which came
+  // off somebody's screen and is therefore any length at all, so both a short ask
+  // and one far wider than the panel are here.
+  ['answering, nothing typed', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'shell requires approval', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering in words', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'Which approach do you want?', text: 'use the existing helper', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering a very long question', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'Do you want to overwrite the whole configuration file and restart everything, or keep the current one and merge the differences by hand?', text: LONG, to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],
+  ['answering, sending', { scope: 'reply', id: 'w1:p1', name: 'Ash', ask: 'shell requires approval', text: 'the second one', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
+];
+
+// A standing permission armed and waiting on the confirm. The label is the menu's
+// own words, so it is as long as somebody else's screen made it.
+export const TRUSTS = [
+  ['none', null],
+  ['armed', { id: 'w1:p1', name: 'Ash', keys: ['2'], label: "Yes, and don't ask again for rm commands" }],
+  ['armed with a long label', { id: 'w1:p1', name: 'Ash', keys: ['2'], label: "Yes, and don't ask again for rm commands in /Users/somebody/a-rather-long-project-path that keeps going" }],
 ];
 
 // News over a desk: every kind, plus the two that are only a rendering problem (a
@@ -311,7 +338,7 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'group resolver', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -341,5 +368,6 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // tests were all written against.
     stats,
     shift,
+    trust,
   };
 }

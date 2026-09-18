@@ -247,6 +247,132 @@ test('dropping a standup writes to nobody', async () => {
   }
 });
 
+// A prompt that offers a standing permission, with the always option deliberately
+// at 3 rather than 2, so a test that passed against a hardcoded digit fails here.
+const MENU_WITH_ALWAYS = [
+  'Bash command: rm -rf build',
+  '',
+  '❯ 1. Yes',
+  '  2. No, and tell Claude what to do differently',
+  "  3. Yes, and don't ask again for rm commands",
+].join('\n');
+
+test('answering in words types the answer and submits it in one call', async () => {
+  // The case y/n cannot answer: a question that is not a yes or a no. herdr rejects
+  // a prompt to a blocked agent outright (agent_blocked), so this is the only route
+  // to a waiting desk, and it goes as one pane.send_input carrying the words and the
+  // enter together rather than two calls with a gap in the middle.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0)],
+    screenText: 'Which approach do you want?\nDo you want me to use the existing helper? (y/n)',
+  });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('s');
+    await office.until('the answer field', () => office.onScreen('type your answer'));
+    office.type('use the existing helper');
+    await office.until('the typed answer', () => office.onScreen('use the existing helper'));
+    office.type('\r');
+    await office.until('the answer', () => office.sent('pane.send_input').length >= 1);
+    await settle();
+
+    const sent = office.sent('pane.send_input');
+    assert.equal(sent.length, 1, `sent ${sent.length} answers`);
+    assert.equal(sent[0].params.pane_id, 'w1:p1');
+    assert.equal(sent[0].params.text, 'use the existing helper');
+    assert.deepEqual(sent[0].params.keys, ['enter'], 'the answer was typed but never submitted');
+    // Not a prompt: agent.prompt to a blocked agent is refused before any input is
+    // sent, so falling back to it here would look like the key doing nothing.
+    assert.deepEqual(office.sent('agent.prompt'), [], 'a waiting desk was sent a prompt');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('dropping an answer writes to nobody', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0)],
+    screenText: 'Do you want me to apply the patch? (y/n)',
+  });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('s');
+    await office.until('the answer field', () => office.onScreen('type your answer'));
+    office.type('never mind');
+    await office.until('the typed answer', () => office.onScreen('never mind'));
+    office.type('\x1b');
+    await settle();
+    assert.deepEqual(office.sent('pane.send_input'), [], 'a dropped answer was sent anyway');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a standing permission takes two keys, and the first one sends nothing', async () => {
+  // The most consequential thing the office can send: not an answer to this
+  // question, but an answer to every question of this kind from here on. So Y arms
+  // and enter grants, and the digit is the one read off the menu.
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], screenText: MENU_WITH_ALWAYS });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('Y');
+    await office.until('the confirmation', () => office.onScreen('never mind'));
+    await settle();
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'arming a standing permission already granted it');
+    // The menu's own words, so what is being agreed to is on the screen.
+    assert.ok(office.onScreen("don't ask again for rm commands"), 'the grant did not say what it grants');
+
+    office.type('\r');
+    await office.until('the grant', () => office.sent('agent.send_keys').length >= 1);
+    await settle();
+
+    const keys = office.sent('agent.send_keys');
+    assert.equal(keys.length, 1, `sent ${keys.length} times`);
+    assert.equal(keys[0].params.target, 'w1:p1');
+    // 3, not 2. Option 2 on this menu is "No, and tell Claude what to do
+    // differently", so a hardcoded digit would deny the command under a key the
+    // footer calls "always allow".
+    assert.deepEqual(keys[0].params.keys, ['3'], 'the digit was not the one on the menu');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('backing out of a standing permission grants nothing', async () => {
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], screenText: MENU_WITH_ALWAYS });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('Y');
+    await office.until('the confirmation', () => office.onScreen('never mind'));
+    office.type('\x1b');
+    await settle();
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'esc granted a standing permission');
+    // And the office is back on the floor rather than stuck in a state whose only
+    // way out was the key that just cancelled it.
+    assert.ok(office.onScreen('walk'), 'the floor hints did not come back');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a prompt with no standing option cannot grant one', async () => {
+  // A plain y/n has nothing to grant, so Y must refuse rather than sending a digit
+  // into a prompt that would read it as something else entirely.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0)],
+    screenText: 'Do you want me to apply the patch? (y/n)',
+  });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('Y');
+    await office.until('the refusal', () => office.onScreen('does not offer'));
+    await settle();
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'a digit was sent to a y/n prompt');
+  } finally {
+    await office.stop();
+  }
+});
+
 test('answering a raised hand sends exactly one keystroke', async () => {
   // `y` is the most dangerous key in the office: it answers a prompt the user has
   // not necessarily read, on a real agent. Sending it twice would answer the next

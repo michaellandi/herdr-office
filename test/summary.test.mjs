@@ -4,7 +4,7 @@
 // shapes the agents named in the README actually draw.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanOutput, findAsk, bubbleText, approvalChoice, summarize, describeDetection } from '../src/summary.mjs';
+import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';
 
 const screen = (s) => cleanOutput(s.trimEnd());
 
@@ -13,7 +13,7 @@ test('a literal y/n prompt is answered with letters', () => {
 $ rm -rf build
 Do you want to run this command? (y/n)
 `);
-  assert.deepEqual(approvalChoice(s), { shape: 'y/n', approve: ['y'], deny: ['n'] });
+  assert.deepEqual(approvalChoice(s), { shape: 'y/n', approve: ['y'], deny: ['n'], always: null });
 });
 
 test('a numbered menu is answered with the digit', () => {
@@ -22,7 +22,7 @@ Allow npm install?
 ❯ 1. Yes
   2. No, and tell me what to do differently
 `);
-  assert.deepEqual(approvalChoice(s), { shape: 'menu', approve: ['1'], deny: ['esc'] });
+  assert.deepEqual(approvalChoice(s), { shape: 'menu', approve: ['1'], deny: ['esc'], always: null });
 });
 
 test('the "and stop asking me" option is never the one picked', () => {
@@ -38,6 +38,69 @@ Bash command: rm -rf node_modules
   const choice = approvalChoice(s);
   assert.deepEqual(choice.approve, ['1'], 'approve should be the plain yes');
   assert.notDeepEqual(choice.approve, ['2']);
+  // It is offered separately, on its own key, carrying the digit read off the menu
+  // and the words the menu used. `y` still cannot reach it.
+  assert.deepEqual(choice.always, { keys: ['2'], label: "Yes, and don't ask again for rm commands" });
+});
+
+test('the always option is read off the menu rather than assumed to be 2', () => {
+  // A hardcoded 2 aimed at this menu would deny the command and tell the agent to
+  // do something else, which is a wrong answer sent under a key labelled "yes".
+  const s = screen(`
+Bash command: git push --force
+❯ 1. Yes
+  2. No, and tell Claude what to do differently
+  3. Yes, and don't ask again for git push commands
+`);
+  assert.deepEqual(approvalChoice(s).always, { keys: ['3'], label: "Yes, and don't ask again for git push commands" });
+});
+
+test('a no that stops asking is not an always', () => {
+  // "No, and don't ask again" is a deny. Reaching it with a key the footer calls
+  // "always allow" would refuse the thing the user just tried to permit.
+  const s = screen(`
+Allow reading .env?
+❯ 1. Yes
+  2. No, and don't ask again for this file
+`);
+  assert.equal(approvalChoice(s).always, null, 'a deny must never be offered as an always');
+});
+
+test('a menu with no standing option offers none', () => {
+  // The common case, and the reason the key is conditional: a prompt that cannot
+  // grant standing permission must not advertise a key that would send a digit
+  // into a menu that has no such entry.
+  const s = screen(`
+Allow npm install?
+❯ 1. Yes
+  2. No
+`);
+  assert.equal(approvalChoice(s).always, null);
+});
+
+test('an unreadable menu never grants standing permission', () => {
+  // The first option is not a yes, so the office does not understand this menu.
+  // Not understanding it is exactly when a digit must not be sent.
+  const s = screen(`
+Pick a branch to push
+❯ 1. main
+  2. release, and don't ask again
+`);
+  const choice = approvalChoice(s);
+  assert.equal(choice.shape, 'menu?');
+  assert.equal(choice.always, null, 'a menu the office cannot read is not one it can grant permission from');
+});
+
+test('the always option survives the phrasings agents actually use', () => {
+  for (const [line, digit] of [
+    ['  2. Yes, and always allow this command', '2'],
+    ['  2. Yes, allow always', '2'],
+    ['  4. Allow, and stop asking', '4'],
+    ["  2. Yes, and do not ask again", '2'],
+  ]) {
+    const s = screen(`Allow it?\n❯ 1. Yes\n${line}\n`);
+    assert.deepEqual(alwaysOption(s)?.keys, [digit], `did not read: ${line}`);
+  }
 });
 
 test('a menu whose first option is not a yes falls back to the agent default', () => {
@@ -46,7 +109,7 @@ Which file should I edit?
 ❯ 1. src/render.mjs
   2. src/office.mjs
 `);
-  assert.deepEqual(approvalChoice(s), { shape: 'menu?', approve: ['enter'], deny: ['esc'] });
+  assert.deepEqual(approvalChoice(s), { shape: 'menu?', approve: ['enter'], deny: ['esc'], always: null });
 });
 
 test('an unrecognised screen falls back to enter and esc, and says so', () => {

@@ -503,6 +503,13 @@ function keyHints(view) {
   // the footer says that and nothing else rather than listing keys that are on
   // hold until the mouse button comes back up.
   if (view.drag?.active) return [['drop', 'on a desk to swap the panes'], ['esc', 'put it back']];
+  // An armed grant says what it will grant, in the menu's own words, because that is
+  // the sentence the user is agreeing to and the footer is the one row always on
+  // screen. Truncated by the footer if it has to be, which is why the card carries
+  // it in full as well.
+  if (view.trust) {
+    return [['enter', `allow "${view.trust.label}" from now on`], ['esc', 'never mind']];
+  }
   // With the assign field open every key is a letter in it, so the footer must not
   // go on advertising the floor. The confirm step is the one place enter reaches
   // more than one agent, and it says so in as many words.
@@ -513,7 +520,7 @@ function keyHints(view) {
       return [['enter', `send it to ${n} ${n === 1 ? 'person' : 'people'}`], ['esc', 'back to the text']];
     }
     return [
-      ['type', 'what they should do'],
+      ['type', view.compose.scope === 'reply' ? 'your answer' : 'what they should do'],
       ['enter', view.compose.scope === 'all' ? 'review who gets it' : 'send it'],
       ['^w', 'last word'],
       ['^u', 'clear'],
@@ -555,7 +562,12 @@ function keyHints(view) {
   const filtered = terms(view.filter).length > 0 && !view.detail;
   return [
     ...(vacant ? [['enter', 'hire somebody for this desk']] : []),
-    ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny']] : []),
+    // `s` sits with y and n because it is the third way to answer, and it is the one
+    // that works when the question is not a yes or a no. The standing grant is only
+    // advertised when the screen genuinely offers it, so the footer never promises a
+    // key that would send a digit into a menu with no such option.
+    ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny'], ['s', 'answer in words']] : []),
+    ...(selected?.status === 'blocked' && selected?.choice?.always ? [['Y', 'always allow']] : []),
     ...(filtered ? [['esc', 'show everyone']] : []),
     ['hjkl', 'walk'],
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
@@ -1174,7 +1186,9 @@ function composePanel(view, panelRows) {
   const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
   const body = [];
 
-  const who = compose.scope === 'all' ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}` : `assign · ${compose.name || compose.id}`;
+  const who = compose.scope === 'all'
+    ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}`
+    : `${compose.scope === 'reply' ? 'answer' : 'assign'} · ${compose.name || compose.id}`;
   const head = cells();
   head.add('╭─ ');
   head.add(truncate(who, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
@@ -1183,9 +1197,22 @@ function composePanel(view, panelRows) {
   head.add('╮');
   body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
 
+  // The question, above the answer, and above the field so it reads in that order.
+  // An answer typed from memory is how you end up replying "the second one" to a
+  // menu that has since redrawn itself. Dropped on a panel with no room, because the
+  // field it belongs to matters more than the label on it.
+  const asking = compose.ask && panelRows >= 6;
+  if (asking) {
+    const b = cells();
+    b.add('re', { fg: P.faint });
+    b.add('  ');
+    b.add(truncate(compose.ask, Math.max(0, TEXT - b.w)), { fg: P.soft });
+    body.push(row(b.out().text, b.out().spans));
+  }
+
   // The field. Three rows at most, and only as many as the panel can spare, with
   // the end of what you typed always visible because that is where the cursor is.
-  const fieldRows = Math.max(1, Math.min(3, panelRows - 4));
+  const fieldRows = Math.max(1, Math.min(3, panelRows - 4 - (asking ? 1 : 0)));
   const lines = wrapField(compose.text, TEXT - 2, fieldRows);
   lines.forEach((text, i) => {
     const b = cells();
@@ -1224,7 +1251,9 @@ function composePanel(view, panelRows) {
         ? `enter to send this to ${to.length} ${to.length === 1 ? 'person' : 'people'} · esc to go back`
         : compose.scope === 'all'
           ? 'type it out · enter to review who gets it · esc to drop it'
-          : 'type it out · enter to send it · esc to drop it';
+          : compose.scope === 'reply'
+            ? 'type your answer · enter sends it and the return key · esc to drop it'
+            : 'type it out · enter to send it · esc to drop it';
     body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: compose.confirm ? STATUS.blocked.fg : P.faint }]));
   }
   body.push(edge('╰', '╯', PW, chrome));
@@ -1356,7 +1385,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   // accounted for, and describeDetection returns its lines most-explanatory first
   // so what gets clipped is the least useful end.
   if (detail.detection?.length) {
-    const answerRows = person?.status === 'blocked' && detail.choice ? 2 : 0;
+    // Two rows for the rule and the keys, three when the prompt also offers a
+    // standing grant, so the explanation yields to it rather than pushing it off.
+    const answerRows = person?.status === 'blocked' && detail.choice ? (detail.choice.always ? 3 : 2) : 0;
     const budget = floorRows - body.length - answerRows - 4;
     if (budget > 0) section('why herdr thinks so', detail.detection.slice(0, budget), { fg: P.dim });
   }
@@ -1387,6 +1418,23 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     if (detail.choice.shape === 'unknown') b.add('   (no prompt recognised)', { fg: P.faint });
     b.gap(TEXT);
     body.push(row(b.out().text, b.out().spans));
+
+    // The standing grant gets its own row and no hitbox. Every other answer in the
+    // office is clickable; this one is the sentence you cannot take back, and a
+    // click target for it is exactly the stray click there is no undoing. It is only
+    // drawn when the menu on the screen above actually offers it.
+    const always = detail.choice.always;
+    const armed = view.trust?.id === person.id;
+    if (always && body.length < floorRows) {
+      const t = cells();
+      t.add('  ');
+      t.add('[Y]', { fg: armed ? STATUS.blocked.fg : P.accent, bold: true });
+      t.add(' ');
+      t.add(armed ? 'enter to allow' : 'always allow', { fg: STATUS.blocked.fg, bold: true });
+      t.add(`  ${always.label}`, { fg: armed ? P.ink : P.dim });
+      t.gap(TEXT);
+      body.push(row(t.out().text, t.out().spans));
+    }
   }
 
   // The screen dump is the one part worth losing. In the split layout the panel

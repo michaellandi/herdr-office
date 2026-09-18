@@ -294,6 +294,7 @@ function view() {
     busy,
     hire,
     compose,
+    trust,
   };
 }
 
@@ -852,6 +853,79 @@ function toggleFollow() {
 // Answer an approval prompt without walking over to the pane. The keys come
 // from that desk's own screen (see approvalChoice), preferring the panel's read
 // when one is open because it is the fresher of the two.
+// The standing permission, armed but not granted.
+//
+// `y` answers one question and the next one comes back to you. This answers every
+// question of that kind from now on, and the office is not the thing that gets to
+// decide that quietly, so it is the only answer in here that takes two keys. What
+// is held is the digit AND the words the menu used, because both are checked again
+// at the last moment: the screen can change between arming and confirming, and a
+// digit that was option 3 a second ago must not be sent into a menu that has
+// since reordered.
+let trust = null;
+
+function cancelTrust() {
+  if (!trust) return;
+  trust = null;
+  prevLines = [];
+  draw();
+}
+
+// What the screen says right now, preferring the panel's read for the same reason
+// respond() does: it is the fresher of the two.
+function choiceFor(person) {
+  return (detail?.id === person.id ? detail.choice : null) || person.choice;
+}
+
+function armTrust() {
+  const person = roster.find(selectedId);
+  if (!person) return;
+  if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you`);
+  const choice = choiceFor(person);
+  if (!choice) return refuse(`still reading ${person.name}'s screen, try again in a second`);
+  if (!choice.always) return refuse(`${person.name}'s prompt does not offer a "don't ask again"`);
+  trust = { id: person.id, name: person.name, keys: choice.always.keys, label: choice.always.label };
+  // The card comes open with it, so the menu this digit is aimed at is on the
+  // screen before the confirm rather than being taken on trust.
+  if (detail?.id !== person.id) loadDetail(person.id, { force: true });
+  prevLines = [];
+  draw();
+}
+
+// Checked again here rather than only at arming time, because the two are seconds
+// apart and the agent's screen is not ours.
+async function confirmTrust() {
+  if (!trust) return;
+  const armed = trust;
+  const person = roster.find(armed.id);
+  if (!person || person.status !== 'blocked') {
+    trust = null;
+    return refuse(`${armed.name} is not waiting on you any more`);
+  }
+  const now = choiceFor(person)?.always;
+  if (!now || now.label !== armed.label || now.keys.join() !== armed.keys.join()) {
+    trust = null;
+    return refuse(`${armed.name}'s prompt changed, so nothing was sent`);
+  }
+  trust = null;
+  if (DEMO) {
+    note(`demo mode: would send ${armed.keys.join(' ')} to ${armed.name}`);
+    draw();
+    return;
+  }
+  try {
+    await api.request('agent.send_keys', { target: armed.id, keys: armed.keys });
+    clocks.answer();
+    note(`granted: ${truncateNote(armed.label)}`);
+    setTimeout(() => refresh(), 400);
+    if (detail?.id === armed.id) setTimeout(() => loadDetail(armed.id, { force: true }), 600);
+  } catch (err) {
+    note(`could not answer ${armed.name}: ${err.code || err.message}`);
+  }
+  prevLines = [];
+  draw();
+}
+
 async function respond(kind) {
   const person = roster.find(selectedId);
   if (!person) return;
@@ -859,7 +933,7 @@ async function respond(kind) {
     note(`${person.name} is not waiting on you`);
     return;
   }
-  const choice = (detail?.id === person.id ? detail.choice : null) || person.choice;
+  const choice = choiceFor(person);
   if (!choice) {
     note(`still reading ${person.name}'s screen, try again in a second`);
     return;
@@ -1109,12 +1183,20 @@ function refuse(text) {
 
 function openCompose(scope) {
   if (compose) return;
-  const person = scope === 'one' ? roster.find(selectedId) : null;
+  const person = scope === 'all' ? null : roster.find(selectedId);
   if (scope === 'one') {
     if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
-    // The server rejects a blocked agent outright, before anything is sent. Saying
-    // so here is better than letting somebody type out a paragraph first.
-    if (person.status === 'blocked') return refuse(`${person.name} has a hand up: answer that first`);
+    // herdr rejects a prompt to a blocked agent with agent_blocked, before any
+    // input is sent. Saying so here is better than letting somebody type out a
+    // paragraph first, and `s` is the key that does reach them.
+    if (person.status === 'blocked') return refuse(`${person.name} has a hand up: press s to answer in words`);
+  }
+  // Answering in words. A waiting agent is the one case a prompt cannot reach, so
+  // this goes in as keystrokes instead, which is also the only way to answer a
+  // question that is not a yes or a no: "which of the two approaches" has no key.
+  if (scope === 'reply') {
+    if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
+    if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you: press a to give them a job`);
   }
   const { to, skipped } = scope === 'all'
     ? broadcastTargets(roster.people)
@@ -1128,6 +1210,9 @@ function openCompose(scope) {
     scope,
     id: person?.id || null,
     name: person?.name || null,
+    // What they asked, so the answer is typed with the question on the screen. It
+    // is the desk's own bubble text, which is the short form of the ask.
+    ask: scope === 'reply' ? person.ask || null : null,
     text: '',
     to,
     skipped,
@@ -1177,6 +1262,7 @@ async function sendCompose() {
     draw();
     return;
   }
+  const replying = compose.scope === 'reply';
   compose = { ...compose, sending: true, confirm: false, error: null };
   prevLines = [];
   draw();
@@ -1186,7 +1272,12 @@ async function sendCompose() {
     side = await new ApiClient().open();
     for (const person of to) {
       try {
-        await side.request('agent.prompt', { target: person.id, text }, PROMPT_TIMEOUT_MS);
+        // A waiting agent takes typing, not a prompt. `pane.send_input` carries the
+        // words and the enter in one request, which matters: two requests would
+        // leave a window where half an answer is sitting in somebody's input box
+        // waiting for a submit that failed.
+        if (replying) await side.request('pane.send_input', { pane_id: person.id, text, keys: ['enter'] }, PROMPT_TIMEOUT_MS);
+        else await side.request('agent.prompt', { target: person.id, text }, PROMPT_TIMEOUT_MS);
       } catch (err) {
         failed.push(`${person.name} (${err.code || err.message})`);
       }
@@ -1198,9 +1289,12 @@ async function sendCompose() {
   }
   const sent = to.length - failed.length;
   compose = null;
-  if (!sent) note(`could not assign that: ${failed.join(', ')}`);
+  if (!sent) note(replying ? `could not answer that: ${failed.join(', ')}` : `could not assign that: ${failed.join(', ')}`);
   else if (failed.length) note(`sent to ${sent} of ${to.length}; not ${failed.join(', ')}`);
-  else note(to.length === 1 ? `${to[0].name} is on it` : `sent to all ${to.length}`);
+  else if (replying) {
+    note(`answered ${to[0].name}`);
+    clocks.answer();
+  } else note(to.length === 1 ? `${to[0].name} is on it` : `sent to all ${to.length}`);
   prevLines = [];
   draw();
   // They should be turning green about now, so do not wait out the poll to say so.
@@ -1233,6 +1327,11 @@ function onMouse(ev) {
   // answered somebody's approval prompt while you were writing a sentence would be
   // the worst kind of accident in here.
   if (compose) return;
+  // Same bargain for an armed standing permission. The keyboard is already down to
+  // enter and esc while one is armed, and leaving the mouse live would mean the [y]
+  // still under the pointer could answer for you with the grant still armed behind
+  // it, which is two answers to one question.
+  if (trust) return;
   const { drag: next, act } = nextDrag(drag, ev, hitboxes);
   drag = next;
   if (!act) return;
@@ -1294,6 +1393,9 @@ function onInput(chunk) {
   if (str === '\x1b') {
     // A desk in mid-air outranks the panel: esc puts it down first.
     if (drag) return cancelDrag();
+    // An armed standing permission outranks everything else esc could close, because
+    // it is the one piece of state where the next enter is irreversible.
+    if (trust) return cancelTrust();
     // Backing out of a confirm goes back to the text rather than throwing it away,
     // because "wait, who does this reach" should not cost you the paragraph.
     if (compose?.confirm) {
@@ -1325,6 +1427,15 @@ function onInput(chunk) {
     if (terms(filter).length) return closeFilter(true);
     prevLines = [];
     draw();
+    return;
+  }
+
+  // An armed standing permission has the keyboard, and only two keys mean anything.
+  // Everything else is swallowed rather than falling through to the floor: walking
+  // away with j while a grant is armed would leave it armed at a desk you are no
+  // longer standing at, and the next enter would go somewhere you did not mean.
+  if (trust) {
+    if (str === '\r' || str === '\n') confirmTrust();
     return;
   }
 
@@ -1411,6 +1522,8 @@ function onInput(chunk) {
     else if (selectedId) loadDetail(selectedId, { force: true });
   } else if (str === 'y') respond('approve');
   else if (str === 'n') respond('deny');
+  else if (str === 'Y') armTrust();
+  else if (str === 's') openCompose('reply');
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
   else if (str === 'F') toggleFollow();

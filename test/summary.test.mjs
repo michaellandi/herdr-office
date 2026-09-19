@@ -1,7 +1,7 @@
 // Reading an agent's screen. approvalChoice decides which keys get sent to a
 // real agent when the user presses `y`, so being wrong here is not a rendering
 // glitch: it answers a prompt the user never read. The screens below are the
-// shapes the agents named in the README actually draw.
+// shapes the agents named in docs/design.md actually draw.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';

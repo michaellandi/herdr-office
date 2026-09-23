@@ -48,7 +48,33 @@ const pad = (n) => String(Math.max(0, Math.min(UNKNOWN, Math.round(n)))).padStar
 function seatKey(person, seats) {
   const seat = seats.get(person.id);
   if (!seat) return `${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${pad(UNKNOWN)}|${paneSortKey(person.id)}`;
-  return [pad(seat.workspaceNumber), pad(seat.tabNumber), pad(seat.y), pad(seat.x), paneSortKey(person.id)].join('|');
+  return [pad(seat.workspaceOrder), pad(seat.tabOrder), pad(seat.y), pad(seat.x), paneSortKey(person.id)].join('|');
+}
+
+// Where something sits in its bar, which is not the same thing as what it is
+// called. Both tabs and workspaces can be dragged to a new position (`tab.move`
+// and `workspace.move`, both taking an `insert_index`), and neither one renumbers
+// when that happens: `number` is the stable shortcut you reach a tab by, baked
+// into its id, so a tab created fourteenth answers to 14 wherever it ends up
+// sitting. Ordering the floor by `number` therefore drew the office in creation
+// order and quietly stopped matching the bar the moment anything was moved. The
+// position in the list is the thing that matches, so that is what seats a desk,
+// and `number` is kept only for a server that lists nothing at all.
+function orderOf(positions, numbers, id) {
+  return positions.get(id) ?? numbers.get(id) ?? UNKNOWN;
+}
+
+// Positions are rebuilt from the list rather than merged into what was there
+// before, because an index only means anything relative to the list it came out
+// of: mixing one call's indices with another's would interleave two different
+// bars. A list with nothing in it says nothing about order, so it leaves the
+// last known one alone.
+function positionsOf(items, key, into) {
+  if (!items.length) return;
+  into.clear();
+  items.forEach((item, i) => {
+    if (item?.[key]) into.set(item[key], i);
+  });
 }
 
 export class Roster {
@@ -57,9 +83,11 @@ export class Roster {
     this.people = [];
     this.workspaceNames = new Map();
     this.workspaceNumbers = new Map();
+    this.workspacePositions = new Map(); // workspace_id -> where it sits in the bar
     this.tabNames = new Map();
     this.tabNumbers = new Map();
-    this.seats = new Map(); // pane_id -> { workspaceNumber, tabNumber, x, y }
+    this.tabPositions = new Map(); // tab_id -> where it sits in the tab bar
+    this.seats = new Map(); // pane_id -> { workspaceOrder, tabOrder, x, y }
     this.focusedPaneId = null;
     this.states = new Map(); // pane_id -> { status, since, seq }
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
@@ -82,6 +110,7 @@ export class Roster {
   }
 
   setWorkspaces(workspaces = []) {
+    positionsOf(workspaces, 'workspace_id', this.workspacePositions);
     for (const ws of workspaces) {
       if (!ws?.workspace_id) continue;
       // session.snapshot calls it `label`; older payloads used `name`.
@@ -93,6 +122,7 @@ export class Roster {
   // Tab labels are what the human actually named the work ("sso-login"), which
   // beats a pane's terminal title for telling desks apart at a glance.
   setTabs(tabs = []) {
+    positionsOf(tabs, 'tab_id', this.tabPositions);
     for (const tab of tabs) {
       if (!tab?.tab_id) continue;
       this.tabNames.set(tab.tab_id, tab.label || String(tab.number ?? ''));
@@ -103,17 +133,20 @@ export class Roster {
   // Where every pane physically is, from `session.snapshot`'s `layouts`. This is
   // what lets the floor match the room: seats are laid out in the same order the
   // panes are, so swapping two panes visibly swaps two desks instead of
-  // rearranging the real session behind an unchanged picture.
+  // rearranging the real session behind an unchanged picture. The tab and the
+  // workspace come in by id, which is why the lists have to be read first: the
+  // geometry says where a pane sits inside its tab and nothing about where that
+  // tab sits in the bar.
   setLayouts(layouts = []) {
     this.seats.clear();
     for (const layout of layouts) {
-      const workspaceNumber = this.workspaceNumbers.get(layout?.workspace_id) ?? UNKNOWN;
-      const tabNumber = this.tabNumbers.get(layout?.tab_id) ?? UNKNOWN;
+      const workspaceOrder = orderOf(this.workspacePositions, this.workspaceNumbers, layout?.workspace_id);
+      const tabOrder = orderOf(this.tabPositions, this.tabNumbers, layout?.tab_id);
       for (const pane of layout?.panes || []) {
         if (!pane?.pane_id) continue;
         this.seats.set(pane.pane_id, {
-          workspaceNumber,
-          tabNumber,
+          workspaceOrder,
+          tabOrder,
           x: pane.rect?.x ?? UNKNOWN,
           y: pane.rect?.y ?? UNKNOWN,
         });

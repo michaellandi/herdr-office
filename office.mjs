@@ -633,9 +633,10 @@ function seat(snapshot, tabs) {
   // already fetch, and the difference between a useful nudge and a rude one.
   if (snap) watching = Boolean(OWN_PANE) && snap.focused_pane_id === OWN_PANE;
   if (snap?.workspaces) roster.setWorkspaces(snap.workspaces);
-  // The snapshot's tabs carry `number`, which is what orders one workspace's
-  // tabs. tab.list goes second so its labels win where the two disagree, and it
-  // cannot clobber a number it does not carry.
+  // Both calls list the tabs in the order the tab bar shows them, which is what
+  // orders one workspace's tabs. tab.list goes second so its labels win where the
+  // two disagree, and an empty answer from either one leaves the order alone
+  // rather than flattening the floor.
   if (snap?.tabs) roster.setTabs(snap.tabs);
   if (tabs?.tabs) roster.setTabs(tabs.tabs);
   if (snap?.layouts) roster.setLayouts(snap.layouts);

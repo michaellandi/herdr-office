@@ -26,12 +26,13 @@ test('with no layout, seating is pane id order', () => {
 test('desks follow the panes: workspace, then tab, then reading order', () => {
   const roster = new Roster();
   roster.setWorkspaces([
-    { workspace_id: 'wB', label: 'second', number: 2 },
     { workspace_id: 'wA', label: 'first', number: 1 },
+    { workspace_id: 'wB', label: 'second', number: 2 },
   ]);
+  // Listed in the order the bars show them, which is the order that seats a desk.
   roster.setTabs([
-    { tab_id: 'wA:t2', label: 'later', number: 2 },
     { tab_id: 'wA:t1', label: 'earlier', number: 1 },
+    { tab_id: 'wA:t2', label: 'later', number: 2 },
     { tab_id: 'wB:t1', label: 'other room', number: 1 },
   ]);
   roster.setLayouts([
@@ -53,6 +54,68 @@ test('desks follow the panes: workspace, then tab, then reading order', () => {
   // expected result.
   roster.update([agent('wB:p1'), agent('wA:p9'), agent('wA:p2'), agent('wA:p3'), agent('wA:p1')]);
   assert.deepEqual(seatedIds(roster), ['wA:p1', 'wA:p2', 'wA:p3', 'wA:p9', 'wB:p1']);
+});
+
+test('desks follow the tab bar, not the numbers the tabs answer to', () => {
+  // The bug this exists to stop coming back. `number` is the shortcut you reach a
+  // tab by and it is baked into the tab's id, so a tab dragged to the front of the
+  // bar keeps the number it was created with. Seating by number therefore drew the
+  // office in the order the tabs were made, which matched the bar until the day
+  // somebody moved one and then silently never matched it again.
+  const roster = new Roster();
+  roster.setWorkspaces([{ workspace_id: 'w1', label: 'main', number: 1 }]);
+  const tabs = [
+    { tab_id: 'w1:tE', label: 'office', number: 14 },
+    { tab_id: 'w1:t7', label: 'plugin', number: 7 },
+    { tab_id: 'w1:t1', label: 'notes', number: 1 },
+  ];
+  roster.setTabs(tabs);
+  roster.setLayouts(tabs.map((tab, i) => ({
+    workspace_id: 'w1',
+    tab_id: tab.tab_id,
+    panes: [{ pane_id: `w1:p${i + 1}`, rect: { x: 0, y: 0, width: 80, height: 40 } }],
+  })));
+  const agents = [agent('w1:p1'), agent('w1:p2'), agent('w1:p3')];
+  roster.update(agents);
+  assert.deepEqual(seatedIds(roster), ['w1:p1', 'w1:p2', 'w1:p3'], 'the bar reads 14, 7, 1 and so must the floor');
+
+  // And it follows a move, rather than only being right the first time.
+  roster.setTabs([tabs[2], tabs[0], tabs[1]]);
+  roster.setLayouts([
+    { workspace_id: 'w1', tab_id: 'w1:t1', panes: [{ pane_id: 'w1:p3', rect: { x: 0, y: 0 } }] },
+    { workspace_id: 'w1', tab_id: 'w1:tE', panes: [{ pane_id: 'w1:p1', rect: { x: 0, y: 0 } }] },
+    { workspace_id: 'w1', tab_id: 'w1:t7', panes: [{ pane_id: 'w1:p2', rect: { x: 0, y: 0 } }] },
+  ]);
+  roster.update(agents);
+  assert.deepEqual(seatedIds(roster), ['w1:p3', 'w1:p1', 'w1:p2']);
+});
+
+test('a server that lists no tabs falls back to the numbers rather than to nothing', () => {
+  // An index only means anything relative to the list it came from, so an empty
+  // list is not an order: it is no answer. Treating it as one would flatten every
+  // tab onto the same rank and reshuffle the whole floor on a dropped call.
+  const roster = new Roster();
+  roster.setWorkspaces([{ workspace_id: 'w1', label: 'main', number: 1 }]);
+  roster.setTabs([{ tab_id: 'w1:t2', label: 'second', number: 2 }, { tab_id: 'w1:t1', label: 'first', number: 1 }]);
+  roster.setTabs([]);
+  const layouts = [
+    { workspace_id: 'w1', tab_id: 'w1:t1', panes: [{ pane_id: 'w1:p1', rect: { x: 0, y: 0 } }] },
+    { workspace_id: 'w1', tab_id: 'w1:t2', panes: [{ pane_id: 'w1:p2', rect: { x: 0, y: 0 } }] },
+  ];
+  roster.setLayouts(layouts);
+  roster.update([agent('w1:p1'), agent('w1:p2')]);
+  // The last order that was actually reported, which is the listed one and not the
+  // numbered one.
+  assert.deepEqual(seatedIds(roster), ['w1:p2', 'w1:p1']);
+
+  // With nothing ever reported, the numbers are all there is to go on.
+  const cold = new Roster();
+  cold.setWorkspaces([{ workspace_id: 'w1', label: 'main', number: 1 }]);
+  cold.tabNumbers.set('w1:t1', 1);
+  cold.tabNumbers.set('w1:t2', 2);
+  cold.setLayouts(layouts);
+  cold.update([agent('w1:p2'), agent('w1:p1')]);
+  assert.deepEqual(seatedIds(cold), ['w1:p1', 'w1:p2']);
 });
 
 test('a swap in the layout moves the desk', () => {

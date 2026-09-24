@@ -587,6 +587,17 @@ session rather than an arbitrary list, and **dragging one desk onto another swap
 the two panes for real**. The desk you picked up goes pale, the one you are about
 to drop it on lights up, and `esc` or a drop on empty carpet puts it back.
 
+Workspace and tab come from where each one sits in its bar, which is not the same
+thing as the number it answers to. Tabs and workspaces can both be dragged to a new
+position (`tab.move` and `workspace.move`, each taking an `insert_index`) and
+neither renumbers when that happens: the number is a stable shortcut baked into the
+id, so a tab created fourteenth is still 14 after it moves to the front. The office
+originally seated desks by that number, which looked correct because the two agree
+until the first time anything is moved, and then drew the office in creation order
+forever after. The position in the list is the thing that matches the bar, so that
+is what seats a desk. An empty tab list is not an order but a missing answer, and it
+leaves the last known positions alone rather than flattening every tab onto one rank.
+
 A press only selects. Opening a desk waits for the release, because a press that
 turned into a drag was never a request to open anything, and the `[y]` and `[n]`
 buttons answer on press and cannot be dragged at all: an approval is the one

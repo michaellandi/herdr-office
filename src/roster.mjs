@@ -90,6 +90,9 @@ export class Roster {
     this.seats = new Map(); // pane_id -> { workspaceOrder, tabOrder, x, y }
     this.focusedPaneId = null;
     this.states = new Map(); // pane_id -> { status, since, seq }
+    // What the last run of the office today left behind, and what became of it. Null
+    // for a first run, which is most of them. See `restoreStates`.
+    this.reopen = null;
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
     this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
     this.events = new Map(); // pane_id -> { label, kind, at }, news, and short-lived
@@ -297,7 +300,12 @@ export class Roster {
         seen.add(id);
         const status = a.agent_status || 'unknown';
         const seq = a.state_change_seq ?? null;
-        const prev = this.states.get(id);
+        const stored = this.states.get(id);
+        // A line in the day book is a claim about a stretch of time the office was not
+        // watching, so it gets checked before it is believed: see `believe`. One that does
+        // not check out is dropped right here, which leaves this desk looking exactly like
+        // a desk the office has never met before, because that is what it is.
+        const prev = stored?.restored ? this.believe(stored, status, seq) : stored;
         const changed = !prev || prev.status !== status || (seq != null && prev.seq !== seq);
         const since = changed ? now : prev.since;
         // The API reports state, not when it was entered, so the first sighting
@@ -344,6 +352,15 @@ export class Roster {
       person.name = nickname(i);
     });
 
+    // Settle the reopening, once, on the first look after it. Anything still flagged as
+    // restored was in the book and is not on the floor, so that desk went while the
+    // office was shut, and the loop below drops it along with every other desk that has
+    // gone. After this the flag cannot survive, so `believe` runs once per desk.
+    if (this.reopen && !this.reopen.settled) {
+      for (const entry of this.states.values()) if (entry.restored) this.reopen.gone += 1;
+      this.reopen.settled = true;
+    }
+
     for (const id of [...this.states.keys()]) if (!seen.has(id)) this.states.delete(id);
     // Pane keyed caches go with the pane. The cwd keyed ones do not: a checkout outlives
     // the desk that was sitting in it, and the next desk to open there inherits an answer
@@ -361,5 +378,98 @@ export class Roster {
 
   find(id) {
     return this.people.find((p) => p.id === id) || null;
+  }
+
+  /* ------------------------------------------------------------------- the day book */
+
+  // Every desk's clock is thrown away when the pane closes, which is why reopening the
+  // office used to announce that a desk which had been blocked since breakfast had been
+  // blocked for one second. The punch clock already survives the day (src/state.mjs), but
+  // it keeps office totals, and "Cass has been stuck for two hours" is the number that
+  // actually makes somebody get up. So the desks get a book of their own.
+  //
+  // What makes it honest is that a saved clock is a claim about time nobody watched, and
+  // `state_change_seq` can check that claim. Herdr moves that number every time it changes
+  // a desk's state, so the number the office wrote down before it shut is proof of a
+  // negative: nothing happened to this desk while nobody was looking, and the clock saved
+  // next to it is still running on the very interval it was running on. A different number
+  // is proof of a transition the office missed. A missing number is proof of nothing.
+  //
+  // Only the first of those three gets believed. The other two get the answer a desk the
+  // office has never met gets, which is to start the clock now and admit it with a `~`,
+  // because the rule here is the same one the punch clock is built on: never claim time
+  // the office did not watch.
+
+  // Returns a plain entry when the line holds, and nothing when it does not, so that the
+  // caller's ordinary "never seen this desk before" path handles everything else.
+  believe(stored, status, seq) {
+    const held = seq != null && seq === stored.seq && status === stored.status;
+    if (this.reopen) this.reopen[held ? 'held' : 'missed'] += 1;
+    if (!held) return undefined;
+    return { status: stored.status, since: stored.since, seq: stored.seq, assumed: stored.assumed };
+  }
+
+  // Where each desk's clock had got to, for src/state.mjs to hand back on the next open
+  // today. Reading it changes nothing, so it is safe on a timer.
+  //
+  // Desks herdr gave no sequence number for are left out, because that number is the only
+  // thing that can prove the clock still means anything after a gap: such a line could
+  // never be believed, so keeping it would produce the same answer as not having it, one
+  // poll later and after a trip through the filesystem.
+  snapshotStates() {
+    const book = [];
+    for (const [id, entry] of this.states) {
+      if (entry.seq == null) continue;
+      book.push({
+        id,
+        status: entry.status,
+        since: entry.since,
+        seq: entry.seq,
+        assumed: Boolean(entry.assumed),
+      });
+    }
+    return book;
+  }
+
+  // Adopt the book from earlier today. Returns how many lines were taken, which is not
+  // the same as how many will be believed: each one is checked against herdr on the next
+  // look, and `awayReport` says how that went.
+  //
+  // Bad lines are dropped on the way in rather than being allowed to fail later, one at a
+  // time rather than rejecting the file, for the reason the punch clock restores field by
+  // field: a book that has lost one desk is still right about the other four.
+  restoreStates(saved, savedAt = 0, now = this.clock()) {
+    const shut = Number.isFinite(savedAt) && savedAt > 0 && savedAt <= now ? now - savedAt : 0;
+    let kept = 0;
+    for (const entry of Array.isArray(saved) ? saved : []) {
+      if (!entry || typeof entry.id !== 'string' || !entry.id) continue;
+      if (entry.seq == null) continue;
+      if (typeof entry.status !== 'string' || !entry.status) continue;
+      // A stored clock that runs past now is a machine whose clock moved between the two
+      // runs, and believing it would draw a desk that has been idle for minus four
+      // minutes. The office has no way to tell which of the two readings was wrong, so it
+      // trusts neither and starts this desk over.
+      if (!Number.isFinite(entry.since) || entry.since > now) continue;
+      this.states.set(entry.id, {
+        status: entry.status,
+        since: entry.since,
+        seq: entry.seq,
+        assumed: Boolean(entry.assumed),
+        restored: true,
+      });
+      kept += 1;
+    }
+    if (kept) this.reopen = { shut, kept, held: 0, missed: 0, gone: 0, settled: false };
+    return kept;
+  }
+
+  // What became of the book, for the one line that tells you. Null until the first look
+  // since reopening has settled, and null again once it has been read, because this is
+  // news and news is only news once. Same contract as the blocked list `update` returns.
+  awayReport() {
+    if (!this.reopen?.settled) return null;
+    const report = this.reopen;
+    this.reopen = null;
+    return report;
   }
 }

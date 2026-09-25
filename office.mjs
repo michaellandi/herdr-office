@@ -20,7 +20,7 @@ import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice }
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
 import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
-import { width } from './src/text.mjs';
+import { width, formatDuration } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
 import { readProcessTable, paneProcesses } from './src/ps.mjs';
 import { WATCH_PATTERN, eventFromMatch, newsFromEvent } from './src/events.mjs';
@@ -250,14 +250,37 @@ function leaveTerminal() {
 function openTheBooks() {
   if (DEMO) return;
   const saved = loadState();
-  if (saved) clocks.restore(saved);
+  if (!saved) return;
+  clocks.restore(saved);
+  // And the day book, which is per desk rather than per office, and which is checked
+  // against herdr on the first poll rather than trusted now: see Roster's day book.
+  roster.restoreStates(saved.desks, saved.savedAt);
 }
 
 // The other half. Synchronous and failure-swallowing all the way down, which is what
 // lets `quit` call it without spending any of its half-second budget.
 function closeTheBooks() {
   if (DEMO) return;
-  saveState(clocks.snapshot());
+  saveState({ ...clocks.snapshot(), desks: roster.snapshotStates() });
+}
+
+// One line about the gap, on the first poll after reopening. The point of it is less the
+// news than which clocks on the floor can now be trusted: a `~` on a desk that was
+// plainly here this morning is otherwise unexplained, and "nothing moved" is the other
+// half of that same sentence, because it says every duration on the floor is real.
+//
+// The denominator is the desks the book had that are still on the floor, not everything
+// the book had, because "2 of 5 moved" about a five-desk book with two desks left in it
+// invites the reading that three of them are fine.
+function sayWhatWeMissed() {
+  const away = roster.awayReport();
+  if (!away) return;
+  const shut = away.shut ? ` for ${formatDuration(away.shut)}` : '';
+  const here = away.held + away.missed;
+  const parts = [];
+  if (away.missed) parts.push(`${away.missed} of ${here} moved`);
+  if (away.gone) parts.push(`${away.gone} gone`);
+  note(parts.length ? `shut${shut}: ${parts.join(', ')}` : `shut${shut}: nothing moved`, 6000);
 }
 
 function quit(code = 0, msg) {
@@ -661,6 +684,7 @@ async function refresh() {
     seat(snapshot, tabs);
     const newlyBlocked = roster.update(agentList.agents || []);
     clocks.observe(roster.people);
+    sayWhatWeMissed();
     ensureSelection();
     shepherd();
     syncSubscriptions();

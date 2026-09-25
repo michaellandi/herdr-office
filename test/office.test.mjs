@@ -49,7 +49,7 @@ const desk = (id, status, i, extra = {}) => ({
 // Deliberate, and the reason these tests can see a duplicate at all. The real
 // herdr resets instead, so on the machine this was found on the duplicate was
 // dropped by the kernel and looked like nothing was wrong.
-async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null } = {}) {
+async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null, book = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-office-run-'));
   const sockPath = path.join(dir, 's');
   const gitLog = path.join(dir, 'git-calls');
@@ -122,6 +122,28 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
   // the card and the failure reads as a broken feature rather than a busy laptop. The
   // production default stays where it is and this run is simply allowed to be slow.
   env.HERDR_OFFICE_GIT_TIMEOUT_MS = '30000';
+
+  // An office that is opening for the second time today, with a real state file written
+  // by a real earlier run. Seeded through the same file the office writes rather than
+  // through an injected object, because every other part of this is the real thing: the
+  // point of a test at this level is that the wiring from the file to the floor works,
+  // and that is exactly the part a unit test cannot see.
+  if (book) {
+    const stateDir = path.join(dir, 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const d = new Date(book.savedAt);
+    const pad = (n) => String(n).padStart(2, '0');
+    fs.writeFileSync(
+      path.join(stateDir, 'punchclock.json'),
+      JSON.stringify({
+        version: 1,
+        day: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+        savedAt: book.savedAt,
+        desks: book.desks,
+      }),
+    );
+    env.HERDR_PLUGIN_STATE_DIR = stateDir;
+  }
 
   // A git that is not git: it records how it was called and prints whatever porcelain
   // the test asked for. So the assertion is about a real subprocess with real arguments,
@@ -562,6 +584,46 @@ test('answering a raised hand sends exactly one keystroke', async () => {
     // A literal y/n prompt takes the letter. If the shape read were wrong this
     // would be enter, which on a menu is whatever happened to be highlighted.
     assert.deepEqual(keys[0].params.keys, ['y'], 'the wrong key was sent for a y/n prompt');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('an office opening for the second time today picks the clocks back up', async () => {
+  // The whole day book, through the real thing: a real state file, the real office
+  // process, the real socket, and an assertion about pixels on a screen. The unit tests
+  // prove the rule; this proves the rule is wired to something you can see.
+  const savedAt = Date.now() - 40 * 60 * 1000;
+  const office = await openOffice({
+    agents: [
+      // Blocked since breakfast and still blocked on the very same prompt, which is what
+      // the unchanged sequence number says.
+      desk('w1:p1', 'blocked', 0, { state_change_seq: 7 }),
+      // Also in the book, but herdr has counted a change since. Nobody saw when.
+      desk('w1:p2', 'idle', 1, { state_change_seq: 99 }),
+    ],
+    book: {
+      savedAt,
+      desks: [
+        { id: 'w1:p1', status: 'blocked', since: savedAt - 2 * 60 * 60 * 1000, seq: 7, assumed: false },
+        { id: 'w1:p2', status: 'working', since: savedAt - 2 * 60 * 60 * 1000, seq: 3, assumed: false },
+        { id: 'w1:p9', status: 'idle', since: savedAt - 2 * 60 * 60 * 1000, seq: 1, assumed: false },
+      ],
+    },
+  });
+  try {
+    await office.until('the floor', () => office.screen().includes('Ada'));
+    // One desk held, one moved, one gone, and the office says so on the message line.
+    await office.until(
+      'the line about the gap',
+      () => /shut for 40m\d\ds: 1 of 2 moved, 1 gone/.test(office.screen()),
+    );
+
+    const screen = office.screen();
+    // Ada was stuck before the office shut and is stuck on the same thing now, so her
+    // clock reads in hours and carries no `~`. Before the day book this said 0s.
+    assert.match(screen, /2h4[01]m/, 'Ada lost the two hours she was already stuck for');
+    assert.ok(!/~2h/.test(screen), 'a clock herdr just confirmed must not be hedged with a `~`');
   } finally {
     await office.stop();
   }

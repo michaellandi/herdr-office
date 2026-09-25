@@ -168,7 +168,9 @@ Two rules that are easy to break by accident:
   tests send them for real down a socket no agent is listening on.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
-Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch
+Node 18, 20 and 22, and a separate job installs herdr and checks every request the
+office can send against that herdr's own schema, on both the oldest version supported
+and the current one. The Herdr marketplace indexes whatever is on the default branch
 rather than a release tag, so `main` is what strangers install and it has to stay
 green.
 

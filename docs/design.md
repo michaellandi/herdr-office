@@ -833,3 +833,12 @@ CI runs the suite plus a couple of live `--once` renders on macOS and Linux acro
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch
 rather than a release tag, so `main` is what strangers install and it has to stay
 green.
+
+A separate job installs herdr itself and runs the protocol suite against it with
+`HERDR_REQUIRED=1`, which turns the skip into a failure. Without that, the one suite
+that checks the wire contributed nothing to CI while looking exactly like a suite that
+passed, and the gap it was written to close is the gap it was falling through. It runs
+against two versions: the oldest herdr the README promises, which catches a request
+that needs a newer server than we claim to support, and the current stable one, which
+catches the wire moving underneath us. Neither needs a running session, because `api
+schema` prints the schema the binary was built with.

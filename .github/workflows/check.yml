@@ -34,3 +34,50 @@ jobs:
         run: COLUMNS=105 LINES=45 node office.mjs --once --demo > /dev/null
       - name: the demo roster renders at an awkward size too
         run: COLUMNS=40 LINES=16 node office.mjs --once --demo > /dev/null
+
+  # The protocol suite is the only one that needs the other program, and without it
+  # every assertion in it skips. Skipping is the honest answer on a laptop, but as the
+  # whole of CI it is a suite that passes by doing nothing, which is how the news
+  # labels stayed wrong on the wire for their entire life. So herdr gets installed
+  # here and HERDR_REQUIRED turns a skip into a failure.
+  #
+  # Two versions, because there are two ways this breaks. The floor is the version the
+  # README promises to work on, and stable is where the protocol is now: one job
+  # catches us using something that did not exist yet, the other catches the wire
+  # moving underneath us. Neither needs a running session, only the binary, because
+  # `api schema` prints the schema herdr was built with.
+  protocol:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest herdr the README claims, and whatever is current.
+        herdr: ['v0.9.0', 'latest']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install herdr ${{ matrix.herdr }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ matrix.herdr }}'
+          if [ "$tag" = latest ]; then
+            # The newest stable release, which is not the newest release: the preview
+            # channel publishes between versions and is not what strangers install.
+            tag=$(gh release view --repo herdrdev/herdr --json tagName --jq .tagName)
+          fi
+          echo "checking against herdr $tag"
+          mkdir -p "$HOME/.local/bin"
+          gh release download "$tag" --repo herdrdev/herdr \
+            --pattern herdr-linux-x86_64 --output "$HOME/.local/bin/herdr"
+          chmod +x "$HOME/.local/bin/herdr"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: which herdr answered
+        run: herdr --version
+      - name: the office speaks the protocol this herdr publishes
+        env:
+          HERDR_REQUIRED: '1'
+        run: node --test test/protocol.test.mjs

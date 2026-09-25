@@ -111,7 +111,10 @@ Bo, Cass, Dev and Ede. Faces, hair and shirt colours come from the pane id inste
 a desk keeps its look between runs even if a new pane appearing earlier on the floor
 shifts the names along. `*` marks the focused pane.
 Durations prefixed with `~` are a lower bound: the API reports current state, not when
-it was entered, so the first sighting of an agent starts the clock.
+it was entered, so the first sighting of an agent starts the clock. Reopening the office
+does not restart it, though. Each desk's clock is kept for the day and picked up again
+wherever herdr can show the desk has not changed state in between, and one that did
+change while the pane was shut goes back to `~` ([the day book](docs/design.md#the-day-book)).
 
 ## What a desk tells you
 

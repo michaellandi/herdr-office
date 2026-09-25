@@ -385,3 +385,160 @@ test('news over a desk puts itself away', () => {
   assert.equal(roster.events.size, 0);
   assert.equal(roster.expireEvents(), false, 'an empty wall reports no change');
 });
+
+/* -------------------------------------------------------------------- the day book */
+
+// Reopening the office used to reset every desk's clock, so an agent that had been
+// blocked since breakfast was drawn as having been blocked for one second. The book keeps
+// those clocks for the day, and what follows is the rule that keeps it honest: a saved
+// clock is believed only where herdr can prove nothing happened to the desk in the
+// meantime, and thrown away everywhere else. The office may under-report time it did not
+// watch. It must never over-report it.
+const BREAKFAST = Date.parse('2026-09-25T09:00:00Z');
+const ELEVEN = Date.parse('2026-09-25T11:00:00Z');
+
+// The office shut and opened again: a book from the first run handed to a second one two
+// hours later, which then takes its first look at the floor.
+const reopenWith = (book, agents, savedAt = ELEVEN - 2000) => {
+  const roster = new Roster(() => ELEVEN);
+  roster.restoreStates(book, savedAt, ELEVEN);
+  const blocked = roster.update(agents);
+  return { roster, blocked, person: roster.people[0] || null, away: roster.awayReport() };
+};
+
+const stuckSince = (at, seq = 7) => [{ id: 'w1:p1', status: 'blocked', since: at, seq, assumed: false }];
+
+test('a desk nobody touched while the office was shut keeps its clock', () => {
+  const { person, away } = reopenWith(stuckSince(BREAKFAST), [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+  ]);
+  assert.equal(person.since, BREAKFAST);
+  assert.equal(person.statusMs, ELEVEN - BREAKFAST, 'two hours stuck, not two seconds');
+  // And it is not a guess, so the floor must not apologise for it with a `~`.
+  assert.equal(person.assumedSince, false);
+  assert.deepEqual([away.held, away.missed, away.gone], [1, 0, 0]);
+});
+
+test('a sequence number that moved is proof of a transition nobody watched', () => {
+  const { person, away } = reopenWith(stuckSince(BREAKFAST), [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 8 }),
+  ]);
+  // Still blocked, but not the same block: herdr counted a change in between and the
+  // office has no idea when it happened. So this desk is treated as one it has never met.
+  assert.equal(person.since, ELEVEN);
+  assert.equal(person.assumedSince, true);
+  assert.equal(person.firstSeen, true, 'first sighting of this state, whatever the book said');
+  assert.deepEqual([away.held, away.missed, away.gone], [0, 1, 0]);
+});
+
+test('a line nobody can check is not believed', () => {
+  for (const [what, extra] of [
+    ['the status disagrees with the book', { agent_status: 'working', state_change_seq: 7 }],
+    ['there is no sequence number to check against', { agent_status: 'blocked', state_change_seq: null }],
+  ]) {
+    const { person } = reopenWith(stuckSince(BREAKFAST), [agent('w1:p1', extra)]);
+    assert.equal(person.since, ELEVEN, what);
+    assert.equal(person.assumedSince, true, what);
+  }
+});
+
+test('a clock from the future is a machine that changed its mind about the time', () => {
+  // Nothing here says which of the two readings was wrong, so neither is trusted.
+  const { person } = reopenWith(stuckSince(ELEVEN + 60_000), [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+  ]);
+  assert.equal(person.since, ELEVEN);
+  assert.equal(person.assumedSince, true);
+});
+
+test('a clock that was already a guess is still a guess after a reopen', () => {
+  // Keeping a duration makes it survive, not makes it true. A desk first met mid-block
+  // has an unknown start time and coming back to it does not discover one.
+  const { person } = reopenWith([{ id: 'w1:p1', status: 'blocked', since: BREAKFAST, seq: 7, assumed: true }], [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+  ]);
+  assert.equal(person.since, BREAKFAST, 'the clock is kept');
+  assert.equal(person.assumedSince, true, 'and it is still only a lower bound');
+});
+
+test('a hand that was already up when the office reopened does not ring the bell again', () => {
+  // The toast means somebody has just started waiting on you. This one has been waiting
+  // two hours, and announcing it on every reopen is how a notification gets muted.
+  const { blocked } = reopenWith(stuckSince(BREAKFAST), [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+  ]);
+  assert.deepEqual(blocked, []);
+});
+
+test('the report separates what held, what moved and what has gone', () => {
+  const { away } = reopenWith(
+    [
+      { id: 'w1:p1', status: 'blocked', since: BREAKFAST, seq: 7, assumed: false },
+      { id: 'w1:p2', status: 'working', since: BREAKFAST, seq: 3, assumed: false },
+      { id: 'w1:p3', status: 'idle', since: BREAKFAST, seq: 1, assumed: false },
+    ],
+    [
+      agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+      agent('w1:p2', { agent_status: 'idle', state_change_seq: 4 }),
+      agent('w1:p9', { agent_status: 'working', state_change_seq: 1 }),
+    ],
+  );
+  // p1 held, p2 moved, p3 is gone, and p9 is new and so is in nobody's book.
+  assert.deepEqual([away.held, away.missed, away.gone], [1, 1, 1]);
+  assert.equal(away.shut, 2000, 'how long the office was shut, from the file it wrote');
+  assert.equal(away.kept, 3);
+});
+
+test('what we missed is news, and news is only news once', () => {
+  const { roster, away } = reopenWith(stuckSince(BREAKFAST), [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+  ]);
+  assert.ok(away);
+  assert.equal(roster.awayReport(), null);
+});
+
+test('a book nobody could use leaves no report to give', () => {
+  // Not the same as a report saying nothing happened: there was nothing to check.
+  const roster = new Roster(() => ELEVEN);
+  for (const book of [null, undefined, [], 'punchclock.json', [{ id: 'w1:p1' }], [{ status: 'idle' }]]) {
+    assert.equal(roster.restoreStates(book, ELEVEN - 2000, ELEVEN), 0, JSON.stringify(book));
+  }
+  roster.update([agent('w1:p1')]);
+  assert.equal(roster.awayReport(), null);
+});
+
+test('the book keeps only the lines that can be checked later', () => {
+  const roster = new Roster(() => BREAKFAST);
+  roster.update([
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+    agent('w1:p2', { agent_status: 'working', state_change_seq: null }),
+  ]);
+  const book = roster.snapshotStates();
+  // p2 is left out: with no sequence number nothing could ever confirm it, so writing it
+  // down buys exactly what leaving it out buys, one poll later and via the filesystem.
+  assert.deepEqual(
+    book,
+    [{ id: 'w1:p1', status: 'blocked', since: BREAKFAST, seq: 7, assumed: true }],
+  );
+  // And reading the book must not change it, because it is written on a timer.
+  assert.deepEqual(roster.snapshotStates(), book);
+});
+
+test('a book survives the round trip a real restart puts it through', () => {
+  // The clocks go out through JSON and a file, so the shapes have to be ones JSON keeps.
+  const first = new Roster(() => BREAKFAST);
+  first.update([
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+    agent('w1:p2', { agent_status: 'working', state_change_seq: 3 }),
+  ]);
+  const book = JSON.parse(JSON.stringify({ desks: first.snapshotStates() })).desks;
+
+  const { roster } = reopenWith(book, [
+    agent('w1:p1', { agent_status: 'blocked', state_change_seq: 7 }),
+    agent('w1:p2', { agent_status: 'working', state_change_seq: 3 }),
+  ]);
+  for (const person of roster.people) {
+    assert.equal(person.since, BREAKFAST, `${person.id} lost its clock`);
+    assert.equal(person.statusMs, ELEVEN - BREAKFAST, person.id);
+  }
+});

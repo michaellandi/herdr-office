@@ -305,6 +305,101 @@ test('a slow socket is never waited on twice at once', async () => {
   assert.equal(api.sent('pane.graphics.set').length, 2, 'and it picks up again once free');
 });
 
+/* ------------------------------------------------- layers we can still reach */
+
+// The bug these three exist for, as it was reported: "sometimes the progress bar
+// appears to float after resize, and shows up twice."
+//
+// Both halves are one cause. A layer the office stopped being sure about used to be
+// deleted from its records, and only ids it still has a record of are ever cleared,
+// so the pixels stayed up with nothing left that could take them down. Resizing
+// smaller is what makes that visible: the chart declines a rectangle it cannot say
+// anything in, the text version of the same bar draws in its place, and the orphaned
+// image is still sitting at the coordinates the old layout gave it. Twice, and one of
+// them in the wrong place.
+//
+// So the promise is about a *clear* arriving, not about a redraw. A test that only
+// checks the redraw passes against the bug.
+
+test('a layer whose drawing failed can still be taken down', async () => {
+  // The usual failure here is a timeout, which is a question with no answer rather
+  // than a refusal: herdr may well have drawn it.
+  let fail = true;
+  const api = fakeApi({
+    'pane.graphics.info': INFO,
+    'pane.graphics.set': () => {
+      if (!fail) return {};
+      throw new Error('timed out');
+    },
+  });
+  const g = new Graphics(api, 'w1:p1');
+  await g.probe();
+  g.sync([frame('office.strip', 's:a')]);
+  await settle();
+  fail = false;
+
+  // The pane got shorter and the chart gave up its rectangle, so the office wants
+  // no layers at all now.
+  g.sync([]);
+  await settle();
+  assert.deepEqual(
+    api.sent('pane.graphics.clear').map((c) => c.params.layer_id),
+    ['office.strip'],
+    'a failed set must not strand the pixels it may have drawn',
+  );
+  assert.equal(g.off, false, 'and one failure is not a broken terminal');
+});
+
+test('a layer that outlived a hidden pane can still be taken down', async () => {
+  const answers = { 'pane.graphics.info': { ...INFO } };
+  const api = fakeApi(answers);
+  const g = new Graphics(api, 'w1:p1');
+  await g.probe();
+  g.sync([frame('office.strip', 's:a')]);
+  await settle();
+
+  answers['pane.graphics.info'] = { ...INFO, pane_visible: false };
+  await g.probe();
+  answers['pane.graphics.info'] = { ...INFO, pane_visible: true };
+  await g.probe();
+
+  g.sync([]);
+  await settle();
+  assert.deepEqual(
+    api.sent('pane.graphics.clear').map((c) => c.params.layer_id),
+    ['office.strip'],
+    'the images may have survived the pane being away, so they still have to be cleared',
+  );
+});
+
+test('a clear that failed is tried again rather than forgotten', async () => {
+  // The mirror image of the same mistake, and the worse one: dropping the id after a
+  // failed clear leaves pixels on screen that nothing will ever ask about again.
+  let fail = true;
+  const api = fakeApi({
+    'pane.graphics.info': INFO,
+    'pane.graphics.clear': () => {
+      if (!fail) return {};
+      fail = false;
+      throw new Error('once');
+    },
+  });
+  const g = new Graphics(api, 'w1:p1');
+  await g.probe();
+  g.sync([frame('office.strip', 's:a')]);
+  await settle();
+  g.sync([]);
+  await settle();
+  g.sync([]);
+  await settle();
+  assert.equal(api.sent('pane.graphics.clear').length, 2);
+
+  // And once it lands the office stops asking, because now it does know.
+  g.sync([]);
+  await settle();
+  assert.equal(api.sent('pane.graphics.clear').length, 2, 'a clear that worked is not repeated');
+});
+
 /* ------------------------------------------------------------------- giving up */
 
 test('a run of failures turns graphics off for the rest of the session', async () => {

@@ -46,6 +46,12 @@ const GIVE_UP_AFTER = 3;
 const VISIBLE_MS = 1500;
 const HIDDEN_MS = 250;
 
+// What `#drawn` holds for a layer the office has sent but can no longer vouch for.
+// A symbol rather than a string so it can never collide with a real key, which is
+// what makes the comparison at the top of sync() always want a redraw. See `#forget`
+// for why this exists at all, and why the alternative was a bug.
+const UNSURE = Symbol('drawn, placement unknown');
+
 // Rule 3 above says failures are counted rather than reported, which is right in a
 // running office and useless the moment you are trying to find out why nothing is on
 // the screen. So: set HERDR_OFFICE_GRAPHICS_LOG to a path and every decision this
@@ -77,8 +83,11 @@ function log(...parts) {
 export class Graphics {
   #api;
   #paneId;
-  // layer_id -> the key it was last drawn with. The key covers the placement as
-  // well as the picture, so the same chart moving one row down is a redraw.
+  // layer_id -> the key it was last drawn with, or UNSURE. Membership and value
+  // answer two different questions and must not be confused: being *in* this map
+  // means "there may be pixels of mine in that pane", and the value means "and this
+  // is what they look like". The key covers the placement as well as the picture, so
+  // the same chart moving one row down is a redraw.
   #drawn = new Map();
   #inflight = false;
   #failures = 0;
@@ -142,10 +151,10 @@ export class Graphics {
       };
       // Coming back into view is a full redraw. A pane that was off screen may
       // have had its images dropped while it was away, and the office cannot tell
-      // from here: the only safe assumption is that what it thinks it drew is gone.
+      // from here, so nothing it thinks it drew is trusted.
       if (was === false && this.caps.visible) {
-        log('probe: came back into view, forgetting what was drawn');
-        this.#drawn.clear();
+        log('probe: came back into view, no longer sure what is drawn');
+        for (const id of this.#drawn.keys()) this.#forget(id);
       }
       if (was !== this.caps.visible) log(`probe: visible=${this.caps.visible} cell=${cellW}x${cellH} layers=${this.caps.maxLayers}`);
       return this.caps;
@@ -197,6 +206,26 @@ export class Graphics {
     });
   }
 
+  // "I no longer know what that layer looks like", which is not the same as "that
+  // layer is gone", and the difference is a bug the office shipped. This used to
+  // delete the id, and deleting it is how a chart ends up stranded on the carpet:
+  // the clear job in sync() only fires for ids that are in this map, so an id
+  // dropped while its pixels were still on screen could never be cleared again.
+  // The two ways in were a failed `set`, which is usually a timeout and therefore a
+  // question with no answer rather than a refusal, and a pane coming back into view,
+  // where the images may or may not have survived being away. In both cases the
+  // pixels may well be up, and the placement is stale, which on a resize is a
+  // progress bar left at coordinates the layout has moved on from while the text
+  // version of the same bar draws in its new home. Hence the bar twice.
+  //
+  // So the id stays and only its key is thrown away. The layer remains clearable,
+  // and it is always re-sent because UNSURE can never match a real key. Only a
+  // successful clear removes an id, which also means a failed clear is retried on
+  // the next frame instead of being forgotten with its pixels still showing.
+  #forget(id) {
+    this.#drawn.set(id, UNSURE);
+  }
+
   async #run(jobs) {
     for (const job of jobs) {
       try {
@@ -235,9 +264,7 @@ export class Graphics {
       } catch (err) {
         log(`FAILED ${job.kind} ${job.id}: ${err?.message ?? err}`);
         this.#failures += 1;
-        // Forget what we thought was on screen: after a failure the office does
-        // not know, and assuming the worst means the next frame redraws.
-        this.#drawn.delete(job.id);
+        this.#forget(job.id);
         if (this.#failures >= GIVE_UP_AFTER) {
           log(`giving up after ${this.#failures} failures: graphics off for the rest of this run`);
           this.off = true;

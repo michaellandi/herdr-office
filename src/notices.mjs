@@ -147,14 +147,38 @@ function sameAsks(people) {
 // `statusMs` is a *lower* bound, so a desk that crosses fifteen minutes on a guess
 // has genuinely been idle at least that long. The guess can make this notice late.
 // It cannot make it wrong.
+// Grouped by checkout, which was not the first version and is the whole reason this
+// function is longer than the others. Uncommitted files are a fact about a directory,
+// not about a desk: `dirt` is keyed by cwd, so four desks parked in one repository all
+// report the same count. Reported one desk at a time that came out as four lines each
+// claiming ten uncommitted files, which reads as forty, and it was permanent, because
+// a floor where several agents live in one checkout is the ordinary case rather than
+// the exception. Four reports of one fact is exactly the noise this file is supposed
+// not to make.
+//
+// The group line drops the duration that the single line carries. The threshold is
+// already the claim that it has been a while, the names and the file count are the
+// parts you act on, and the real clock for each desk is on the card `m` walks you to.
 function stalls(people) {
-  return people
-    .filter((p) => p.status === 'idle' && (p.statusMs ?? 0) >= STALL_MS && (p.dirt?.files ?? 0) > 0)
-    .map((p) => ({
-      kind: 'stalled',
-      ids: [p.id],
-      text: `${p.name} stopped ${formatDuration(p.statusMs)} ago with ${p.dirt.files} file${p.dirt.files === 1 ? '' : 's'} uncommitted`,
-    }));
+  const stopped = people.filter((p) => p.status === 'idle' && (p.statusMs ?? 0) >= STALL_MS && (p.dirt?.files ?? 0) > 0);
+  const byCheckout = group(stopped, (p) => p.cwd);
+  const out = [];
+  const spoken = new Set();
+  for (const p of stopped) {
+    if (spoken.has(p.id)) continue;
+    // A desk the server gave no cwd for is its own crowd of one. It cannot have dirt in
+    // practice, since dirt is read per directory, but the grouping above drops falsy
+    // keys and a desk silently disappearing is worse than a redundant branch.
+    const crowd = (p.cwd && byCheckout.get(p.cwd)) || [p];
+    for (const q of crowd) spoken.add(q.id);
+    // Off the first desk rather than summed, because it is one directory's count and
+    // every desk in the crowd is reporting the same number.
+    const files = `${p.dirt.files} file${p.dirt.files === 1 ? '' : 's'} uncommitted`;
+    out.push(crowd.length > 1
+      ? { kind: 'stalled', ids: crowd.map((q) => q.id), text: `${listNames(crowd)} stopped in ${dirName(p.cwd)} with ${files}` }
+      : { kind: 'stalled', ids: [p.id], text: `${p.name} stopped ${formatDuration(p.statusMs)} ago with ${files}` });
+  }
+  return out;
 }
 
 // Everything worth saying about this floor, most important first.

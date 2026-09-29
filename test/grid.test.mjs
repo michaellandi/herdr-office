@@ -403,7 +403,11 @@ test('one desk means one desk, and it says which one', () => {
   // The cubicle is the grid with room for a single tile, so the thing worth checking
   // is that the paging note counts people rather than floors: "floor 3 of 7" with one
   // person on the screen reads as six colleagues who have gone missing.
-  const view = viewOf({ people, cols: 140, rows: 46, zoom: 'cubicle', selectedId: people[2].id });
+  // The manager is kept quiet for this one. Every desk in this roster shares a
+  // checkout, so the footer would truthfully name two of them, and the nameplate
+  // count below is a claim about the room rather than about the whole frame. What
+  // the footer does with a notice is test/notices.test.mjs's job.
+  const view = viewOf({ people, cols: 140, rows: 46, zoom: 'cubicle', selectedId: people[2].id, notices: [] });
   const text = renderFrame(view).lines.map(stripAnsi).join('\n');
   assert.match(text, /desk 3 of 7/);
   assert.ok(!text.includes('floor 3 of 7'), 'a floor with one desk on it is a desk');

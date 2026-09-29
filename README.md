@@ -84,6 +84,7 @@ would rather not.
 | `F` | shepherd mode: walk to hands as they go up |
 | `z` | zoom: floor plan, list view, one desk |
 | `b` | jump to the next raised hand |
+| `m` | walk to what the office manager has noticed |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
 | `esc` | close the panel |
@@ -136,6 +137,23 @@ And around the floor: a **whiteboard** with where the session's time actually we
 ([the punch clock](docs/design.md#what-the-day-actually-looked-like)), an **empty desk**
 you can hire into ([hiring](docs/design.md#hiring-somebody)), and a **window title**
 carrying the headline count ([on the window itself](docs/design.md#on-the-window-itself)).
+
+## What the office manager has noticed
+
+Every other thing the office draws is a fact about one desk. Some of the things worth
+knowing are about two desks at once, and until now nothing had anywhere to say them.
+They go on the footer, one at a time, behind a `!`, and `m` walks you to the desk each
+one is about ([the office manager](docs/design.md#the-office-manager)):
+
+| Notice | Why it is worth a line |
+|---|---|
+| `Ada and Bo are both in herdr-office` | two agents editing one checkout, which is the one notice here about damage rather than attention |
+| `Cass is 94% full and still working` | about to compact and carry on from a summary of what it was doing |
+| `Ada and Bo are stuck on the same thing` | two interruptions that are really one decision |
+| `Dev stopped 22m14s ago with 7 files uncommitted` | the failure mode a floor of agents has that a floor of people does not, because a person would have said so |
+
+It only ever reports. Nothing on that line can send a keystroke, start an agent or
+touch a repository, and the only key it adds moves your cursor.
 
 Three things are worth knowing up front, because they are the rules the whole thing
 is built around:

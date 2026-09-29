@@ -300,6 +300,97 @@ It also leaves you alone while a panel has the keyboard (assigning, hiring, a dr
 in the air, the filter field), and it respects a filter: it will not walk you to a
 desk the filter is hiding.
 
+## The office manager
+
+Everything else the office draws is a fact about one desk. The interesting things
+about a floor are mostly not: two agents in the same checkout, two hands up on the
+identical question, a context window about to be emptied mid-task. The office already
+knew every one of those and had never said any of them, and the reason was structural
+rather than an oversight. A fact about a pair of desks has no field on anybody's card,
+so it had nowhere to go.
+
+`src/notices.mjs` is where they go. It takes the roster the office has just built and
+returns sentences, ranked. The footer draws one, `m` walks you to a desk it names, and
+that is the whole feature.
+
+Four notices, and the order between them is an argument about what can still be saved:
+
+| Notice | The claim |
+|---|---|
+| two desks in one checkout, both moving | work that already exists can be destroyed. Also the cheapest to be sure of: the same cwd is the same checkout, so there is no inference in it |
+| a head over 90% and still working | reasoning that exists in exactly one place is about to be compacted away |
+| two raised hands asking the same thing | somebody is waiting, and one keystroke could unblock them twice over |
+| idle a quarter of an hour with uncommitted files | already happened, and it will keep |
+
+### It reports, and that is a design constraint rather than a first version
+
+The obvious next step from here is a coordinator that acts: notices a collision and
+moves somebody, notices a stall and prods it. That version is not this one, and the
+first one deliberately cannot become it by accident. `src/notices.mjs` has no socket,
+no clock, no writes and no state between calls, and the only key it adds moves a
+highlight. A thing that cannot do anything is much easier to believe, and the argument
+for shipping a manager at all is that this one is provably incapable of managing.
+
+The same constraint shapes the wording. A notice states a fact and does not give an
+instruction: "Ada and Bo are both in herdr-office" is the whole of what the office
+knows, where "Ada and Bo are about to clobber each other" is a guess about two agents'
+intentions, and two agents deliberately sharing a checkout is a thing people do on
+purpose. The reader knows which it is. The office does not, and a warning that is wrong
+a third of the time gets ignored the other two thirds.
+
+### The footer, rather than a row of its own
+
+The notice shares the message slot, and loses to anything already in it. A message is
+the answer to a key you pressed a second ago and it lasts four seconds; a notice was
+true before you touched anything and will still be true afterwards. So a keystroke's
+receipt is never buried under a standing fact, and the fact comes back on its own once
+the receipt has been read.
+
+A row of its own was the first idea and it was worse in four places at once: the frame
+budgets rows through `CHROME_ROWS`, the graphics strip is pinned at `y:1`, `tile()` is
+the most grid-sensitive function in the renderer, and the footer is the one row where a
+single extra cell wraps the whole screen. The message slot already had the right
+properties: right-aligned, painted amber, room reserved before the key hints fill the
+row, and it already carried the office's own words rather than anybody's screen text.
+
+### Three things that had to be got right to keep it quiet
+
+A notice that fires when it should not is worse than a missing feature, because the
+entire value of the line is that a sentence on it means something is true.
+
+- **A desk with no working directory is not in a collision with every other one.** A
+  server that reports no cwd hands every desk the empty string, and grouping on that
+  announces a twelve-way collision in a directory it cannot name. Which is what most
+  of a floor looks like when `worktree.list` is unavailable.
+- **An empty ask is "not read yet", not "asking nothing".** Grouping on it would pair
+  every freshly blocked desk with every other one. Two asks count as the same question
+  when they differ only in case, spacing or a trailing full stop, because they come off
+  two different screens and a prompt rendered two cells narrower is the same prompt.
+- **Neither half of a stall means anything alone.** An idle agent has usually just
+  finished, and uncommitted files are what a working agent looks like from outside.
+
+One rule is relaxed on purpose. A `statusMs` the office is only guessing at is barred
+from the escalation ladder but allowed here, because an assumed duration is a *lower*
+bound: a desk that crosses fifteen minutes on a guess has genuinely been idle at least
+that long. The guess can make this notice late. It cannot make it wrong.
+
+A working directory is an absolute path under somebody's home, and this pane gets
+screen-shared, so only the last segment is ever drawn. It is also the one string in a
+notice that arrives unsanitized, since the roster only cleans titles, so it is cleaned
+and truncated here rather than trusted.
+
+### Why `m` goes to the notice before it goes past it
+
+The key is a cursor into a list that is rebuilt from scratch every frame, and there is
+nothing stable in it to hold on to: two desks sharing a checkout stop sharing it the
+moment one of them finishes, and that notice does not become a different notice, it
+stops existing. So the office keeps an index and the renderer clamps it.
+
+Pressing `m` takes you to the notice already on the footer, and only advances once you
+are standing there. Advancing first was the obvious implementation and it means the
+notice on screen when you reached for the key is the one notice the key never shows
+you.
+
 ## How close you want to stand
 
 `z` cycles three zoom levels, and the footer names the next one so a single key

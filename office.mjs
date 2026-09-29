@@ -26,6 +26,7 @@ import { readProcessTable, paneProcesses } from './src/ps.mjs';
 import { WATCH_PATTERN, eventFromMatch, newsFromEvent } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
+import { notices } from './src/notices.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
@@ -194,6 +195,13 @@ let filtering = false;
 // being taken to somebody is the reason you pressed the key.
 let following = FOLLOW;
 let handsSeen = null;
+// Which of the manager's notices is on the footer (see src/notices.mjs). An index
+// rather than an id, because the list is recomputed from scratch every frame and
+// there is nothing stable in it to hold on to: two desks sharing a checkout stop
+// sharing it the moment one of them finishes, and that notice does not become a
+// different notice, it stops existing. So this is a cursor into a list, clamped by
+// the renderer, and `m` is the only thing that moves it.
+let noticeAt = 0;
 // The zoom level: 'auto' is the floor plan deciding for itself when it has stopped
 // being readable, which is what the office has always done.
 let zoom = ZOOMS.includes(ZOOM_ARG) ? ZOOM_ARG : 'auto';
@@ -342,6 +350,12 @@ function view() {
     shift: detail ? clocks.desk(detail.id) : null,
     stats: clocks.office(),
     counts: countOf(people),
+    // What the manager has noticed, off the filtered floor rather than the whole
+    // roster, for the same reason the counts are: with a filter on, everything below
+    // the header is about the desks you asked to see. It also keeps `m` honest, since
+    // every notice is then about a desk the key can actually walk you to.
+    notices: notices({ people }),
+    noticeAt,
     total: roster.people.length,
     filter,
     filtering,
@@ -969,6 +983,34 @@ function nextRaisedHand() {
   }
   const idx = raised.findIndex((p) => p.id === selectedId);
   selectedId = raised[(idx + 1) % raised.length].id;
+}
+
+// Walk to whatever the manager has noticed, and put the next notice on the footer.
+//
+// Two things in one key, which is unusual for this office and deliberate here: a
+// notice names desks, and a sentence about two desks you cannot see is only half of a
+// report. So reading the next one and standing at it are the same gesture, and the
+// footer stays in step with where you are.
+//
+// Recomputed here rather than read off the last frame, because a notice can have
+// stopped being true since it was drawn and walking you to a collision that has
+// already resolved itself is worse than saying there is nothing to see.
+function nextNotice() {
+  const list = notices({ people: floorPeople() });
+  if (!list.length) {
+    note(terms(filter).length ? 'nothing worth mentioning about those desks' : 'nothing worth mentioning');
+    noticeAt = 0;
+    return;
+  }
+  const floor = floorPeople();
+  const at = Math.min(Math.max(0, noticeAt), list.length - 1);
+  // Press it once and it takes you to the notice already on the footer. Press it again,
+  // now that you are standing there, and it moves on to the next one. Advancing first
+  // would mean the notice on screen when you reached for the key is the one notice the
+  // key never shows you.
+  noticeAt = list[at].ids.includes(selectedId) ? (at + 1) % list.length : at;
+  const where = list[noticeAt].ids.find((id) => floor.some((p) => p.id === id));
+  if (where) selectedId = where;
 }
 
 // Switching shepherd mode on takes effect now rather than on the next poll, because
@@ -1657,6 +1699,7 @@ function onInput(chunk) {
   else if (str === 's') openCompose('reply');
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
+  else if (str === 'm') nextNotice();
   else if (str === 'F') toggleFollow();
   else if (str === 'z') {
     zoom = nextZoom(zoom);

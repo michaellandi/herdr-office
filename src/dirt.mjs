@@ -35,7 +35,12 @@ import { execFile } from 'node:child_process';
 // Long enough for a big repository on a cold cache, short enough that a wall display
 // never visibly stalls. A checkout that cannot answer in this is one the office says
 // nothing about, which is the same outcome as a directory that is not a repository.
-const GIT_TIMEOUT_MS = 1500;
+//
+// It is a guess about a machine with a spare core, and it is overridable because the
+// guess is sometimes wrong in both directions: a network filesystem wants longer, and a
+// machine running a whole test suite in parallel cannot reliably spawn a process inside
+// it at all, which is what made the end-to-end dirt test flake about once in five.
+const GIT_TIMEOUT_MS = Math.max(1, Number(process.env.HERDR_OFFICE_GIT_TIMEOUT_MS) || 1500);
 
 // A repository with more changes than this fills the buffer instead of the answer, and
 // that is fine: an overrun still yields the partial output, which still counts past

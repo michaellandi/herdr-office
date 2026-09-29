@@ -30,7 +30,11 @@
 //
 // With no herdr on PATH there is no schema to check against and every assertion here is
 // skipped. That is the honest outcome and not a pass: the office is a herdr plugin, and
-// a machine without herdr cannot say whether it speaks the protocol correctly.
+// a machine without herdr cannot say whether it speaks the protocol correctly. Where
+// herdr is supposed to be there, `HERDR_REQUIRED=1` says so and a missing one fails
+// instead of skipping, because a suite that asks nothing must not report success. CI
+// sets it, against both the oldest herdr the README promises and the current stable
+// one, since a request can be wrong by being too new as easily as by being stale.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -56,6 +60,16 @@ function liveSchema() {
 
 const SCHEMA = liveSchema();
 const SKIP = SCHEMA ? false : 'no herdr on PATH: nothing to check the protocol against';
+
+// A skip is the right answer on a machine with no herdr and the wrong answer as the
+// whole of CI, where it is a suite that reports success for having asked nothing. The
+// gap this file exists to close would fit through it: every assertion below skipping
+// looks identical to every assertion below passing unless somebody reads the log. So
+// the one place that is supposed to have herdr says so, and gets a failure instead.
+test('there is a herdr here to check the protocol against', () => {
+  if (process.env.HERDR_REQUIRED !== '1') return;
+  assert.ok(SCHEMA, 'HERDR_REQUIRED is set, so a missing herdr is a broken job and not a skip');
+});
 
 // `$ref` is how the schema says everything interesting, so a checker that does not
 // follow them passes everything. Mine did, at first: `params` is a bare `$ref` on

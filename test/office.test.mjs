@@ -115,6 +115,14 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
     LINES: String(rows),
   });
 
+  // The fake git below is a Node script, so answering costs a whole interpreter start,
+  // and the office gives a checkout 1.5 seconds before it writes it off. That is the
+  // right budget for a wall display and the wrong one for a machine already running
+  // thirteen test files, where the spawn alone can miss it: the count then never reaches
+  // the card and the failure reads as a broken feature rather than a busy laptop. The
+  // production default stays where it is and this run is simply allowed to be slow.
+  env.HERDR_OFFICE_GIT_TIMEOUT_MS = '30000';
+
   // A git that is not git: it records how it was called and prints whatever porcelain
   // the test asked for. So the assertion is about a real subprocess with real arguments,
   // and no repository on this machine is read to make it.

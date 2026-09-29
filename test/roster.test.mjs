@@ -90,6 +90,58 @@ test('desks follow the tab bar, not the numbers the tabs answer to', () => {
   assert.deepEqual(seatedIds(roster), ['w1:p3', 'w1:p1', 'w1:p2']);
 });
 
+// The two properties below are the invariant the tab-order bug broke, written as
+// relations between two runs rather than as an expected order. An expected order is a
+// second copy of the sort, and it agreed with the sort for as long as the bug was
+// there. What did not agree was the room: renumbering the tabs moved desks that had
+// not moved, and moving a tab left them where they were. So these say what has to stay
+// true of any seating rather than what this one produces, which is what makes them
+// worth more than the case they were written for.
+const seatFloor = (tabOrder, numbers) => {
+  const roster = new Roster();
+  roster.setWorkspaces([{ workspace_id: 'w1', label: 'main', number: 1 }]);
+  roster.setTabs(tabOrder.map((t) => ({ tab_id: `w1:t${t}`, label: `tab ${t}`, number: numbers[t] })));
+  roster.setLayouts(tabOrder.map((t) => ({
+    workspace_id: 'w1',
+    tab_id: `w1:t${t}`,
+    panes: [{ pane_id: `w1:p${t}`, rect: { x: 0, y: 0, width: 80, height: 40 } }],
+  })));
+  roster.update(tabOrder.map((t) => agent(`w1:p${t}`)));
+  return seatedIds(roster);
+};
+
+test('what a tab is numbered cannot move anybody', () => {
+  // Nobody moved desks, so nobody may move on the floor. Every one of these numberings
+  // is one a real session can hand us: gaps from closed tabs, an order that disagrees
+  // with the bar, and the one that happens to agree, which is the reason the bug hid.
+  const bar = ['a', 'b', 'c', 'd'];
+  const seated = seatFloor(bar, { a: 1, b: 2, c: 3, d: 4 });
+  for (const numbers of [
+    { a: 4, b: 3, c: 2, d: 1 },
+    { a: 14, b: 7, c: 1, d: 4 },
+    { a: 9, b: 9, c: 9, d: 9 },
+    { a: 0, b: 100, c: 2, d: 3 },
+  ]) {
+    assert.deepEqual(seatFloor(bar, numbers), seated, `renumbering moved a desk: ${JSON.stringify(numbers)}`);
+  }
+});
+
+test('moving a tab moves its desk, and only by as much as the tab moved', () => {
+  // The other half, and the half the bug actually failed: a floor that ignores the
+  // numbers could equally be ignoring the bar. Each permutation of the bar has to come
+  // back as the same permutation of the floor, with the numbers held fixed and
+  // deliberately disagreeing so they cannot be what produces the answer.
+  const numbers = { a: 14, b: 7, c: 1, d: 4 };
+  for (const bar of [
+    ['a', 'b', 'c', 'd'],
+    ['d', 'c', 'b', 'a'],
+    ['c', 'a', 'd', 'b'],
+    ['b', 'd', 'a', 'c'],
+  ]) {
+    assert.deepEqual(seatFloor(bar, numbers), bar.map((t) => `w1:p${t}`), `the floor did not follow the bar: ${bar}`);
+  }
+});
+
 test('a server that lists no tabs falls back to the numbers rather than to nothing', () => {
   // An index only means anything relative to the list it came from, so an empty
   // list is not an order: it is no answer. Treating it as one would flatten every

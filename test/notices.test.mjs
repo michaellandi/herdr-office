@@ -244,6 +244,56 @@ test('a desk that stopped a moment ago has not stalled', () => {
   assert.deepEqual(list, []);
 });
 
+test('desks parked in one checkout are one stall rather than one each', () => {
+  // The bug this is here to prevent, found on a real floor: uncommitted files are a fact
+  // about a directory and `dirt` is keyed by cwd, so four desks in one repository all
+  // report the same ten files. One notice each read as four separate piles of ten, and
+  // it was permanent, because several agents living in one checkout is the ordinary case.
+  const parked = (name) => desk(name, { status: 'idle', statusMs: STALL_MS * 2, cwd: '/w/brain', dirt: { files: 10, conflicts: 0 } });
+  const list = notices({ people: [parked('Cass'), parked('Dev'), parked('Ede'), parked('Fen')] });
+  assert.deepEqual(kinds(list), ['stalled']);
+  assert.equal(list[0].text, 'Cass, Dev and 2 more stopped in brain with 10 files uncommitted');
+  // And it still carries every desk, so `m` can walk you to all four.
+  assert.deepEqual(list[0].ids, ['w1:Cass', 'w1:Dev', 'w1:Ede', 'w1:Fen']);
+  // The count is the directory's, stated once, not four of them added up.
+  assert.doesNotMatch(list[0].text, /40|30|20/);
+});
+
+test('two checkouts that have both gone quiet are two stalls', () => {
+  const parked = (name, cwd) => desk(name, { status: 'idle', statusMs: STALL_MS * 2, cwd, dirt: { files: 3, conflicts: 0 } });
+  const list = notices({
+    people: [parked('Cass', '/w/one'), parked('Dev', '/w/one'), parked('Ede', '/w/two'), parked('Fen', '/w/two')],
+  });
+  assert.deepEqual(texts(list), [
+    'Cass and Dev stopped in one with 3 files uncommitted',
+    'Ede and Fen stopped in two with 3 files uncommitted',
+  ]);
+});
+
+test('a desk stalled on its own still says how long it has been', () => {
+  // The single case keeps the duration, because with one desk that is the interesting
+  // part. A crowd drops it: the threshold already says it has been a while, and the
+  // per-desk clock is on the card `m` takes you to.
+  const list = notices({
+    people: [
+      desk('Cass', { status: 'idle', statusMs: STALL_MS * 2, cwd: '/w/one', dirt: { files: 2, conflicts: 0 } }),
+      desk('Dev', { status: 'working', cwd: '/w/one' }),
+    ],
+  });
+  assert.deepEqual(kinds(list), ['stalled']);
+  assert.match(list[0].text, /^Cass stopped 30m\d\ds ago with 2 files uncommitted$/);
+});
+
+test('a desk the server gave no directory for is not dropped on the floor', () => {
+  // The grouping ignores falsy keys, and a desk vanishing out of a notice is worse than
+  // a redundant branch. Not reachable in practice, since dirt is read per directory.
+  const list = notices({
+    people: [desk('Cass', { status: 'idle', statusMs: STALL_MS * 2, cwd: '', dirt: { files: 4, conflicts: 0 } })],
+  });
+  assert.deepEqual(kinds(list), ['stalled']);
+  assert.match(list[0].text, /^Cass stopped .* with 4 files uncommitted$/);
+});
+
 test('a duration the office is only guessing at can make a stall late, never wrong', () => {
   // Unlike the escalation ladder, an assumed clock is allowed here. `statusMs` on a
   // first sighting is a lower bound, so crossing the threshold on a guess means the

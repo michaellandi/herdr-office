@@ -150,7 +150,7 @@ one is about ([the office manager](docs/design.md#the-office-manager)):
 | `Ada and Bo are both in herdr-office` | two agents editing one checkout, which is the one notice here about damage rather than attention |
 | `Cass is 94% full and still working` | about to compact and carry on from a summary of what it was doing |
 | `Ada and Bo are stuck on the same thing` | two interruptions that are really one decision |
-| `Dev stopped 22m14s ago with 7 files uncommitted` | the failure mode a floor of agents has that a floor of people does not, because a person would have said so |
+| `Dev stopped 22m14s ago with 7 files uncommitted` | the failure mode a floor of agents has that a floor of people does not, because a person would have said so. Several desks parked in one checkout are one line, not one each |
 
 It only ever reports. Nothing on that line can send a keystroke, start an agent or
 touch a repository, and the only key it adds moves your cursor.

@@ -368,6 +368,14 @@ entire value of the line is that a sentence on it means something is true.
   two different screens and a prompt rendered two cells narrower is the same prompt.
 - **Neither half of a stall means anything alone.** An idle agent has usually just
   finished, and uncommitted files are what a working agent looks like from outside.
+- **Several desks parked in one checkout are one stall, not one each.** Found on a real
+  floor rather than reasoned about: six agents living in one repository, four of them
+  idle, ten uncommitted files. Reported per desk that was four lines each claiming ten
+  uncommitted files, which reads as forty, and it was permanent, because `dirt` is keyed
+  by directory and several agents sharing a checkout is the ordinary case rather than the
+  exception. Four reports of one fact is the noise this whole section is about. The group
+  line drops the duration the single line carries, since the threshold already claims it
+  has been a while and each desk's real clock is on the card `m` walks you to.
 
 One rule is relaxed on purpose. A `statusMs` the office is only guessing at is barred
 from the escalation ladder but allowed here, because an assumed duration is a *lower*

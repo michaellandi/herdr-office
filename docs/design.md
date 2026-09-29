@@ -563,10 +563,51 @@ when your day started and the buckets are only ever watched time. A hand that wa
 already up when you reopened is not counted twice either, since it is the same prompt
 still waiting and it was counted before the office shut.
 
-Desk cards do not survive, only the office total. A pane id means nothing after a
-restart, so a desk's time is folded into the office numbers and its card starts again:
-`on shift 2h` for a desk this office met ninety seconds ago would be the office
-claiming to have watched something it did not.
+Punch clock desk cards do not survive, only the office total. A pane id means nothing
+after a restart, so a desk's watched time is folded into the office numbers and its card
+starts again: `on shift 2h` for a desk this office met ninety seconds ago would be the
+office claiming to have watched something it did not.
+
+### The day book
+
+One thing about a desk does survive, and it is the number most likely to make somebody
+get up: how long it has been in the state it is in. Reopening the office used to draw an
+agent that had been stuck since breakfast as stuck for one second, which is wrong in the
+direction that matters, because a one-second wait is the one you leave alone.
+
+So each desk's clock goes into the same file, and what makes keeping it honest possible
+is `state_change_seq`. Herdr moves that number every time it changes a desk's state, so
+the number written down before the office shut is proof of a negative: nothing happened
+to this desk while nobody was looking, and the clock saved beside it is still running on
+the very interval it was running on. A different number is proof of a transition the
+office missed. A missing number is proof of nothing.
+
+Only the first of those three is believed. The other two get exactly what a desk the
+office has never met gets, which is a clock starting now and a `~` admitting it, and
+they do not count as a newly raised hand either, since nobody can say whether that hand
+went up once or four times while the pane was shut. A clock that was already a guess
+stays a guess: keeping a duration makes it survive, not makes it true. And a line with no
+sequence number is never written down in the first place, because it could never be
+confirmed, so keeping it would buy precisely what leaving it out buys, one poll later.
+
+The punch clock's clamp still applies, so the two numbers on one card can now disagree on
+purpose. A desk can say `NEEDS YOU for 2h` while its clock line says twenty minutes of
+waiting: the first is how long the state has been held, which herdr has just proved, and
+the second is how much of that the office was open for. They answer different questions,
+and each gets the answer that inflates neither.
+
+On the first poll after reopening, the office says what it missed, on the message line:
+
+```
+shut for 41m: 2 of 4 moved, 1 gone
+```
+
+The denominator is the desks the book had that are still on the floor rather than
+everything it had, because "2 of 5 moved" about a book with two desks left in it invites
+the reading that three of them are fine. `nothing moved` is the other half of the same
+sentence rather than the absence of news, since it says every duration on the floor is
+real. The point of the line is less the gossip than which clocks can be trusted, because
+a `~` on a desk that was plainly here this morning is otherwise unexplained.
 
 Run outside herdr, with no state directory, nothing is written and the clock simply
 starts when you do. That is also true of every way the file can go wrong. An

@@ -4,7 +4,7 @@
 // shapes the agents named in docs/design.md actually draw.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';
+import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection, lastSaid } from '../src/summary.mjs';
 
 const screen = (s) => cleanOutput(s.trimEnd());
 
@@ -214,6 +214,53 @@ test('the said lines are labelled once and line up under it', () => {
     out.map((l) => l.replace('last said:', '').trim()),
     said.slice(-3),
   );
+});
+
+test('lastSaid is the one line of it that fits in somebody else\'s sentence', () => {
+  // The same reading the card shows, cut to one line, because a stall notice has room
+  // for a clause and not for a paragraph. The last of the three rather than the first:
+  // the tail of the output is where an agent says why it gave up.
+  const said = [
+    'I have finished refactoring the cache warming path and split it in two.',
+    'Two of the integration tests were relying on the old timing, so I updated them.',
+    'I cannot apply the patch because the file has changed underneath me.',
+  ];
+  assert.ok(lastSaid(said).startsWith('I cannot apply the patch'));
+  // And it is the same line the card would put last, not a separately chosen one. A
+  // notice that quoted a different line from the card under it would read as the office
+  // disagreeing with itself about what it had just read.
+  const card = summarize({ status: 'idle' }, said);
+  assert.ok(card.at(-1).trim().startsWith(lastSaid(said).replace(/…$/, '').trim().slice(0, 20)));
+});
+
+test('a quote off a screen cannot be made any length the screen likes', () => {
+  // This string arrives from a stranger\'s terminal and ends up in a line the office
+  // otherwise writes itself, so the cap is here rather than at the edge. Without it a
+  // notice is whatever shape an agent felt like printing.
+  const long = `the build failed and here is why ${'x'.repeat(400)}`;
+  assert.equal(lastSaid([long]).length, 44);
+  assert.equal(lastSaid([long], 12).length, 12);
+  assert.ok(lastSaid([long]).endsWith('…'), 'cut without saying it was cut');
+});
+
+test('a screen with nothing quotable on it says nothing rather than something', () => {
+  // An empty answer is an answer, and the surfaces above treat it as one: no quote means
+  // a stall notice states the fact and stops, rather than printing `said ""`.
+  assert.equal(lastSaid([]), '');
+  assert.equal(lastSaid(null), '');
+  assert.equal(lastSaid(undefined), '');
+  assert.equal(lastSaid(['ok', 'y/n', '$ ls']), '', 'chrome and shell noise is not a quote');
+});
+
+test('a quote is stripped of everything an agent can draw', () => {
+  // Straight into a status line that shares a row with key hints, so an escape sequence
+  // or a stray control character in it would move the cursor rather than say anything.
+  // sanitize() is applied on the way out even though cleanOutput() already ran, because
+  // this function is called on whatever the caller has, not only on cleaned screens.
+  const dirty = `\u001b[31mthe tests failed\u001b[0m and \u0007the fixture \u001b[2Jchanged`;
+  const quote = lastSaid([dirty], 200);
+  assert.doesNotMatch(quote, /\u001b|\u0007/);
+  assert.match(quote, /the tests failed/);
 });
 
 test('summarize says something even about an empty screen', () => {

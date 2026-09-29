@@ -4,7 +4,7 @@
 // module does not assert for itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { POSES, SCREENS, PROPS, VACANT_CHAIR, VACANT_SCREEN, runningScreen, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
+import { POSES, MANAGER_POSES, SCREENS, PROPS, VACANT_CHAIR, VACANT_SCREEN, runningScreen, pose, screen, managerPose, POSE_W, SCREEN_W, ART_ROWS, HAIR_FROM, HAIR_TO } from '../src/sprites.mjs';
 import { P } from '../src/theme.mjs';
 import { width } from '../src/text.mjs';
 
@@ -56,6 +56,51 @@ test('the empty chair fits the same footprint as a person', () => {
   VACANT_SCREEN.forEach((row, i) => assert.equal(width(row), SCREEN_W, `the vacant screen row ${i} is ${width(row)} cells`));
 });
 
+test('the manager fits the same footprint as a person', () => {
+  // It lives outside POSES for the reason the empty chair does: it is not an agent
+  // status and must never be reachable by a lookup on one. Which means every check
+  // written over POSES misses it, and this is the one that catches that.
+  for (const [name, p] of Object.entries(MANAGER_POSES)) {
+    p.frames.forEach((rows, i) => {
+      assert.equal(rows.length, ART_ROWS, `manager pose ${name}[${i}] has ${rows.length} rows`);
+      rows.forEach((row, j) => {
+        assert.equal(width(row), POSE_W, `manager pose ${name}[${i}] row ${j} is ${width(row)} cells`);
+      });
+      const hair = [...rows[0]].slice(HAIR_FROM, HAIR_TO).join('');
+      assert.ok(hair.trim().length > 0, `manager pose ${name}[${i}] has no hair in the hair columns`);
+    });
+  }
+  // And the clipboard is in both states, because it is the prop that says which desk
+  // this is: a figure at a keyboard with no clipboard is just another agent.
+  for (const [name, p] of Object.entries(MANAGER_POSES)) {
+    for (const rows of p.frames) assert.ok(rows[2].includes('┌┐'), `manager pose ${name} has lost its clipboard`);
+  }
+});
+
+test('a name or a frame the art does not have still draws something', () => {
+  // Every lookup in this module falls back rather than throwing, because all three are
+  // called from inside the repaint: a status herdr has not taught the office about, or
+  // a frame counter that is not a number, has to cost a wrong-looking sprite rather
+  // than the whole office. The negative frame is the one that was actually broken:
+  // `frames[frame % n]` indexes past the start of the array and hands back undefined.
+  const names = ['watching', 'news', 'blocked', 'nonsense', '', null, undefined];
+  const frames = [0, 1, 2, 3, 99, -1, -7, NaN, null, undefined, 1.5];
+  for (const name of names) {
+    for (const frame of frames) {
+      const at = `${name} f${frame}`;
+      const m = managerPose(name, frame);
+      assert.equal(m.rows.length, ART_ROWS, `manager ${at} gave ${m.rows.length} rows`);
+      for (const row of m.rows) assert.equal(width(row), POSE_W, `manager ${at}: "${row}" is ${width(row)} cells`);
+      const p = pose(name, frame);
+      assert.equal(p.rows.length, ART_ROWS, `pose ${at} gave ${p.rows.length} rows`);
+      for (const row of p.rows) assert.equal(width(row), POSE_W, `pose ${at}: "${row}" is ${width(row)} cells`);
+      const rows = screen(name, frame);
+      assert.ok(Array.isArray(rows), `screen ${at} gave ${rows}`);
+      for (const row of rows) assert.equal(width(row), SCREEN_W, `screen ${at}: "${row}" is ${width(row)} cells`);
+    }
+  }
+});
+
 test('every prop is a rectangle of single-cell glyphs', () => {
   // propRow() maps columns straight onto array indices, so a two-cell glyph in a
   // plant would shift every prop to its right by one and skew the whole band.
@@ -83,6 +128,7 @@ test('nothing in the art is an ambiguous-width glyph', () => {
   // block elements are safe; anything past U+2600 is not.
   const art = [
     ...Object.values(POSES).flatMap((p) => p.frames.flat()),
+    ...Object.values(MANAGER_POSES).flatMap((p) => p.frames.flat()),
     ...Object.values(SCREENS).flat(2),
     ...Object.values(PROPS).flatMap((p) => p.rows),
     ...VACANT_CHAIR,

@@ -53,7 +53,20 @@ const DIR_MAX = 24;
 // directory with an ambiguous-width glyph in its name would be a cell the grid did
 // not budget for, in a string the footer is about to measure. Cleaned here rather
 // than trusted, for the same reason every other screen-derived string is.
-const dirName = (cwd) => truncate(sanitize(String(cwd || '').split('/').pop() || ''), DIR_MAX);
+// Exported because src/briefing.mjs says where a desk is too, and two modules with two
+// ideas of how much of a path may be drawn is one idea too many: this is rule 2 of this
+// file and it should have exactly one implementation.
+export const dirName = (cwd) => truncate(sanitize(String(cwd || '').split('/').pop() || ''), DIR_MAX);
+
+// The longest a quote off somebody's screen may be. Capped here rather than at the edge
+// for the same reason a directory name is: this string arrives from a stranger's terminal
+// and nothing downstream should have to know that.
+//
+// 36 rather than something rounder. The surfaces that print a reason only print it when
+// the whole of it fits, so the cap decides how wide a pane has to be before the reason is
+// ever seen at all: at 44 a stall line plus `said "..."` came to 106 cells and a 110
+// column pane, which is the ordinary size, showed the reason nowhere but the card.
+const SAID_MAX = 36;
 
 // Two asks are the same question when they differ only in case, spacing or a
 // trailing full stop. They come off two different screens, and an approval prompt
@@ -74,7 +87,10 @@ function group(list, keyOf) {
 // Names, as a person would say them, and never more than three of them: a notice
 // that lists eleven names is a notice nobody finishes reading, and the count is the
 // part that carries the alarm anyway.
-function listNames(people) {
+// Exported for the same reason `dirName` is: the briefing names the rest of a crowd when
+// it tells one desk who it is sharing a checkout with, and "Ada, Bo and 2 more" is a
+// decision about how the office talks rather than about how a panel is laid out.
+export function listNames(people) {
   const names = people.map((p) => p.name || p.id);
   if (names.length <= 1) return names[0] || '';
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
@@ -159,6 +175,31 @@ function sameAsks(people) {
 // The group line drops the duration that the single line carries. The threshold is
 // already the claim that it has been a while, the names and the file count are the
 // parts you act on, and the real clock for each desk is on the card `m` walks you to.
+// Why a desk stopped, when the office can say without guessing.
+//
+// Two answers, in order of how much the office owns them. A conflicted tree is the
+// office's own fact, read out of git by the same pass that counted the files, and it is
+// the single most common reason an agent gives up mid-task. Failing that, the last thing
+// the agent was seen saying, quoted rather than paraphrased.
+//
+// Quoting screen text in a notice is a deliberate exception to the rule that keeps it out
+// of the same-ask line. There, the question is already drawn in full in both bubbles, so
+// repeating it spends the one row on nothing. Here there is no bubble at all: an idle
+// desk's monitor says ALL DONE, which is the office agreeing it has stopped and saying
+// nothing whatever about why. The sentence is the only place the answer can go.
+//
+// Attributed, and never rewritten into a cause. `said "3 tests failed"` is a fact about
+// what is on a screen. "it stopped because the tests failed" is a guess about an agent's
+// reasoning, and rule 1 of this file is that the office does not make those.
+function whyStopped(p) {
+  if ((p.dirt?.conflicts ?? 0) > 0) {
+    const n = p.dirt.conflicts;
+    return `${n} of them conflicted`;
+  }
+  const quote = truncate(sanitize(String(p.said || '')), SAID_MAX);
+  return quote ? `said "${quote}"` : '';
+}
+
 function stalls(people) {
   const stopped = people.filter((p) => p.status === 'idle' && (p.statusMs ?? 0) >= STALL_MS && (p.dirt?.files ?? 0) > 0);
   const byCheckout = group(stopped, (p) => p.cwd);
@@ -174,9 +215,20 @@ function stalls(people) {
     // Off the first desk rather than summed, because it is one directory's count and
     // every desk in the crowd is reporting the same number.
     const files = `${p.dirt.files} file${p.dirt.files === 1 ? '' : 's'} uncommitted`;
+    // The reason rides alongside the sentence rather than inside it. The line is already
+    // near the width of the manager's status bar, and a reason appended to the end is the
+    // first thing truncated away, which would mean the new information is exactly the
+    // information nobody sees. Each surface spends its own room on it: the card has a
+    // whole pane width and prints it under the notice, the footer appends it when it
+    // fits, and the desk's 27 cells keep the fact and drop the reason.
+    //
+    // Off the first desk of a crowd, like the file count, because they are all in one
+    // checkout: the conflicts are the directory's. The quote is not, so a crowd gets one
+    // only when the office has nothing better, and then it is named.
+    const why = whyStopped(p);
     out.push(crowd.length > 1
-      ? { kind: 'stalled', ids: crowd.map((q) => q.id), text: `${listNames(crowd)} stopped in ${dirName(p.cwd)} with ${files}` }
-      : { kind: 'stalled', ids: [p.id], text: `${p.name} stopped ${formatDuration(p.statusMs)} ago with ${files}` });
+      ? { kind: 'stalled', ids: crowd.map((q) => q.id), text: `${listNames(crowd)} stopped in ${dirName(p.cwd)} with ${files}`, why: why && why.startsWith('said') ? `${p.name} ${why}` : why }
+      : { kind: 'stalled', ids: [p.id], text: `${p.name} stopped ${formatDuration(p.statusMs)} ago with ${files}`, why });
   }
   return out;
 }

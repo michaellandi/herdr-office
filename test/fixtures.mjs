@@ -372,7 +372,20 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'log parser', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0 }) {
+// Finding a person's row in the compact list.
+//
+// Not `lines.find((l) => l.includes(name))`, which is what this was and what broke: the
+// manager's row carries a sentence naming desks, so a search for "Ada" finds the manager
+// saying Ada and Bo share a checkout before it finds Ada's own row. The chip is the tell,
+// because it is the one thing a person's row can never say: the five agent statuses are
+// WORKING, NEEDS YOU, IDLE, DONE and UNSURE.
+// The manager's chip counts desks, not notices, so `4 DESKS` is what marks its row. The
+// old `\d+ THINGS?` is kept because it is a cheap way for this helper to survive the chip
+// being argued about again, and nothing else in the office draws either phrase in capitals.
+export const isManagerRow = (line) => /WATCHING|\d+ (?:DESKS?|THINGS?)\b/.test(line);
+export const personRow = (lines, name) => lines.find((l) => l.includes(name) && !isManagerRow(l)) || '';
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0, board = false }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -410,5 +423,8 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // the point: the footer has to hold a real one at every size.
     notices: notices || noticesOf({ people }),
     noticeAt,
+    // Whether the manager's card is open. False by default, which is every frame drawn
+    // before this existed.
+    board,
   };
 }

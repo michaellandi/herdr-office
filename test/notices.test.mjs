@@ -304,6 +304,86 @@ test('a duration the office is only guessing at can make a stall late, never wro
   assert.deepEqual(kinds(list), ['stalled']);
 });
 
+/* ------------------------------------------------------------- why it stopped */
+
+// The thing the line was missing. "Dev stopped 16m ago with 7 files uncommitted" says a
+// desk has a problem and nothing about what it is, which meant the only use for the
+// notice was to go and read the pane, which is what you were doing before the office had
+// a manager at all.
+//
+// The `why` rides alongside the sentence rather than inside it, and every test here is
+// about that being a separate, droppable field: the desk's 27 cells keep the fact and
+// lose the reason, and neither surface may be given a half-quote to print.
+
+const stalled = (name, extra = {}) => desk(name, { status: 'idle', statusMs: STALL_MS * 2, dirt: { files: 7, conflicts: 0 }, ...extra });
+
+test('a stall says why, when the office can say without guessing', () => {
+  const list = notices({ people: [stalled('Dev', { said: 'I cannot apply the patch, the file moved' })] });
+  assert.equal(list[0].why, 'said "I cannot apply the patch, the file …"');
+  // Attributed, and still a fact about a screen rather than a cause. `said "..."` is
+  // something the office watched happen; "it stopped because the file moved" would be a
+  // guess about an agent's reasoning, which is the one thing this file does not do.
+  assert.match(list[0].why, /^said "/);
+  // And the sentence itself is untouched, so a surface with no room for the reason still
+  // gets exactly the line it got before this existed.
+  assert.match(list[0].text, /^Dev stopped 30m\d\ds ago with 7 files uncommitted$/);
+});
+
+test('the office prefers its own fact to a quote of somebody else\'s', () => {
+  // A conflicted tree is read out of git by the same pass that counted the files, so it
+  // is the office\'s own observation and it is the most common reason an agent gives up
+  // mid-task. A quote is second best, and only used when there is nothing better.
+  const list = notices({ people: [stalled('Dev', { dirt: { files: 7, conflicts: 3 }, said: 'I cannot apply the patch' })] });
+  assert.equal(list[0].why, '3 of them conflicted');
+  assert.doesNotMatch(list[0].why, /said/);
+  // One conflict is one conflict.
+  const one = notices({ people: [stalled('Dev', { dirt: { files: 2, conflicts: 1 } })] });
+  assert.equal(one[0].why, '1 of them conflicted');
+});
+
+test('a stall the office cannot explain says nothing rather than guessing', () => {
+  // The empty case has to be empty rather than a phrase like "reason unknown". Every
+  // surface tests `n.why` for truth to decide whether to spend a row on it, and a
+  // placeholder would spend that row saying the office has nothing to say.
+  for (const said of ['', null, undefined, '   ']) {
+    const list = notices({ people: [stalled('Dev', { said })] });
+    assert.deepEqual(kinds(list), ['stalled'], `said=${JSON.stringify(said)} changed the notice`);
+    assert.equal(list[0].why, '', `said=${JSON.stringify(said)} invented a reason`);
+  }
+  // And a desk that was never asked has no field at all, which must not throw.
+  const bare = notices({ people: [desk('Dev', { status: 'idle', statusMs: STALL_MS * 2, dirt: { files: 7, conflicts: 0 } })] });
+  assert.equal(bare[0].why, '');
+});
+
+test('a crowd names whose screen the quote came off', () => {
+  // The file count is the directory\'s and is stated unattributed. A quote is not: four
+  // desks in one checkout have four screens, and `said "..."` with no name in front of it
+  // reads as the office quoting all of them.
+  const parked = (name, extra) => stalled(name, { cwd: '/w/brain', dirt: { files: 10, conflicts: 0 }, ...extra });
+  const list = notices({ people: [parked('Cass', { said: 'the merge is not going to work' }), parked('Dev')] });
+  assert.equal(list[0].text, 'Cass and Dev stopped in brain with 10 files uncommitted');
+  assert.equal(list[0].why, 'Cass said "the merge is not going to work"');
+  // The conflict count is the tree\'s, so it stays unattributed even in a crowd.
+  const both = notices({ people: [parked('Cass', { dirt: { files: 10, conflicts: 2 }, said: 'nope' }), parked('Dev', { dirt: { files: 10, conflicts: 2 } })] });
+  assert.equal(both[0].why, '2 of them conflicted');
+});
+
+test('a quote in a notice is capped, cleaned, and cannot carry a path', () => {
+  // The same rule as the directory name two hundred lines up, for the same reason: this
+  // pane gets screen-shared, and everything in this string came off a terminal the office
+  // does not control.
+  const secret = '/Users/realname/clients/acme-secret-merger/api/src/index.ts is broken';
+  const list = notices({ people: [stalled('Dev', { said: `\u001b[31mcannot read ${secret}\u001b[0m` })] });
+  // Capped, so a notice is a sentence and not a paragraph.
+  assert.ok(list[0].why.length <= 'said "…"'.length + 36, `${list[0].why.length} cells of reason`);
+  assert.doesNotMatch(list[0].why, /\u001b/);
+  assert.doesNotMatch(list[0].why, /index\.ts|acme/);
+  // What is NOT claimed here: that a quote can never contain a path at all. It can, if an
+  // agent prints a short one, and the office has no way to tell a path from a sentence in
+  // text it did not write. What the cap buys is that it is a clause rather than a dump,
+  // and the alternative -- paraphrasing screen text -- is the office making things up.
+});
+
 /* --------------------------------------------------------------------- order */
 
 test('the order is an argument about what can still be saved', () => {
@@ -362,6 +442,10 @@ test('rubbish in the roster is skipped rather than drawn', () => {
 
 const people = officeRoster().people;
 const screen = (extra) => renderFrame(viewOf({ people, cols: 110, rows: 32, ...extra })).lines.map(stripAnsi).join('\n');
+// The key bar, which is the last line of the frame and the only one this file is about.
+// The manager's desk and its row in the compact list both draw notice text too, so an
+// assertion about the footer has to be an assertion about the footer.
+const footer = (extra) => screen(extra).split('\n').at(-1);
 
 // A notice as the module builds one, shaped by hand so these tests do not depend on
 // which desks the roster fixture happens to put where.
@@ -381,7 +465,12 @@ test('an empty list leaves the footer exactly as it was', () => {
 test('what the office just did outranks what it has noticed', () => {
   // A message is a receipt for a keystroke the reader pressed a second ago. A notice
   // is a standing fact that will still be true on the next frame, so it yields.
-  const text = screen({ notices: [said('Ada and Bo are both in herdr-office')], message: 'sent to 6 agents' });
+  //
+  // The footer line on its own, not the whole frame. The manager's desk says the same
+  // sentence up on the floor and is supposed to keep saying it: a notice yielding to a
+  // message is about one row at the bottom of the screen, and searching the frame for the
+  // text would pass or fail on whether that desk happened to be drawn.
+  const text = footer({ notices: [said('Ada and Bo are both in herdr-office')], message: 'sent to 6 agents' });
   assert.match(text, /sent to 6 agents/);
   assert.doesNotMatch(text, /both in herdr-office/);
 });

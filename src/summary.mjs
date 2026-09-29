@@ -1,7 +1,7 @@
 // Turning a terminal scrape into "what are you up to?".
 // Agent CLIs draw boxes, spinners and rules; none of that is a status update,
 // so it gets filtered out before we guess at a gist.
-import { sanitize } from './text.mjs';
+import { sanitize, truncate } from './text.mjs';
 
 const CHROME_ONLY = /^[\s─━│┃╭╮╯╰┌┐└┘═║╔╗╚╝▀▄█░▒▓▪▫•·◦∙◐◑◒◓✳✶✻*_=~+\-.]+$/u;
 const GUTTER = /^\s*[│┃|>»⏵]\s?/u;
@@ -161,6 +161,30 @@ const SAID = 'last said: ';
 // output is; two read as a pair of unrelated remarks.
 const SAID_LINES = 3;
 
+// The tail of what an agent actually said, out of everything on its screen. Prose if
+// there is any, and whatever was left after the chrome if there is not: an agent that
+// ends on a stack trace has still told you something, and a blank block would be worse.
+//
+// Shared by the card and by src/notices.mjs, which is the point of pulling it out: two
+// definitions of "the last thing it said" on one screen is one too many, and the notice
+// is a quote of the same line the card is showing under it.
+function saidLines(outputLines) {
+  const substantive = (outputLines || []).filter((line) => line.length > 16 && !isNoise(line));
+  const prose = substantive.filter(isProse);
+  return (prose.length ? prose : substantive).slice(-SAID_LINES);
+}
+
+// The one line of it that fits in a sentence somewhere else. The last one rather than
+// the first, because the tail of the output is where an agent says why it stopped.
+//
+// Truncated here rather than by the caller: this is screen text on its way into a line
+// the office otherwise writes itself, and the cap is part of the claim that a notice
+// cannot be made any shape a stranger's terminal likes.
+export function lastSaid(outputLines, max = 44) {
+  const line = saidLines(outputLines).at(-1) || '';
+  return truncate(sanitize(line), max);
+}
+
 // A few lines describing the person, in the order a human would want them: what they
 // are stuck on first, then what they were last saying.
 //
@@ -175,10 +199,7 @@ export function summarize(person, outputLines) {
     out.push(ask ? `stuck on: ${ask}` : 'stuck waiting on you (could not spot the question)');
   }
   if (person?.title) out.push(`pane title: ${person.title}`);
-  const substantive = outputLines.filter((line) => line.length > 16 && !isNoise(line));
-  const prose = substantive.filter(isProse);
-  const said = (prose.length ? prose : substantive).slice(-SAID_LINES);
-  said.forEach((line, i) => out.push(i === 0 ? `${SAID}${line}` : `${' '.repeat(SAID.length)}${line}`));
+  saidLines(outputLines).forEach((line, i) => out.push(i === 0 ? `${SAID}${line}` : `${' '.repeat(SAID.length)}${line}`));
   if (!out.length) out.push('nothing to report');
   return out;
 }

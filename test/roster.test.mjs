@@ -382,8 +382,20 @@ test('news over a desk puts itself away', () => {
   now += 2;
   assert.equal(roster.expireEvents(), true, 'and then it goes');
   assert.equal(roster.find('w1:p1').event, null);
-  assert.equal(roster.events.size, 0);
-  assert.equal(roster.expireEvents(), false, 'an empty wall reports no change');
+  assert.equal(roster.expireEvents(), false, 'a wall already cleared reports no change');
+  // Off the wall, not out of the office. The slab expires; the fact that the tests passed
+  // does not, because a summary of a desk that has been stopped for half an hour is the
+  // one thing that most wants it. Used to be a `delete`, and the age is why it is not: a
+  // briefing wants "tests passed 14m ago" and there is nowhere else for that to come from.
+  now += 60_000;
+  roster.update([agent('w1:p1')]);
+  assert.deepEqual(roster.find('w1:p1').lastEvent, { label: 'tests passed', kind: 'good', ageMs: EVENT_MS + 60_001 });
+  assert.equal(roster.find('w1:p1').event, null, 'and it is still off the wall');
+
+  // The desk going away is now the only thing that ends it, so a pane id herdr hands out
+  // twice cannot inherit the last agent's news as its own history.
+  roster.update([agent('w1:p2')]);
+  assert.equal(roster.events.has('w1:p1'), false, 'the news outlived the desk');
 });
 
 /* -------------------------------------------------------------------- the day book */
@@ -541,4 +553,53 @@ test('a book survives the round trip a real restart puts it through', () => {
     assert.equal(person.since, BREAKFAST, `${person.id} lost its clock`);
     assert.equal(person.statusMs, ELEVEN - BREAKFAST, person.id);
   }
+});
+
+test('the last thing a desk was seen saying is kept, and belongs to one task', () => {
+  // Kept for every desk rather than only blocked ones, which is the whole reason a stall
+  // notice can say why. The screens are read on a rotation anyway and this text used to
+  // be thrown away for anybody who was not waiting on an answer, so "Dev stopped 16m ago
+  // with 7 files uncommitted" had no way to say what happened: the answer was already on
+  // the wire and nothing kept it.
+  const roster = new Roster();
+  roster.update([agent('w1:p1', { agent_status: 'idle' }), agent('w1:p2', { agent_status: 'idle' })]);
+  assert.equal(roster.find('w1:p1').said, '');
+
+  roster.setSaid('w1:p1', 'I cannot apply the patch, the file moved');
+  assert.equal(roster.find('w1:p1').said, 'I cannot apply the patch, the file moved');
+  assert.equal(roster.find('w1:p2').said, '', "a quote is not shared with the desk next door");
+
+  // Survives a poll, like a head reading and unlike an ask: the floor is redrawn twice a
+  // second and a quote that did not outlive a poll would be on screen for one frame.
+  roster.update([agent('w1:p1', { agent_status: 'idle' }), agent('w1:p2', { agent_status: 'idle' })]);
+  assert.equal(roster.find('w1:p1').said, 'I cannot apply the patch, the file moved');
+
+  // But not a change of state. A quote belongs to the turn it was read in, and carrying
+  // it into the next one makes it the last thing the agent said *before this task*, which
+  // is not what a sentence built on it claims.
+  roster.update([agent('w1:p1', { agent_status: 'working', state_change_seq: 2 }), agent('w1:p2', { agent_status: 'idle' })]);
+  assert.equal(roster.find('w1:p1').said, '');
+
+  // Nothing on the screen is recorded as an answer rather than skipped, the same way a
+  // null head reading is. Otherwise a desk keeps quoting a sentence it read twenty
+  // minutes and three tasks ago, because the only thing that ever overwrites it is
+  // another quote.
+  roster.setSaid('w1:p2', 'the suite is green');
+  assert.equal(roster.find('w1:p2').said, 'the suite is green');
+  roster.setSaid('w1:p2', '');
+  assert.equal(roster.find('w1:p2').said, '');
+  roster.setSaid('w1:p2', null);
+  assert.equal(roster.find('w1:p2').said, '');
+
+  // Cleaned on the way in, because it came off a terminal. This string ends up in a
+  // status line that shares its row with key hints, so an escape sequence in it would
+  // move the cursor rather than say anything.
+  roster.setSaid('w1:p1', '\u001b[31mthe tests failed\u001b[0m');
+  assert.equal(roster.find('w1:p1').said, 'the tests failed');
+  assert.doesNotMatch(roster.find('w1:p1').said, /\u001b/);
+
+  // And a desk with no id is not a desk. Same guard as every other setter here.
+  roster.setSaid('', 'nobody');
+  roster.setSaid(null, 'nobody');
+  assert.equal(roster.said.has(''), false);
 });

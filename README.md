@@ -141,9 +141,8 @@ carrying the headline count ([on the window itself](docs/design.md#on-the-window
 ## What the office manager has noticed
 
 Every other thing the office draws is a fact about one desk. Some of the things worth
-knowing are about two desks at once, and until now nothing had anywhere to say them.
-They go on the footer, one at a time, behind a `!`, and `m` walks you to the desk each
-one is about ([the office manager](docs/design.md#the-office-manager)):
+knowing are about two desks at once, and until now nothing had anywhere to say them
+([the office manager](docs/design.md#the-office-manager)):
 
 | Notice | Why it is worth a line |
 |---|---|
@@ -152,8 +151,41 @@ one is about ([the office manager](docs/design.md#the-office-manager)):
 | `Ada and Bo are stuck on the same thing` | two interruptions that are really one decision |
 | `Dev stopped 22m14s ago with 7 files uncommitted` | the failure mode a floor of agents has that a floor of people does not, because a person would have said so. Several desks parked in one checkout are one line, not one each |
 
-It only ever reports. Nothing on that line can send a keystroke, start an agent or
-touch a repository, and the only key it adds moves your cursor.
+A stall says why where the office can say without guessing, either `3 of them
+conflicted`, which it read out of git itself, or a quote of the last thing that desk was
+seen saying. Never a cause: `said "I cannot apply the patch"` is a fact about a screen,
+whereas "it stopped because the patch failed" would be a guess about an agent's
+reasoning. The reason is printed whole or not at all, so a narrow pane gets the fact and
+a wide one gets both.
+
+The manager sits at the first desk on the floor, with a monitor counting the desks that
+need somebody and a status line carrying the most urgent thing it has noticed. It counts
+desks rather than notices, because three agents stopped in one checkout are one sentence
+and three people who need you, and the second number is the one worth reading across a
+room. `m` walks you to it, and from there `m` again steps through the notices, walking to
+the desk each one is about.
+
+`enter` on the desk opens the card, which is the one surface with room to answer the
+question the desk exists for. It is not the notice list in a bigger box. It is one short
+account per desk, its notice as the first line and under it what that desk was doing,
+where, what last happened to it, what it left uncommitted and the last thing it said:
+
+```
+  Ada · stopped 30m00s ago
+     was doing "apply the security patch" · on a-manager-who-notices in herdr-office
+     tests failed 24m20s ago · 7 uncommitted · said "I cannot apply the patch"
+```
+
+Every clause is a fact the office already holds, in the order somebody would tell it.
+Nothing is paraphrased and nothing is inferred, so the card is quicker than walking to
+four agents and says exactly as much as they did. A desk in two notices appears once and
+says both. When the card runs out of room the accounts win: the desks at the top keep
+their detail, the last one down drops back to its headline, the rest are counted, and the
+hint about what `m` does is the first thing to go.
+
+It only ever reports. The desk has no pane behind it, no hitbox that does anything and
+no key that writes: `y`, `n`, `s`, `a` and `f` all refuse there and say why. Nothing it
+draws can send a keystroke, start an agent or touch a repository.
 
 Three things are worth knowing up front, because they are the rules the whole thing
 is built around:
@@ -162,7 +194,10 @@ is built around:
   allowlist, a matched output line only picks which of seven fixed labels to show, the
   context parser emits a number and a model name and nothing else, and git returns
   counts rather than paths. This pane gets screen-shared, so a truncated secret is
-  treated as a secret and dropped rather than trimmed.
+  treated as a secret and dropped rather than trimmed. Three things are quoted rather
+  than classified, each capped and stripped of anything that could move a cursor: the
+  question a blocked agent is asking, the tail of what a desk was last saying on its
+  card, and the one line of that a stall notice uses to say why.
 - **`y`, `n`, `s`, `Y`, `a` and `A` send real input to real agents.** They are the only
   things here that cannot be taken back, and they are the most guarded part of the
   plugin. `--demo` prints what it would have sent instead.

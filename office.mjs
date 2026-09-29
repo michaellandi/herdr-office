@@ -15,8 +15,8 @@
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
-import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
-import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
+import { renderFrame, nextZoom, ZOOMS, HIRE_ID, MANAGER_ID } from './src/render.mjs';
+import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice, lastSaid } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
 import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
@@ -202,6 +202,15 @@ let handsSeen = null;
 // different notice, it stops existing. So this is a cursor into a list, clamped by
 // the renderer, and `m` is the only thing that moves it.
 let noticeAt = 0;
+// Whether the manager's card is open. A flag rather than an object, unlike `detail` and
+// `hire`, because there is no state to keep: the panel is a function of the notices,
+// which are recomputed every frame, so all that has to be remembered is that you asked.
+let board = false;
+// The two desks with no pane behind them. Every path in this file that would send a
+// keystroke, start an agent, focus a pane or swap two of them has to refuse on both, and
+// a named predicate is how that stays true when a third one is added: a `=== HIRE_ID`
+// comparison in ten places is ten chances to forget one.
+const noPane = (id) => id === HIRE_ID || id === MANAGER_ID;
 // The zoom level: 'auto' is the floor plan deciding for itself when it has stopped
 // being readable, which is what the office has always done.
 let zoom = ZOOMS.includes(ZOOM_ARG) ? ZOOM_ARG : 'auto';
@@ -356,6 +365,7 @@ function view() {
     // every notice is then about a desk the key can actually walk you to.
     notices: notices({ people }),
     noticeAt,
+    board,
     total: roster.people.length,
     filter,
     filtering,
@@ -464,9 +474,9 @@ function floorPeople() {
 }
 
 function ensureSelection() {
-  // The empty desk is a real place to be standing even though nobody is in the
-  // roster under that id, so a poll must not walk you off it.
-  if (selectedId === HIRE_ID) return;
+  // The empty desk and the manager's are real places to be standing even though nobody
+  // is in the roster under either id, so a poll must not walk you off them.
+  if (noPane(selectedId)) return;
   const floor = floorPeople();
   if (selectedId && floor.some((p) => p.id === selectedId)) return;
   const raised = floor.find((p) => p.status === 'blocked');
@@ -532,6 +542,11 @@ async function refreshScreens() {
         roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines));
       }
       if (HEAD) readHead(person, text);
+      // The last thing this desk was seen saying, off the screen that was read anyway.
+      // This used to be thrown away for every desk that was not blocked, which is why
+      // "Dev stopped 16m ago with 7 files uncommitted" could never say what happened:
+      // the answer was on the wire already and nothing kept it.
+      if (text != null) roster.setSaid(person.id, lastSaid(cleanOutput(text)));
     }),
   );
   if (!ONCE) draw();
@@ -884,6 +899,10 @@ function explainDesk(id) {
 }
 
 async function loadDetail(id, { force = false } = {}) {
+  // The manager's card is the lowest-ranked of the four panels, so an open desk already
+  // hides it. Cleared anyway, because hidden and closed are different things and esc out
+  // of a desk should not reveal a card you opened two minutes ago.
+  board = false;
   if (!detail || detail.id !== id) detail = { id, loading: true, summary: [], output: [], detection: [], fetchedAt: 0 };
   if (!force && Date.now() - detail.fetchedAt < DETAIL_MS) return;
   const person = roster.find(id);
@@ -961,10 +980,11 @@ function move(dx, dy) {
   if (dx) next = idx + dx;
   if (dy) next = idx + dy * cols;
   if (next < 0 || next >= ids.length) {
-    // The empty desk is the last thing on the last floor and is in nobody's
-    // roster, so there is nothing past it to page to. Walking off it stays put
-    // rather than teleporting to whoever happens to be first.
-    if (selectedId === HIRE_ID) return;
+    // The empty desk is the last thing on the last floor and the manager's is the first
+    // thing on the first one. Both are in nobody's roster, so there is nothing past
+    // either to page to, and walking off one stays put rather than teleporting to
+    // whoever happens to be first.
+    if (noPane(selectedId)) return;
     // Walking off the edge of the visible floor moves through the full roster,
     // which is what makes paging work with only arrow keys.
     const all = floorPeople().map((p) => p.id);
@@ -1000,6 +1020,12 @@ function nextNotice() {
   if (!list.length) {
     note(terms(filter).length ? 'nothing worth mentioning about those desks' : 'nothing worth mentioning');
     noticeAt = 0;
+    // And walk to the manager anyway, so the key has somewhere to take you on a quiet
+    // floor. This is the whole lesson of the first version: a footer line saying
+    // "nothing worth mentioning" is indistinguishable from a key that did not register,
+    // and a cursor landing on a desk that says WATCHING is not. Only when the desk is
+    // actually on the screen, which a filter takes it off.
+    if (!terms(filter).length) selectedId = MANAGER_ID;
     return;
   }
   const floor = floorPeople();
@@ -1011,6 +1037,21 @@ function nextNotice() {
   noticeAt = list[at].ids.includes(selectedId) ? (at + 1) % list.length : at;
   const where = list[noticeAt].ids.find((id) => floor.some((p) => p.id === id));
   if (where) selectedId = where;
+}
+
+// The manager's card. Nothing is fetched and nothing is remembered: the panel is drawn
+// from the notices the next frame computes anyway, so opening it is one flag and a
+// redraw. That is the difference between this desk and every other one on the floor, and
+// it is why there is no loading state here to get stuck in.
+function openBoard() {
+  selectedId = MANAGER_ID;
+  // The four panels are one slot, so opening this puts the others away, exactly as
+  // they do to each other.
+  detail = null;
+  hire = null;
+  board = true;
+  prevLines = [];
+  draw();
 }
 
 // Switching shepherd mode on takes effect now rather than on the next poll, because
@@ -1052,7 +1093,9 @@ function choiceFor(person) {
 
 function armTrust() {
   const person = roster.find(selectedId);
-  if (!person) return;
+  // Say which desk this is, rather than nothing. A silent return here is the same bug
+  // the manager's desk was built to fix, one keystroke smaller.
+  if (!person) return refuse(whyNobody());
   if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you`);
   const choice = choiceFor(person);
   if (!choice) return refuse(`still reading ${person.name}'s screen, try again in a second`);
@@ -1101,7 +1144,7 @@ async function confirmTrust() {
 
 async function respond(kind) {
   const person = roster.find(selectedId);
-  if (!person) return;
+  if (!person) return refuse(whyNobody());
   if (person.status !== 'blocked') {
     note(`${person.name} is not waiting on you`);
     return;
@@ -1133,6 +1176,10 @@ async function respond(kind) {
 
 async function jumpToPane() {
   if (!selectedId) return;
+  if (selectedId === MANAGER_ID) {
+    note('the manager has no pane of its own');
+    return;
+  }
   if (selectedId === HIRE_ID) {
     note('nobody sits there yet');
     return;
@@ -1220,6 +1267,7 @@ async function openHire() {
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
+  board = false;
   hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
   prevLines = [];
   draw();
@@ -1354,11 +1402,21 @@ function refuse(text) {
   draw();
 }
 
+// Why there is nobody to send this to. Three different reasons that all end in "not
+// happening", and saying which one is the difference between a key that looks broken and
+// a key that is telling you something: standing at the manager's desk and pressing `a` is
+// a reasonable thing to try exactly once.
+function whyNobody() {
+  if (selectedId === MANAGER_ID) return 'the manager does not take jobs: it only reports';
+  if (selectedId === HIRE_ID) return 'nobody sits there yet';
+  return 'nobody selected';
+}
+
 function openCompose(scope) {
   if (compose) return;
   const person = scope === 'all' ? null : roster.find(selectedId);
   if (scope === 'one') {
-    if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
+    if (!person) return refuse(whyNobody());
     // herdr rejects a prompt to a blocked agent with agent_blocked, before any
     // input is sent. Saying so here is better than letting somebody type out a
     // paragraph first, and `s` is the key that does reach them.
@@ -1368,7 +1426,7 @@ function openCompose(scope) {
   // this goes in as keystrokes instead, which is also the only way to answer a
   // question that is not a yes or a no: "which of the two approaches" has no key.
   if (scope === 'reply') {
-    if (!person) return refuse(selectedId === HIRE_ID ? 'nobody sits there yet' : 'nobody selected');
+    if (!person) return refuse(whyNobody());
     if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you: press a to give them a job`);
   }
   const { to, skipped } = scope === 'all'
@@ -1379,6 +1437,7 @@ function openCompose(scope) {
   // the more valuable of the two, so opening one puts the other away.
   hire = null;
   detail = null;
+  board = false;
   compose = {
     scope,
     id: person?.id || null,
@@ -1521,6 +1580,7 @@ function onMouse(ev) {
     else respond(act.action);
   } else if (act.type === 'open') {
     if (act.id === HIRE_ID) openHire();
+    else if (act.id === MANAGER_ID) openBoard();
     else loadDetail(act.id, { force: true });
   } else if (act.type === 'swap') {
     selectedId = act.from;
@@ -1593,6 +1653,12 @@ function onInput(chunk) {
     if (filtering) return closeFilter(true);
     if (detail) {
       detail = null;
+      prevLines = [];
+      draw();
+      return;
+    }
+    if (board) {
+      board = false;
       prevLines = [];
       draw();
       return;
@@ -1692,6 +1758,7 @@ function onInput(chunk) {
   else if (str === '\t') move(1, 0);
   else if (str === '\r' || str === '\n' || str === ' ') {
     if (selectedId === HIRE_ID) openHire();
+    else if (selectedId === MANAGER_ID) openBoard();
     else if (selectedId) loadDetail(selectedId, { force: true });
   } else if (str === 'y') respond('approve');
   else if (str === 'n') respond('deny');
@@ -1715,7 +1782,7 @@ function onInput(chunk) {
     note('refreshed');
   } else return;
 
-  if (detail && selectedId && selectedId !== HIRE_ID && detail.id !== selectedId) loadDetail(selectedId, { force: true });
+  if (detail && selectedId && !noPane(selectedId) && detail.id !== selectedId) loadDetail(selectedId, { force: true });
   draw();
 }
 

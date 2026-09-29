@@ -4,11 +4,11 @@
 // looked at. These tests read the glyphs actually rendered underneath.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderFrame, HIRE_ID } from '../src/render.mjs';
+import { renderFrame, HIRE_ID, MANAGER_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
-import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, LIVE_DETECTION, LIVE_EXPLAIN, officeRoster, roomyRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { SIZES, FRAMES, DETAILS, HIRES, COMPOSES, KINDS, NEWS, FILTERS, LIVE_DETECTION, LIVE_EXPLAIN, officeRoster, roomyRoster, viewOf, stripAnsi, personRow } from './fixtures.mjs';
 import { assignRooms } from '../src/rooms.mjs';
-import { matches as matchFilter } from '../src/filter.mjs';
+import { matches as matchFilter, terms } from '../src/filter.mjs';
 import { hitTest, deskAt } from '../src/mouse.mjs';
 
 const roster = officeRoster();
@@ -82,10 +82,12 @@ test('no two buttons overlap', () => {
   }
 });
 
-test('every hitbox belongs to somebody real, or to the empty desk', () => {
+test('every hitbox belongs to somebody real, or to a desk with no pane behind it', () => {
   for (const { label, hitboxes } of frames()) {
     for (const box of hitboxes) {
-      if (box.id === HIRE_ID) continue;
+      // The two desks the office draws itself. Both stand where a pane id stands so the
+      // walk and click paths reach them with no special case, and neither is on a roster.
+      if (box.id === HIRE_ID || box.id === MANAGER_ID) continue;
       assert.ok(roster.find(box.id), `${label}: hitbox for ${box.id}, who is not on the roster`);
     }
   }
@@ -105,9 +107,13 @@ test('the empty desk is clickable, and only where there is room for it', () => {
   const [cols, rows] = [140, 46];
   const vacancy = (view) => renderFrame(view).hitboxes.find((b) => b.id === HIRE_ID && b.action === 'hire');
 
-  const { lines } = renderFrame(viewOf({ people, cols, rows }));
-  const box = vacancy(viewOf({ people, cols, rows }));
-  assert.ok(box, 'seven desks on a floor that holds eight should leave a spare');
+  // Six, not seven. This floor holds eight tiles and the manager has one of them, so a
+  // seventh person fills it: the manager counts against the room the same way a desk
+  // does, and the case below is the one that says so.
+  const six = officeRoster(new Array(6).fill('working')).people;
+  const { lines } = renderFrame(viewOf({ people: six, cols, rows }));
+  const box = vacancy(viewOf({ people: six, cols, rows }));
+  assert.ok(box, 'six desks and a manager on a floor that holds eight should leave a spare');
   const plain = stripAnsi(lines[box.y]).slice(box.x, box.x + box.w);
   assert.equal(width(plain), box.w);
   assert.ok(plain.startsWith('╭') && plain.endsWith('╮'), `the empty desk is not over a cubicle: ${plain}`);
@@ -118,6 +124,11 @@ test('the empty desk is clickable, and only where there is room for it', () => {
   // paging to a desk nobody sits at.
   const eight = officeRoster(new Array(8).fill('working')).people;
   assert.equal(vacancy(viewOf({ people: eight, cols, rows })), undefined);
+  // And seven is now full, because the manager is sitting in the eighth chair. This is
+  // the cost of giving it a desk, written down where a future change to the layout will
+  // trip over it: a floor one person short of full used to offer a spare and no longer
+  // does, and `+` is the way in when it does not.
+  assert.equal(vacancy(viewOf({ people, cols, rows })), undefined);
 });
 
 test('every hire menu cell sits on the name it would start', () => {
@@ -250,8 +261,9 @@ test('a desk is clickable wherever it is drawn', () => {
   // that identifies it, or clicking the person you are looking at does nothing.
   const [cols, rows] = [140, 46];
   const { lines, hitboxes } = renderFrame(viewOf({ people, cols, rows }));
+  // The manager's desk has no action either, and is a desk on the screen, so it counts.
   const desks = hitboxes.filter((b) => !b.action);
-  assert.equal(desks.length, people.length, 'every desk on screen should be clickable');
+  assert.equal(desks.length, people.length + 1, 'every desk on screen should be clickable');
   for (const box of desks) {
     const plain = stripAnsi(lines[box.y]).slice(box.x, box.x + box.w);
     assert.equal(width(plain), box.w);
@@ -294,8 +306,18 @@ test('a filtered floor is only clickable where somebody is standing', () => {
       const view = viewOf({ people: shown, cols, rows, total: people.length, ...filter });
       const { lines, hitboxes } = renderFrame(view);
       const ids = new Set(shown.map((p) => p.id));
+      // One direction only, which is the direction this test is about. A filter must
+      // never leave the manager clickable, because its notices are about the whole
+      // office and half of it is off the screen. Whether it is clickable when the
+      // filter is off depends on the layout rather than on the filter (a narrow pane
+      // draws the compact list and has no tiles at all), so that belongs to
+      // test/manager.test.mjs and not here.
+      const quiet = !terms(filter.filter).length;
+      if (!quiet) {
+        assert.ok(!hitboxes.some((b) => b.id === MANAGER_ID), `filter=${name} ${cols}x${rows}: the manager is clickable under a filter`);
+      }
       for (const box of hitboxes) {
-        if (box.id === HIRE_ID) continue;
+        if (box.id === HIRE_ID || (quiet && box.id === MANAGER_ID)) continue;
         assert.ok(ids.has(box.id), `filter=${name} ${cols}x${rows}: a hitbox for ${box.id}, who is filtered out`);
       }
       const plain = lines.map(stripAnsi);
@@ -432,7 +454,7 @@ test('a narrow row gives up the columns you can read elsewhere, not the buttons'
     const view = viewOf({ people, cols, rows: 12, zoom: 'list' });
     const { lines, hitboxes } = renderFrame(view);
     const plain = lines.map(stripAnsi);
-    const row = (person) => plain.find((l) => l.includes(person.name)) || '';
+    const row = (person) => personRow(plain, person.name);
     return { buttons: answers(hitboxes).length, blocked: row(blocked), working: row(working) };
   };
 
@@ -461,7 +483,7 @@ test('a narrow row gives up the columns you can read elsewhere, not the buttons'
     rows: 12,
     zoom: 'list',
   });
-  const calmRow = renderFrame(calm).lines.map(stripAnsi).find((l) => l.includes(working.name));
+  const calmRow = personRow(renderFrame(calm).lines.map(stripAnsi), working.name);
   assert.equal(tight.working, calmRow);
   assert.ok(!tight.working.includes('[y]'), tight.working);
   // The question itself never goes: it is the reason the row is lit up.

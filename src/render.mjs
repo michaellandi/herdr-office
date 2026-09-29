@@ -12,9 +12,12 @@ import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 // one divide the same numbers the same way and cannot disagree about which slice won a
 // rounding contest.
 import { allot } from './charts.mjs';
+import { manager, managerLine, MANAGER_ID } from './manager.mjs';
+import { brief, wrap } from './briefing.mjs';
 import {
   pose,
   screen,
+  managerPose,
   SCREENS,
   PROPS,
   VACANT_CHAIR,
@@ -45,6 +48,11 @@ const CHROME_ROWS = 4; // header bar + spacer, spacer + key bar
 // reach it with no special case. It cannot collide with a real pane id: herdr
 // pane ids are `<workspace>:<pane>`, and none of them start with a plus.
 export const HIRE_ID = '+hire';
+
+// Re-exported so callers that already import the renderer's ids get both from one
+// place, rather than having to know that one desk with no pane behind it lives in
+// src/manager.mjs and the other lives here.
+export { MANAGER_ID };
 
 const PHRASE = { blocked: 'need you', working: 'working', done: 'done', idle: 'idle', unknown: 'unsure' };
 const ORDER = ['blocked', 'working', 'done', 'idle', 'unknown'];
@@ -509,6 +517,93 @@ function vacantTile({ selected, pending, kind }) {
   return rows;
 }
 
+// The office manager's desk.
+//
+// This exists because the first version of the manager was a line on the footer and
+// nothing else, which was correct and invisible. On a quiet floor it drew nothing at
+// all, and a feature that draws nothing when there is no news is indistinguishable from
+// a feature that is broken. A desk is always there. It is the cheapest possible proof
+// that something is watching, and it costs a tile rather than a mechanism.
+//
+// Everything it says comes from src/manager.mjs, which comes from src/notices.mjs, which
+// cannot act. So this desk has a chair, a face, a monitor and a card, and no way
+// whatever to touch a repository or an agent. That is not a limitation being worked
+// around: it is the entire argument for putting a manager on the floor at all.
+//
+// Three colour decisions worth writing down, because each of them was the second answer:
+//
+//   - **The border never changes.** Accent on a border means "this is selected", in
+//     every other tile and in the drag feedback. A manager whose border lit up when it
+//     had news would read as selected from across the room. The news signals are the
+//     blinking marker over its head, the chip, and the monitor going bright, which is
+//     three and is plenty.
+//   - **Amber is not available.** A raised arm and an amber tile mean an agent is
+//     waiting on you, and this desk is never waiting on anything. So the manager's own
+//     colour is the accent: it is the office's colour, in the header and nowhere on a
+//     person, and this desk is the office talking.
+//   - **The screen stays lit even when quiet.** Reusing the empty desk's dark glass for
+//     a watching manager was the first attempt, and it made the two tiles hard to tell
+//     apart at a glance on a floor with both. A dim "all quiet" is a desk doing its job.
+function managerTile(m, { selected, frame }) {
+  const who = identity(m.id);
+  const body = managerPose(m.pose, frame);
+  const loud = m.count > 0;
+  const own = loud ? P.accent : P.dim;
+  const chrome = { borderFg: selected ? P.accent : P.wall, bold: selected };
+  const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
+  const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
+  const art = (figure, monitor) => figure + ' '.repeat(MON_X - POSE_W) + monitor;
+  const mon = [
+    { from: MON_X, to: INNER, fg: P.faint },
+    { from: MON_X + 1, to: INNER - 1, fg: own, bg: P.screen, bold: loud },
+    { from: INNER - 1, to: INNER, fg: P.faint },
+  ];
+
+  // `office` where a person's agent kind goes, because that is the honest answer to
+  // "what is running at this desk": nothing is, the office drew it.
+  const plate = cells();
+  plate.add('▌', { fg: who.shirt });
+  plate.add(' ');
+  plate.add(truncate(m.name, 12), { fg: P.ink, bold: true });
+  plate.gap(INNER - width('office'));
+  plate.add('office', { fg: P.dim });
+  plate.gap(INNER);
+
+  const bar = cells();
+  bar.add('▌ ', { fg: own });
+  bar.add(m.chip, { fg: own, bold: loud });
+  bar.gap(INNER);
+
+  const card = wallCard(m.role);
+  const rows = [
+    edge('╭', '╮', TILE_W, chrome),
+    blank(),
+    row(plate.out().text, plate.out().spans),
+    blank(),
+    card ? row(card.text, card.spans) : blank(),
+    blank(),
+    row(art(body.rows[0], BEZEL_TOP), [
+      { from: 0, to: POSE_W, fg: own },
+      { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
+      { from: MON_X, to: INNER, fg: P.faint },
+    ]),
+    row(art(body.rows[1], '│' + padEnd(truncate(m.screen[0] || '', SCREEN_W), SCREEN_W) + '│'), [{ from: 0, to: POSE_W, fg: who.skin }, ...mon]),
+    row(art(body.rows[2], '│' + padEnd(truncate(m.screen[1] || '', SCREEN_W), SCREEN_W) + '│'), [{ from: 0, to: POSE_W, fg: who.shirt }, ...mon]),
+    row(art(body.rows[ART_ROWS - 1], BEZEL_BOT), [
+      { from: 0, to: POSE_W, fg: who.shirt },
+      { from: MON_X, to: INNER, fg: P.faint },
+    ]),
+    row(DESK_TOP, [{ from: KEYS_X, to: KEYS_X + 10, fg: P.keys }], P.deskTop),
+    row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
+    blank(),
+    row(bar.out().text, bar.out().spans),
+    row(padEnd(truncate(m.line, INNER), INNER), [{ from: 0, to: Infinity, fg: loud ? P.soft : P.faint }]),
+    edge('╰', '╯', TILE_W, chrome),
+  ];
+  if (rows.length !== TILE_H) throw new Error(`the manager's desk is ${rows.length} rows, want TILE_H ${TILE_H}`);
+  return rows;
+}
+
 /* -------------------------------------------------------------------- chrome */
 
 function headerLines(view) {
@@ -692,12 +787,20 @@ function keyHints(view) {
 // `n/total` rather than a count of the rest, because it is also the only way to tell
 // that the key is doing anything on a floor where two notices happen to be the same
 // length. The number is 1-based: it is being read by a person, not indexing anything.
-function noticeLine(view) {
+//
+// The reason a desk stopped is appended only when the whole of it fits in the room the
+// footer has. Half a quote is worse than no quote: it is the office putting somebody
+// else's words in its mouth and then cutting them off mid-sentence. On a pane too narrow
+// for it, the fact goes out on its own and the card is where the reason lives.
+function noticeLine(view, room = Infinity) {
   const list = Array.isArray(view.notices) ? view.notices : [];
   if (!list.length) return '';
   const at = Math.min(Math.max(0, Math.floor(view.noticeAt) || 0), list.length - 1);
+  const n = list[at];
   const of = list.length > 1 ? `   ${at + 1}/${list.length}` : '';
-  return `! ${list[at].text}${of}`;
+  const head = `! ${n.text}`;
+  const why = n.why ? `, ${n.why}` : '';
+  return width(head + why + of) <= room ? `${head}${why}${of}` : `${head}${of}`;
 }
 
 function footerLines(view) {
@@ -708,10 +811,11 @@ function footerLines(view) {
   // aside BEFORE the hints fill the row. A footer that ran out of space used to
   // truncate the message to nothing, which meant a refusal ("Cass has a hand up:
   // answer that first") was a keystroke that visibly did nothing at all.
-  const msg = truncate(view.message || noticeLine(view), Math.max(0, size.cols - 8));
-  const room = size.cols - 2 - (msg ? width(msg) + 2 : 0);
+  const room = Math.max(0, size.cols - 8);
+  const msg = truncate(view.message || noticeLine(view, room), room);
+  const forHints = size.cols - 2 - (msg ? width(msg) + 2 : 0);
   for (const [key, label] of keyHints(view)) {
-    if (b.w + width(key) + width(label) + 4 > room) break;
+    if (b.w + width(key) + width(label) + 4 > forHints) break;
     b.add('  ');
     b.add(key, { fg: P.accent });
     b.add(' ');
@@ -994,9 +1098,56 @@ function noMatchFloor(view, floorRows) {
 }
 
 // Too many people, or too small a pane, for desks: one line each, faces kept.
+// The manager as one row of the compact list.
+//
+// It has to be here and not only on the floor plan, because the compact list is what a
+// narrow pane gets, and a narrow pane is where somebody looking for this feature is most
+// likely to be. A manager you can only see at a hundred and forty columns is the same
+// invisible manager the footer line was, one screen size along.
+//
+// Columns to the cell from the rows around it: face, chip, name, then the sentence where a
+// pane title goes. No duration, no agent name, no tab, no branch, no chips, no buttons.
+// Every one of those is a fact about a pane, and there is no pane here.
+function managerRow(view, cols, selected) {
+  const m = manager({ notices: view.notices, width: cols });
+  const who = identity(m.id);
+  const own = m.count ? P.accent : P.dim;
+  const b = cells();
+  b.add(' ');
+  b.add(selected ? '▌' : ' ', { fg: P.accent });
+  b.add(' ');
+  b.add([...managerPose(m.pose, view.frame).rows[1]].slice(HAIR_FROM, HAIR_TO).join(''), { fg: who.skin });
+  b.add('  ');
+  b.add(padEnd(truncate(m.chip, 10), 11), { fg: own, bold: m.count > 0 });
+  const room = (n) => b.w + n <= cols - 1;
+  if (room(9)) b.add(padEnd('manager', 9), { fg: P.ink, bold: selected });
+  // The eight cells a desk spends on how long it has been in this state. Kept as spaces
+  // rather than closed up, so the sentence below starts in the same column as every pane
+  // title in the list and the eye can still run down that edge.
+  if (room(8)) b.add(' '.repeat(8));
+  // Asked for again at the width it is about to be drawn in, rather than truncating the
+  // one off `m`. The reason a desk stopped is appended only when the whole of it fits, and
+  // `m.line` was built believing it had the whole pane, so cutting it here would print
+  // half a quote of somebody's screen: the one thing that rule is there to prevent.
+  const tail = Math.max(0, cols - b.w - 2);
+  b.add(truncate(managerLine(view.notices, tail), tail), { fg: m.count ? P.soft : P.faint });
+  return b.fit(cols);
+}
+
 function compactFloor(view, floorRows, hitboxes, startRow) {
   const { cols } = view.size;
   const lines = [];
+  // The manager takes the first row, for the reason it takes the first desk, and is gone
+  // under a filter for the reason it is gone from the floor plan: its notices are about
+  // the whole office and a filtered list is not the whole office.
+  const hasManager = !terms(view.filter).length && floorRows > 1;
+  const offset = hasManager ? 1 : 0;
+  if (hasManager) {
+    const selected = view.selectedId === MANAGER_ID;
+    const { text, spans } = managerRow(view, cols, selected);
+    lines.push(paint(text, spans, { bg: selected ? P.cubicle : P.carpet }));
+    hitboxes.push({ id: MANAGER_ID, x: 0, y: startRow, w: cols, h: 1 });
+  }
   // One tab column width for the whole list, so the column to its right lines up
   // and the eye can run down it. Sized to the longest tab actually on screen, but
   // it gives ground before it gives up: on a narrow terminal a truncated tab name
@@ -1005,10 +1156,13 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
   const longest = Math.max(0, ...view.people.slice(0, floorRows).map((p) => width(p.tabName || '')));
   const tabW = Math.min(longest, 18, Math.max(0, cols - 1 - FIXED - 16 - 2));
   const tabCol = tabW < 10 ? 0 : tabW;
-  for (let i = 0; i < floorRows; i += 1) {
+  for (let i = 0; i < floorRows - offset; i += 1) {
+    // `i` indexes the roster and `at` indexes the screen, and the two are one apart when
+    // the manager has the first row. Every zebra stripe, hitbox and y below uses `at`.
+    const at = i + offset;
     const person = view.people[i];
     if (!person) {
-      lines.push(fill(cols, i % 2 ? P.carpetEdge : P.carpet));
+      lines.push(fill(cols, at % 2 ? P.carpetEdge : P.carpet));
       continue;
     }
     const st = status(person.status);
@@ -1154,15 +1308,15 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
         ? P.drop
         : selected
           ? P.cubicle
-          : i % 2
+          : at % 2
             ? P.carpetEdge
             : P.carpet;
     lines.push(paint(text, spans, { bg: rowBg }));
-    hitboxes.push({ id: person.id, x: 0, y: startRow + i, w: cols, h: 1 });
+    hitboxes.push({ id: person.id, x: 0, y: startRow + at, w: cols, h: 1 });
     // After the row's own box, which is fine: hitTest prefers a box with an action
     // over the one it is drawn on, and deskAt ignores actions outright, so dropping
     // a dragged desk on somebody's [y] still means their row and not their prompt.
-    for (const btn of answers) hitboxes.push({ id: person.id, action: btn.action, x: btn.x, y: startRow + i, w: btn.w, h: 1 });
+    for (const btn of answers) hitboxes.push({ id: person.id, action: btn.action, x: btn.x, y: startRow + at, w: btn.w, h: 1 });
   }
   return lines;
 }
@@ -1632,6 +1786,183 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   return lines;
 }
 
+// The manager's card: every notice at once, numbered, and nothing to press.
+//
+// A desk's card exists because one desk cannot fit on one tile. This one exists for the
+// opposite reason: the footer shows one notice at a time and the tile shows the most
+// urgent, so the only thing missing was the whole list side by side, which is how you
+// tell "the office has one complaint" from "the office has six".
+//
+// No hitboxes and no answer row, unlike every other panel in this file. There is nothing
+// here that could take a click, because there is nothing here that does anything, and a
+// panel about a floor of agents that cannot touch one of them is worth being obvious
+// about.
+function managerPanel(view, panelRows) {
+  const { size } = view;
+  const m = manager({ notices: view.notices, width: size.cols });
+  const PW = Math.min(size.cols, Math.max(24, size.cols - 4));
+  const TEXT = PW - 4;
+  const left = Math.max(0, Math.floor((size.cols - PW) / 2));
+  const chrome = { borderFg: P.wall, bold: false };
+  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const body = [];
+
+  const head = cells();
+  head.add('╭─ ');
+  head.add(truncate(m.name, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
+  head.add(truncate(` · ${m.role}`, Math.max(0, PW - head.w - 2)), { fg: P.dim });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
+  head.add('╮');
+  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: P.wall }, ...head.out().spans], { bg: P.cubicle, fg: P.wall }));
+
+  // The same figure as on the tile, at the same size, with its two facts beside it. The
+  // second one is the standing promise rather than a status, and it is here rather than
+  // only in the docs because this panel is where somebody goes to ask what this thing is.
+  const art = managerPose(m.pose, view.frame);
+  const who = identity(m.id);
+  const own = m.count ? P.accent : P.dim;
+  const fields = [
+    // Both numbers, in the order they matter. How many desks need somebody is what you
+    // came here to find out; how many things there are to say about them is why the list
+    // below is longer than the count of people.
+    ['noticed', m.count ? `${m.desks} desk${m.desks === 1 ? '' : 's'}, ${m.count} thing${m.count === 1 ? '' : 's'} worth mentioning` : 'nothing worth mentioning', own],
+    ['can do', 'nothing: it reads the floor and writes lines', P.soft],
+  ];
+  for (let i = 0; i < Math.max(ART_ROWS, fields.length); i += 1) {
+    const b = cells();
+    if (i < ART_ROWS) {
+      b.add(art.rows[i], { fg: i === 0 ? own : i === 1 ? who.skin : who.shirt });
+      if (i === 0) b.out().spans.push({ from: HAIR_FROM, to: HAIR_TO, fg: who.hair });
+    } else b.add(' '.repeat(POSE_W));
+    b.add('   ');
+    const field = fields[i];
+    if (field) {
+      b.add(padEnd(field[0], 9), { fg: P.dim });
+      b.add(truncate(field[1], Math.max(0, TEXT - b.w - 9)), { fg: field[2] });
+    }
+    b.gap(TEXT);
+    body.push(row(b.out().text, b.out().spans));
+  }
+
+  const rule = (label) => {
+    const text = truncate(label, Math.max(0, PW - 5));
+    const tag = `├─ ${text} `;
+    return paint(tag + '─'.repeat(Math.max(0, PW - width(tag) - 1)) + '┤', [{ from: 3, to: 3 + [...text].length, fg: P.soft }], {
+      fg: P.wall,
+      bg: P.cubicle,
+    });
+  };
+
+  // The only row after the list that is reserved: the closing border, so the panel shuts
+  // even on a pane too short for the rest of it.
+  //
+  // This was three, holding back the `what to do about it` rule and the line under it as
+  // well, and the change is a decision rather than a tidy-up. That hint is chrome: it
+  // names a key that is in the README, on the footer, and that you pressed twice to get
+  // here. What it was holding those two rows back from is the thing somebody opened this
+  // card to read. On a 110 column pane those two rows are a whole desk's account, so the
+  // old order of priorities spent them saying how to walk to a desk instead of saying what
+  // had happened at it. The hint still draws whenever the desks leave room for it, which
+  // on anything tall is always, and `fit` is what makes that true without arithmetic.
+  const TAIL = 1;
+  // Where a desk's own facts start: a hanging indent under its name, so a block of four
+  // rows reads as one desk rather than as four things the office noticed.
+  const IND = 5;
+  // Always leaving room for the border, so the panel closes even on a pane too short to
+  // hold the rest of it.
+  const fit = (line) => {
+    if (body.length < panelRows - 1) body.push(line);
+  };
+
+  body.push(rule('what happened at each desk'));
+  if (!m.notices.length) {
+    body.push(row('  the floor is quiet', [{ from: 0, to: Infinity, fg: P.dim }]));
+  } else {
+    // One block per desk rather than one row per notice, which is the whole point of the
+    // card and the one thing the first version of it got wrong. A list of notices here was
+    // a wider copy of the status line under the desk, so somebody who opened the card to
+    // find out what had happened to three stopped agents got the same one sentence about
+    // one of them, in a bigger box. See the top of src/briefing.mjs.
+    const blocks = brief({ people: view.people, notices: m.notices }).map((d) => ({ ...d, rows: wrap(d.facts, Math.max(0, TEXT - IND)) }));
+
+    // What fits, with a desk's facts kept together and its headline never dropped while
+    // there is a row for it.
+    //
+    // The asymmetry is deliberate. A desk showing a name and a headline and no detail is
+    // the old card, which was worth something; a desk showing two of its four facts is the
+    // office looking like it does not know the other two, which is worse than saying less.
+    // So the facts are atomic and the headline is not, and the last desk on a short pane
+    // degrades to exactly the line it used to have.
+    const plan = (cap) => {
+      let used = body.length;
+      const out = [];
+      for (const d of blocks) {
+        if (used + 1 > cap) break;
+        used += 1;
+        const rows = used + d.rows.length <= cap ? d.rows : [];
+        used += rows.length;
+        out.push({ ...d, rows });
+      }
+      return out;
+    };
+    const shown = plan(panelRows - TAIL);
+    // Saying "and 2 more desks" costs a row that a list which fits does not have to spend,
+    // and the row is taken off the end rather than by planning the whole list again with
+    // one row less. Re-planning was the first version and it was a bad trade: one row short
+    // over four desks made every one of them give up its facts, so a card that had been
+    // three accounts and a name became four names, which is less of what somebody came here
+    // for. This way the desks at the top keep what they had and the last one down loses its
+    // detail, which is the one whose detail was least likely to be read anyway.
+    let used = body.length + shown.reduce((n, d) => n + 1 + d.rows.length, 0);
+    for (let i = shown.length - 1; i >= 0 && blocks.length > shown.length && used >= panelRows - TAIL; i -= 1) {
+      used -= shown[i].rows.length;
+      shown[i] = { ...shown[i], rows: [] };
+    }
+
+    for (const d of shown) {
+      const b = cells();
+      // The name is the handle, so it is what the eye lands on and the account hangs off
+      // it. No number in front of it: see the bottom of src/briefing.mjs for why the notice
+      // numbers went, which is that they stop counting once desks are the unit.
+      b.add('  ');
+      b.add(truncate(d.name, Math.max(0, TEXT - b.w - 4)), { fg: P.ink, bold: true });
+      b.add(truncate(` · ${d.head}`, Math.max(0, TEXT - b.w)), { fg: d.kind === 'collision' ? SNAG_FG : P.ink });
+      b.gap(TEXT);
+      body.push(row(b.out().text, b.out().spans));
+      for (const line of d.rows) {
+        const w = cells();
+        // Indented under the name rather than under the headline. Under the headline reads
+        // better and costs the width of the longest name in the pool, which on a narrow
+        // pane is the difference between a desk's own words fitting and not.
+        w.add(' '.repeat(IND));
+        w.add(truncate(line, Math.max(0, TEXT - w.w)), { fg: P.soft });
+        w.gap(TEXT);
+        body.push(row(w.out().text, w.out().spans));
+      }
+    }
+    const over = blocks.length - shown.length;
+    if (over > 0) fit(row(`  and ${over} more desk${over === 1 ? '' : 's'}`, [{ from: 0, to: Infinity, fg: P.faint }]));
+  }
+  // The rule and the line under it are one thing, drawn together or not at all. Passed
+  // through `fit` separately they came out as a section heading with nothing beneath it on
+  // any pane one row short, which reads as the office having lost the answer rather than as
+  // having run out of room for the heading.
+  if (body.length + 2 <= panelRows - TAIL) {
+    body.push(rule('what to do about it'));
+    body.push(row(m.notices.length ? '  m walks to the desk each one is about' : '  nothing, which is the good outcome', [
+      { from: 0, to: Infinity, fg: P.dim },
+    ]));
+  }
+  body.push(edge('╰', '╯', PW, chrome));
+
+  const lines = [];
+  for (let i = 0; i < panelRows; i += 1) {
+    lines.push(i >= body.length ? fill(size.cols, P.carpet) : fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return lines;
+}
+
 /* --------------------------------------------------------------------- frame */
 
 export function renderFrame(view) {
@@ -1646,7 +1977,10 @@ export function renderFrame(view) {
   // are either reading about somebody, deciding who to hire, or writing down what
   // somebody should do, never two of the three. Assign outranks the others because
   // it is the one holding half-typed text somebody would lose.
-  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : null;
+  // The manager's card is last, because it is the only one of the four holding nothing:
+  // the other three are each a thing you are in the middle of, and this one you can
+  // reopen from the desk in one keystroke.
+  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : view.board ? 'board' : null;
   const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
@@ -1698,21 +2032,54 @@ export function renderFrame(view) {
   } else {
     grid.cols = zoom === 'cubicle' ? 1 : Math.max(1, Math.floor((cols - 1 + GAP_X) / stepX));
     grid.rows = Math.max(1, Math.floor((floorRows + GAP_Y) / stepY));
-    const lastPage = Math.max(0, Math.ceil(view.people.length / perPage) - 1);
-    // Standing at the empty desk means standing on the last floor, where it is;
-    // it is not in `people`, so findIndex would otherwise send you to floor one.
-    const page =
-      view.selectedId === HIRE_ID
-        ? lastPage
-        : Math.floor(Math.max(0, view.people.findIndex((p) => p.id === view.selectedId)) / perPage);
-    const shown = view.people.slice(page * perPage, page * perPage + perPage);
+    // The manager takes the first desk on floor one and appears nowhere else.
+    //
+    // Every other arrangement was worse. A desk on every floor would have it always on
+    // screen, which sounds right until you try to say which floor you are on when it is
+    // selected: the page is derived from the selection rather than remembered, and a
+    // thing that is on all of them has no answer. A desk on the *last* floor, where the
+    // empty one is, puts the person who watches the floor behind everyone being watched.
+    // So it sits by the door, and the footer line is what carries it to floor three.
+    //
+    // Not while a filter is on, for the reason the empty desk is not either: the
+    // notices are about the whole office, and a manager standing in a view of three
+    // desks would be making claims about the other nine, which are not on the screen.
+    //
+    // And not on a floor that holds exactly one tile, which is cubicle zoom and any pane
+    // too small for a second desk. Taking the slot there means the manager gets a whole
+    // floor to itself and every person is bumped one floor along, so "desk 1 of 8" on a
+    // seven-desk office and one keystroke of walking before you reach a colleague. A
+    // view whose whole purpose is one desk should spend its one desk on a person.
+    //
+    // And not on a floor with nobody on it. An empty office already has one desk drawn
+    // with "hire somebody" on it, and that screen has exactly one job; a second desk
+    // beside it reporting that nothing needs you is true, useless, and in the way of the
+    // only thing a reader with no agents running can usefully do.
+    const hasManager = !filtered && perPage > 1 && view.people.length > 0;
+    // People on floor one, which is one short of a floor once the manager has a desk.
+    const firstPage = perPage - (hasManager ? 1 : 0);
+    const pageOf = (i) => (i < firstPage ? 0 : 1 + Math.floor((i - firstPage) / perPage));
+    const pages = 1 + Math.ceil(Math.max(0, view.people.length - firstPage) / perPage);
+    const lastPage = pages - 1;
+    // Standing at the empty desk means standing on the last floor, where it is; it is
+    // not in `people`, so findIndex would otherwise send you to floor one. The manager
+    // is the mirror image: it *is* on floor one, and -1 already lands there.
+    const found = view.people.findIndex((p) => p.id === view.selectedId);
+    const page = view.selectedId === HIRE_ID ? lastPage : pageOf(Math.max(0, found));
+    const from = page === 0 ? 0 : firstPage + (page - 1) * perPage;
+    const shown = view.people.slice(from, page === 0 ? firstPage : from + perPage);
     // One spare desk, on the last floor, only when there is a slot going free.
     // Paging for a desk nobody sits at would be worse than not offering it.
     // No spare desk while a filter is on: an empty chair that appeared because you
     // typed three letters reads as somebody having left.
-    const vacancy = page === lastPage && shown.length < perPage && !filtered;
-    const slots = [...shown.map((person) => ({ person })), ...(vacancy ? [{ vacancy: true }] : [])];
-    grid.ids = slots.map((s) => (s.vacancy ? HIRE_ID : s.person.id));
+    const taken = shown.length + (hasManager && page === 0 ? 1 : 0);
+    const vacancy = page === lastPage && taken < perPage && !filtered;
+    const slots = [
+      ...(hasManager && page === 0 ? [{ manager: true }] : []),
+      ...shown.map((person) => ({ person })),
+      ...(vacancy ? [{ vacancy: true }] : []),
+    ];
+    grid.ids = slots.map((s) => (s.vacancy ? HIRE_ID : s.manager ? MANAGER_ID : s.person.id));
 
     const usedRows = Math.ceil(slots.length / grid.cols);
     const blockW = grid.cols * TILE_W + (grid.cols - 1) * GAP_X;
@@ -1739,6 +2106,16 @@ export function renderFrame(view) {
         if (slot.vacancy) {
           hitboxes.push({ id: HIRE_ID, action: 'hire', x, y, w: TILE_W, h: TILE_H });
           return vacantTile({ selected: view.selectedId === HIRE_ID, pending: Boolean(view.hire?.pending), kind: view.hire?.pending });
+        }
+        if (slot.manager) {
+          // No `action` on the hitbox. The empty desk carries `hire`, because clicking it
+          // starts an agent; clicking this one selects a desk and nothing else, which is
+          // the whole of what it can do.
+          hitboxes.push({ id: MANAGER_ID, x, y, w: TILE_W, h: TILE_H });
+          return managerTile(manager({ notices: view.notices, width: INNER }), {
+            selected: view.selectedId === MANAGER_ID,
+            frame: view.frame,
+          });
         }
         const person = slot.person;
         hitboxes.push({ id: person.id, x, y, w: TILE_W, h: TILE_H });
@@ -1771,7 +2148,6 @@ export function renderFrame(view) {
       }
     }
 
-    const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
     const board = whiteboard(view.stats, view.now);
@@ -1802,6 +2178,7 @@ export function renderFrame(view) {
     out.push(...drawn.lines);
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
+  else if (panel === 'board') out.push(...managerPanel(view, detailRows));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid, regions };
 }

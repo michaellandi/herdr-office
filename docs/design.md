@@ -310,8 +310,12 @@ rather than an oversight. A fact about a pair of desks has no field on anybody's
 so it had nowhere to go.
 
 `src/notices.mjs` is where they go. It takes the roster the office has just built and
-returns sentences, ranked. The footer draws one, `m` walks you to a desk it names, and
-that is the whole feature.
+returns sentences, ranked. `src/manager.mjs` decides how a desk says one of them, and
+`src/briefing.mjs` turns them back into an account of each desk they are about. The footer
+draws the most urgent, a desk on the floor plan draws the same one under a monitor counting
+the desks that need somebody, a card briefs every one of those desks in turn ([what
+happened at each desk](#what-happened-at-each-desk)), and `m` walks you to the desk each
+one is about.
 
 Four notices, and the order between them is an argument about what can still be saved:
 
@@ -326,10 +330,11 @@ Four notices, and the order between them is an argument about what can still be 
 
 The obvious next step from here is a coordinator that acts: notices a collision and
 moves somebody, notices a stall and prods it. That version is not this one, and the
-first one deliberately cannot become it by accident. `src/notices.mjs` has no socket,
-no clock, no writes and no state between calls, and the only key it adds moves a
-highlight. A thing that cannot do anything is much easier to believe, and the argument
-for shipping a manager at all is that this one is provably incapable of managing.
+first one deliberately cannot become it by accident. `src/notices.mjs`, `src/manager.mjs`
+and `src/briefing.mjs` have no socket, no clock, no writes and no state between calls, and
+the only key they add moves a highlight. A thing that cannot do anything is much easier to
+believe, and the argument for shipping a manager at all is that this one is provably
+incapable of managing.
 
 The same constraint shapes the wording. A notice states a fact and does not give an
 instruction: "Ada and Bo are both in herdr-office" is the whole of what the office
@@ -398,6 +403,180 @@ Pressing `m` takes you to the notice already on the footer, and only advances on
 are standing there. Advancing first was the obvious implementation and it means the
 notice on screen when you reached for the key is the one notice the key never shows
 you.
+
+### A desk, because correct and invisible reads as broken
+
+The first version of this only spoke on the footer, and only when it had something to
+say. On a floor where nothing was wrong it drew nothing at all, which is the correct
+behaviour and was indistinguishable, to the person who had asked for it, from a feature
+that had never been built. The report was accurate and the product was broken.
+
+So the manager sits at a desk, drawn like everybody else, calm when there is nothing to
+report. `WATCHING` and "nothing needs you right now" is a worse use of a tile than a
+sentence about a real problem, and a better one than an empty chair, because it answers
+the question a reader actually has, which is not "what is wrong" but "is this thing
+running".
+
+It costs a desk. Floor one holds one fewer person and everybody after them moves along
+one, which is why the desk stands down in three cases where the cost is not worth paying:
+under a filter, because its notices are about the whole office and a filtered view is
+not the whole office; in the cubicle, where taking the only desk would mean a floor to
+itself; and on an empty floor, where the screen already has exactly one useful thing to
+say and it is how to hire somebody.
+
+Nothing behind it. The id is `+manager`, which no real pane can collide with because
+herdr pane ids are `workspace:pane`, and `src/manager.mjs` is a pure function from a list
+of sentences to strings with no callable on the object it returns. The desk is drawn in
+the middle of the grid and still cannot reach an agent: `y`, `n`, `s`, `a` and `f` all
+refuse there and say which desk this is rather than swallowing the key. Fixing that
+turned up the same bug one keystroke smaller at the empty desk, where those keys had been
+returning silently.
+
+### Why a desk stopped
+
+"Dev stopped 16m02s ago with 7 files uncommitted" says a desk has a problem and nothing
+whatever about what it is, so the only use for it was to go and read the pane, which is
+what you were doing before the office had a manager. The answer was already on the wire:
+the office reads every desk's visible screen on a rotation for the context gauge, and
+threw the text away for everybody who was not blocked.
+
+Two answers, in the order of how much the office owns them. A conflicted tree is the
+office's own fact, read out of git by the same pass that counted the files, and it is the
+most common reason an agent gives up mid-task. Failing that, the last line that desk was
+seen saying, quoted and attributed. Never rewritten into a cause: `said "3 tests failed"`
+is a fact about a screen, where "it stopped because the tests failed" is a guess about an
+agent's reasoning, and the first rule of this whole feature is that the office does not
+make those.
+
+Quoting screen text here is a deliberate exception to the rule that keeps it off the
+same-ask line. There, the question is already drawn in full in both bubbles, so repeating
+it spends the one row on nothing. Here there is no bubble at all: an idle desk's monitor
+says `ALL DONE`, which is the office agreeing it has stopped and saying nothing about
+why. The sentence is the only place the answer can go.
+
+The reason rides alongside the sentence rather than inside it, as its own field on the
+notice, because the surfaces that draw it have four different amounts of room and a
+reason appended to the text would be the first thing truncated away, which would mean the
+new information is exactly the information nobody sees. Each surface spends its own room:
+
+| Where | What it does with a reason |
+|---|---|
+| the card | no longer prints the notice's reason at all, because the card stopped being a list of notices. It draws a desk's own words as the last clause of that desk's account, so the reason is per desk rather than per notice. See [what happened at each desk](#what-happened-at-each-desk) |
+| the compact list row | appends it, with the whole pane width to spend |
+| the footer | appends it when the whole of it fits in the message slot |
+| the tile's status bar | 27 cells, so it keeps the fact and drops the reason. The chip already counts and the monitor already says what kind, so on a tile the fact is stated three times over while the reason needs a full sentence or none |
+
+Printed whole or not at all, everywhere. Half a quote is the office putting somebody
+else's words in its mouth and cutting them off mid-sentence, which is worse than the line
+it replaced. The bug that rule exists to catch was found by a test sweeping every pane
+size: the compact row asked for its sentence at the pane's full width and then cut the
+row down to fit, which is precisely the failure being forbidden, so the row now asks for
+the sentence at the width it is about to be drawn in.
+
+The quote is capped at 36 cells, which is a number chosen against a pane rather than
+rounded. At 44 a stall line plus `said "..."` came to 106 cells, and since every surface
+prints a reason whole or not at all, that meant an ordinary 110 column pane showed the
+reason nowhere but the card. The cap decides how wide a pane has to be before the feature
+exists at all.
+
+A quote belongs to the turn it was read in, so a change of state drops it. Carrying it
+across makes it the last thing the agent said *before this task*, which is not what any
+sentence built on it claims. A screen with nothing quotable on it is recorded as an
+answer rather than skipped, the same way a null context reading is, because the only
+other thing that ever overwrites a quote is another quote, and a desk would otherwise
+keep citing a sentence it read twenty minutes and three tasks ago.
+
+### What happened at each desk
+
+The reason above fixed the wrong half of the problem, and the complaint that said so is
+worth quoting because it is the whole brief for what replaced it: the point of a chief of
+staff is to get the details without visiting each agent, and what the office actually gave
+was one ambiguous line about one agent while three were stuck.
+
+It was worse than that on inspection. Three desks stopped in one checkout produced one
+notice, a chip saying `1 THING`, a tile line truncated to `Ada, Bo and Cass stopped i…`,
+and Bo's and Cass's own words read off their screens and thrown away. Every fact needed to
+explain all three was already in the roster.
+
+The cause was a grouping that is right about one thing and wrong about another. Several
+desks parked in one checkout are one notice, because four reports of one directory's file
+count read as four times the work, and that is genuinely the directory's single fact. The
+reasons are not: each agent's last words belong to that agent. So the count and the
+sentence were grouped together when only the count should have been.
+
+What the card draws now is one short account per desk, with the notice it came from as the
+account's first line:
+
+```
+├─ what happened at each desk ──────────────────────────────────────────────┤
+│   Ada · stopped 30m00s ago                                                │
+│      was doing "apply the security patch" · on a-manager-who-notices …    │
+│      tests failed 24m20s ago · 7 uncommitted · said "I cannot apply the…" │
+│   Bo · stopped 40m00s ago                                                 │
+│      was doing "rewrite the auth guard" · merge conflict 5m20s ago        │
+│      7 uncommitted · 3 conflicted · said "Should I delete the old migra…" │
+├─ what to do about it ─────────────────────────────────────────────────────┤
+│   m walks to the desk each one is about                                   │
+```
+
+Nothing here is written by a model. It is a digest of structured facts the office already
+holds, assembled in a fixed order, which is what makes it free and what keeps it inside
+the first rule of the feature. `was doing X · tests failed 24m ago · 7 uncommitted · said
+Y` is four things that are true; "gave up because the tests failed" would be a guess about
+an agent's reasoning. The order of the clauses is the nearest thing to a narrative and it
+is only an order. Whoever reads it draws the conclusion, which is the right way round,
+because they know things about this work that the office does not. A summary in the sense
+of prose written about the desk would need the manager to be a real hired agent with real
+tokens, which is a different and much larger question.
+
+Five decisions inside it, each of which was a bug first:
+
+- **The chip counts desks, not notices.** `deskCount` is a set of every id every notice
+  mentions, so three agents stuck in one checkout is `3 DESKS`. One is the number of
+  sentences the office has to say and three is the number of people who need somebody, and
+  nobody has ever wanted the first number. A set rather than a list because a desk can be
+  in two notices at once, and `2 DESKS` for one person is the same lie the other way.
+- **A desk appears once and says both its reasons.** The commonest pair on a real floor is
+  a full head in a shared checkout. The more urgent notice is the headline and the other
+  joins the front of the account, rather than two blocks under one name repeating the same
+  four facts.
+- **There are no numbers on the list.** Numbers were the only handle the notice list had,
+  and a desk has a name. Once desks rather than notices are the unit, a number beside a
+  desk can only be the index of the notice it was filed under, which skips whenever two
+  notices are about one desk, and a list jumping from 2 to 4 is a reader hunting for the
+  missing one.
+- **News outlives the slab it was drawn on.** `tests failed 24m ago` over a desk stopped
+  for half an hour is most of the answer, and it used to be deleted twelve seconds after
+  it arrived because the only surface that drew it was the slab over the desk. The roster
+  now fades the entry instead of dropping it and reports whether anything changed, so a
+  card can ask what last happened here without repainting the office twice a second. The
+  pane going away is what clears it, otherwise a reused pane id would inherit the previous
+  agent's failing test run as its own history.
+- **The accounts outrank the hint.** The rows held back for `what to do about it` were two
+  rows of chrome naming a key that is in the README, on the footer, and that you pressed
+  to get here. On a 110 column pane they are a whole desk's account. Only the closing
+  border is reserved now, the hint draws whenever the desks leave room for it, and the
+  rule and the line under it are drawn together or not at all, since a section heading
+  with nothing beneath it reads as the office having lost the answer.
+
+Clipping is where a card like this usually goes wrong, so the order it gives things up in
+is deliberate. A desk's facts are atomic and its headline is not: a desk showing a name
+and a headline is the old card, which was worth something, whereas a desk showing two of
+its four facts is the office looking like it does not know the other two. When one row is
+needed for `and 2 more desks` it comes off the last desk shown rather than by planning the
+list again one row shorter, because re-planning made every desk give up its detail to pay
+for the overflow line, turning three accounts and a name into four names.
+
+The quote cap here is 44 rather than the 36 a notice gets, and the difference is about room
+and not about caution: a notice shares one status line with a whole sentence, while a
+clause here gets a panel row to itself. 44 is what a screen is already quoted at on the
+detail card, so a desk's own words are the same length wherever you read them.
+
+One consequence worth stating rather than discovering: the panel still takes half the room
+below the header, the same as every other card. At 140x46 that is three full accounts. At
+110x30 it is one account in full and the other desks named, because collapsing the whole
+floor to a list whenever this card opens would be a bigger surprise than clipping detail on
+a short pane.
 
 ## How close you want to stand
 

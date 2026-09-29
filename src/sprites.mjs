@@ -108,14 +108,25 @@ export function runningScreen(label, frame) {
   ];
 }
 
+// Which frame of a loop to draw. `frames[frame % frames.length]` is not it, for two
+// reasons that both hand the renderer `undefined` and throw inside the repaint, taking
+// the whole office down rather than dropping a frame: a negative frame indexes past the
+// start of the array, and a fractional one is not an index at all. The counter in
+// office.mjs only ever goes up in whole steps, so this is a guard on the contract.
+const at = (frames, frame) => {
+  const n = frames.length;
+  const i = Math.floor(Number(frame)) || 0;
+  return frames[((i % n) + n) % n];
+};
+
 export const pose = (statusName, frame) => {
   const p = POSES[statusName] || POSES.unknown;
-  return { rows: p.frames[frame % p.frames.length], emote: p.emote };
+  return { rows: at(p.frames, frame), emote: p.emote };
 };
 
 export const screen = (statusName, frame) => {
   const s = SCREENS[statusName] || SCREENS.unknown;
-  return s[frame % s.length];
+  return at(s, frame);
 };
 
 // The hair sits at these columns on the top row; everything else up there is an
@@ -129,6 +140,47 @@ export const HAIR_TO = 9;
 // putting it there would mean teaching every pose rule about the exception.
 export const VACANT_CHAIR = ['            ', '    ╭───╮   ', '    │   │   ', '    ╰─┬─╯   '];
 export const VACANT_SCREEN = ['            ', '            '];
+
+// The office manager, who is not an agent and does not get an agent's poses.
+//
+// Two states rather than five, because there are only two things true of it: it has
+// something to tell you or it does not. The clipboard in its right hand is in both, and
+// it is the whole reason this is a separate set: it is the one prop on the floor that
+// says at a glance which desk is the manager's, and a passer-by should not have to read
+// the nameplate to work that out.
+//
+// What has deliberately *not* been reused is the blocked pose. A raised arm already
+// means "this agent is waiting on you" everywhere else in the office, and the manager
+// is never waiting on anything. So the news state keeps both hands where they were and
+// puts a `!` up top, which is the same marker the footer uses for the same sentence.
+//
+// Outside POSES for the reason VACANT_CHAIR is: `pose()` looks its argument up by agent
+// status, and there is no status these belong to. Its own self-check is at the bottom.
+export const MANAGER_POSES = {
+  watching: {
+    emote: 'status',
+    frames: [
+      ['    ▄▄▄▄▄   ', '    (·_·)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'],
+      ['    ▄▄▄▄▄   ', '    (·_·)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'],
+      ['    ▄▄▄▄▄   ', '    (-_-)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'], // a blink
+      ['    ▄▄▄▄▄   ', '    (·_·)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'],
+    ],
+  },
+  // The marker blinks and nothing else moves. Enough to catch an eye crossing the
+  // floor, and not enough to compete with a hand actually going up two desks over.
+  news: {
+    emote: 'status',
+    frames: [
+      ['    ▄▄▄▄▄ ! ', '    (o_o)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'],
+      ['    ▄▄▄▄▄   ', '    (o_o)   ', '   ╭──┴──╮┌┐', '   │ ███ │└┘'],
+    ],
+  },
+};
+
+export const managerPose = (name, frame) => {
+  const p = MANAGER_POSES[name] || MANAGER_POSES.watching;
+  return { rows: at(p.frames, frame), emote: p.emote };
+};
 
 // Furniture. None of it means anything, which is the point: an office with only
 // desks in it reads as a spreadsheet. Each piece is a small block of rows plus
@@ -214,6 +266,14 @@ for (const [name, p] of Object.entries(POSES)) {
     if (rows.length !== ART_ROWS) throw new Error(`pose ${name}[${i}] has ${rows.length} rows`);
     rows.forEach((r, j) => {
       if ([...r].length !== POSE_W) throw new Error(`pose ${name}[${i}] row ${j} is ${[...r].length} wide, want ${POSE_W}`);
+    });
+  });
+}
+for (const [name, p] of Object.entries(MANAGER_POSES)) {
+  p.frames.forEach((rows, i) => {
+    if (rows.length !== ART_ROWS) throw new Error(`manager pose ${name}[${i}] has ${rows.length} rows`);
+    rows.forEach((r, j) => {
+      if ([...r].length !== POSE_W) throw new Error(`manager pose ${name}[${i}] row ${j} is ${[...r].length} wide, want ${POSE_W}`);
     });
   });
 }

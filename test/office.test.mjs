@@ -698,3 +698,84 @@ test('the first press takes you to the notice on screen rather than past it', as
     await office.stop();
   }
 });
+
+test('the manager has a desk, and every key that writes refuses at it', async () => {
+  // The desk is drawn in the middle of the grid, next to desks where y sends a
+  // keystroke to a real agent and a sends a real prompt. So the claim that it is
+  // read-only is not a property of src/manager.mjs, which obviously cannot reach a
+  // socket; it is a property of the whole running office with that desk selected.
+  //
+  // A quiet floor on purpose: two idle desks in one checkout is not a collision, so
+  // there is nothing to report, and `m` on a floor with nothing to say is what walks
+  // you to the desk. Which is also the answer to the original complaint: the key that
+  // used to print "nothing worth mentioning" and leave you standing where you were now
+  // takes you to somebody sitting there doing the watching.
+  const office = await openOffice({ agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'idle', 1)] });
+  try {
+    await office.ready('2 desks');
+    // Drawn before anything is pressed, which is the whole point of the desk: a manager
+    // with nothing to report is visibly sitting there rather than absent.
+    assert.ok(office.onScreen('THE MANAGER'), 'the desk was not on the quiet floor');
+    assert.ok(office.onScreen('WATCHING'), 'the desk did not say what it was doing');
+    assert.ok(office.onScreen('nothing needs you right now'));
+
+    // Walk to it, then open its card, which is the one panel in the office with no
+    // buttons on it. A wait between the two keys and not an `until`: everything `m`
+    // changes was already on this screen before it was pressed, so any predicate about
+    // the manager is already true and returns in the same tick, which lets `m` and the
+    // return key reach the office as the single string "m\r". That matches no key at all,
+    // and this test failed roughly one run in eight on exactly that. The card appearing is
+    // itself the proof `m` landed: return at anybody else's desk opens their detail panel,
+    // which says nothing about reading the floor.
+    office.type('m');
+    await settle();
+    office.type('\r');
+    await office.until('the card', () => office.onScreen('it reads the floor and writes lines'));
+    assert.ok(office.onScreen('nothing, which is the good outcome'));
+
+    // Now every key that can reach an agent, from that desk, with the card open. One at
+    // a time with a wait between: stdin arrives in chunks, and six keys written in one
+    // tick reach the office as the single string "nYasf", which matches no key at all
+    // and would make this pass without having pressed anything.
+    office.type('y');
+    await office.until('a refusal', () => office.onScreen('the manager does not take jobs'));
+    // The rest one per write, with a gap between: stdin arrives in chunks, and four keys
+    // written in one tick reach the office as the single string "nYas", which matches no
+    // key at all and would make this pass without having pressed anything.
+    //
+    // No screen assertion per key, deliberately. All five refuse with the same sentence
+    // and draw() writes only the rows that changed, so the second identical refusal paints
+    // nothing; counting them is a race against the clock in the header rather than a fact
+    // about the office. What is asserted instead is below, and it is the stronger claim:
+    // nothing went out, and neither field these keys can open ever appeared.
+    for (const key of ['n', 'Y', 'a', 's']) {
+      office.type(key);
+      await settle();
+    }
+    // And the key that walks you to somebody's terminal, which fails differently: there
+    // is no pane behind this desk to walk to. Matched on the front of the sentence,
+    // because the footer shares its row with the key hints and cuts the tail.
+    office.type('f');
+    await office.until('the pane refusal', () => office.onScreen('the manager has no pane'));
+    await settle();
+
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'the manager sent keystrokes to an agent');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'the manager prompted an agent');
+    assert.deepEqual(office.sent('pane.send_input'), [], 'the manager typed into a pane');
+    assert.deepEqual(office.sent('pane.focus'), [], "the manager moved somebody else's focus");
+    assert.deepEqual(office.sent('pane.swap'), [], 'the manager moved a pane');
+    assert.deepEqual(office.sent('pane.close'), [], 'the manager closed a pane');
+    assert.deepEqual(office.sent('agent.start'), [], 'the manager hired somebody');
+    assert.deepEqual(office.sent('worktree.create'), [], 'the manager made a worktree');
+    // And no key opened a field to write in. `a` opens a job field and `s` an answer
+    // field at any desk with somebody at it, so their absence over everything the office
+    // has drawn is what says those two keys were read and turned down.
+    assert.ok(!office.onScreen('enter to review who gets it'), 'a opened a job field at the manager\'s desk');
+    assert.ok(!office.onScreen('type your answer'), 's opened an answer field at the manager\'s desk');
+    // And it said why each time rather than swallowing the key, which is the whole
+    // difference between a desk that is quiet and a desk that looks broken.
+    assert.ok(office.onScreen('it only reports'));
+  } finally {
+    await office.stop();
+  }
+});

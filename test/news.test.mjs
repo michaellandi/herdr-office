@@ -11,7 +11,7 @@
 // looks exactly like the feature not working if you do not know the rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { officeRoster, viewOf, stripAnsi } from './fixtures.mjs';
+import { officeRoster, viewOf, stripAnsi, personRow } from './fixtures.mjs';
 import { renderFrame } from '../src/render.mjs';
 
 const LABEL = 'tests failed';
@@ -27,7 +27,10 @@ function frameWith(index, { cols, rows }, label = LABEL) {
 
 // Wide enough for desks, and wide enough for the compact list. Both draw news, in
 // different places, which is why both are here.
-const FLOOR = { cols: 120, rows: 40 };
+// Four desks wide rather than three. The manager has a desk of its own on floor one now,
+// so a floor that fit six people fits five, and two of this fixture's three raised hands
+// were on page two: the test below needs them drawn to be testing anything.
+const FLOOR = { cols: 140, rows: 40 };
 const LIST = { cols: 60, rows: 20 };
 
 test('a label on a desk becomes a slab on the screen', () => {
@@ -88,7 +91,7 @@ test('the compact list carries news where the command goes', () => {
   // command was in. Asserted on the row rather than the frame, or a label appearing
   // anywhere at all would pass.
   const { text, people } = frameWith(1, LIST);
-  const row = text.split('\n').find((l) => l.includes(people[1].name));
+  const row = personRow(text.split('\n'), people[1].name);
   assert.ok(row, 'the desk is not in the list');
   assert.ok(row.includes(LABEL), `news is not on the desk's own row: ${JSON.stringify(row)}`);
   // The command it displaced is a fixture title, so its absence is the displacement.

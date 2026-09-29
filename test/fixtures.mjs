@@ -6,6 +6,7 @@
 import { Roster } from '../src/roster.mjs';
 import { stripAnsi } from '../src/text.mjs';
 import { assignRooms } from '../src/rooms.mjs';
+import { notices as noticesOf } from '../src/notices.mjs';
 import { describeDetection, summarize } from '../src/summary.mjs';
 
 export { stripAnsi };
@@ -371,7 +372,7 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'log parser', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0 }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -402,5 +403,12 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     stats,
     shift,
     trust,
+    // Derived from these people by default, for the same reason the rooms are: this is
+    // what office.mjs passes, so a test that does not mention notices still renders the
+    // frame the real office would draw for the roster it was handed. Several fixtures
+    // put desks in a shared checkout, so this is not always the empty list, which is
+    // the point: the footer has to hold a real one at every size.
+    notices: notices || noticesOf({ people }),
+    noticeAt,
   };
 }

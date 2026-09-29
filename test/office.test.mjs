@@ -687,3 +687,73 @@ test('an office opening for the second time today picks the clocks back up', asy
     await office.stop();
   }
 });
+
+test('the manager notices two desks in one checkout, and m walks the list', async () => {
+  // The chief of staff end to end (see src/notices.mjs). Every desk the harness makes
+  // shares `/somewhere/repo`, so two working ones is a real collision built out of
+  // nothing but what herdr said, and the gauge on the shared screen makes both of them
+  // nearly full as well. Three notices, so `m` has somewhere to go and the counter on
+  // the footer is the proof that it went there.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'idle', 2)],
+    screenText: 'Working on it\n  Opus | Context: 94% | session: 19h 03m',
+    cols: 200,
+  });
+  try {
+    await office.ready('3 desks');
+    await office.until('the notice', () => /Ada and Bo are both in repo/.test(office.screen()));
+    // Only the last segment of the path, on a line that gets screen-shared.
+    assert.ok(!office.onScreen('/somewhere/repo'), 'the whole path reached the footer');
+    // The idle desk is sitting still, so it is not named as being in the way.
+    assert.ok(!/Ada, Bo and Cass/.test(office.screen()), 'a desk that has stopped was counted as in the room');
+    assert.ok(/1\/3/.test(office.screen()), 'the footer did not say which of three notices it was showing');
+
+    // The first press takes you to the notice already on the footer, so the one on
+    // screen when you reached for the key is not the one it skips.
+    const at = () => (office.screen().match(/(\d)\/3(?!\d)/g) || []).slice(-1)[0];
+    office.type('m');
+    await office.until('the second notice', () => at() === '2/3');
+    assert.ok(/Ada is 94% full and still working/.test(office.screen()), 'the second notice was not drawn');
+    office.type('m');
+    await office.until('the third notice', () => at() === '3/3');
+    assert.ok(/Bo is 94% full and still working/.test(office.screen()), 'the third notice was not drawn');
+    // And round, rather than off the end.
+    office.type('m');
+    await office.until('the list to come round', () => at() === '1/3');
+
+    // All of which was a read. That is the entire claim this first version of a
+    // manager makes about itself, so it is asserted rather than assumed.
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'the manager wrote to an agent');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'the manager prompted an agent');
+    assert.deepEqual(office.sent('pane.send_input'), [], 'the manager typed into a pane');
+    assert.deepEqual(office.sent('pane.focus'), [], "the manager moved somebody else's focus");
+  } finally {
+    await office.stop();
+  }
+});
+
+test('the first press takes you to the notice on screen rather than past it', async () => {
+  // The desk the office opens on is idle and so is in none of the notices, which is the
+  // only arrangement that can tell the two readings of `m` apart. Advancing first would
+  // mean the notice sitting on the footer when the reader reached for the key is the one
+  // notice the key never shows them, so the count has to stay where it is and the
+  // selection has to be what moves.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'working', 2)],
+    screenText: 'Working on it\n  Opus | Context: 94% | session: 19h 03m',
+    cols: 200,
+  });
+  try {
+    await office.ready('3 desks');
+    const at = () => (office.screen().match(/(\d)\/3(?!\d)/g) || []).slice(-1)[0];
+    await office.until('three notices', () => at() === '1/3');
+    office.type('m');
+    await settle();
+    assert.equal(at(), '1/3', 'the first press skipped the notice it was showing');
+    // And the second one moves, so the key is not simply doing nothing.
+    office.type('m');
+    await office.until('the second notice', () => at() === '2/3');
+  } finally {
+    await office.stop();
+  }
+});

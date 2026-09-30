@@ -65,6 +65,39 @@ export function defaultBranch(kind, now = new Date()) {
   return sanitizeBranch(`office/${kind || 'agent'}-${stamp}`);
 }
 
+// Which agent to hire when nobody was asked. The menu exists for the case where the choice
+// matters, and for a manager it does not: it reads a digest and writes three sentences, which
+// is a job every kind on the list can do. So the choice is made from the floor, on the theory
+// that the kind you already have six of is the one you are logged into, have paid for, and
+// will not be surprised to see start.
+//
+// Ties, and a floor of kinds this machine cannot start, both fall through to the head of
+// `kinds`, which arrives sorted, so the same floor picks the same manager twice. A default
+// that moved between runs would make this feature feel like it was choosing for itself.
+export function managerKind(people, kinds) {
+  const offered = (kinds || []).filter(Boolean);
+  if (!offered.length) return null;
+  const tally = new Map();
+  for (const p of people || []) {
+    // Not filtered against `offered` here, deliberately. The loop below only ever reads the
+    // tally for a kind that is offered, so counting a kind this machine cannot start costs a
+    // map entry nobody looks at, and the guard that used to be here was a line no test could
+    // hold: removing it changed no answer this function gives.
+    if (!p?.kind) continue;
+    tally.set(p.kind, (tally.get(p.kind) || 0) + 1);
+  }
+  let best = null;
+  let most = 0;
+  for (const kind of offered) {
+    const n = tally.get(kind) || 0;
+    if (n > most) {
+      most = n;
+      best = kind;
+    }
+  }
+  return best || offered[0];
+}
+
 // One step of the menu cursor. `limit` is how many cells are actually on the
 // screen, not how many kinds exist: a cursor you cannot see is worse than a list
 // you cannot reach the end of.

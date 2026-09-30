@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+// The pane the fake herdr hands back from `tab.create`. Not in any test's `agents` list, so
+// a manager is always somebody who was not on the floor a moment ago.
+const HIRED_PANE = 'w1:hired';
 
 // A desk, as herdr describes one.
 const desk = (id, status, i, extra = {}) => ({
@@ -49,7 +52,7 @@ const desk = (id, status, i, extra = {}) => ({
 // Deliberate, and the reason these tests can see a duplicate at all. The real
 // herdr resets instead, so on the machine this was found on the duplicate was
 // dropped by the kernel and looked like nothing was wrong.
-async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null, book = null } = {}) {
+async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null, book = null, manifests = null, hireFails = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-office-run-'));
   const sockPath = path.join(dir, 's');
   const gitLog = path.join(dir, 'git-calls');
@@ -69,6 +72,11 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
       // what most of these tests want. With it, the office knows the directory is a
       // checkout, which is the gate on running git in it at all.
       'worktree.list': worktrees ?? {},
+      // Hiring. `manifests` off by default, so a test that did not ask for this gets a
+      // machine that can start nothing, which is the honest answer for a fake herdr and
+      // is also the failure the office has to survive.
+      'server.agent_manifests': { manifests: (manifests ?? []).map((agent) => ({ agent })) },
+      'tab.create': { root_pane: { pane_id: HIRED_PANE } },
     })[method] ?? {};
 
   const live = new Set();
@@ -87,6 +95,20 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
         if (!line.trim()) continue;
         const req = JSON.parse(line);
         asked.push({ method: req.method, params: req.params });
+        // The one method in here that fails on request, because the office's behaviour after
+        // a hire that did not work is half of what there is to test about hiring: it must not
+        // try again, and it must say what to press instead.
+        if (req.method === hireFails) {
+          sock.write(`${JSON.stringify({ id: req.id, error: { code: 'NOPE', message: 'no room at the inn' } })}\n`);
+          sock.end();
+          return;
+        }
+        // A started agent turns up in the next `agent.list`, which the real herdr does and a
+        // lookup table cannot. Without it the office correctly decides the manager it just
+        // hired is not on the floor, and the whole path stops one call short of interesting.
+        if (req.method === 'agent.start' && req.params?.pane_id) {
+          agents.push(desk(req.params.pane_id, 'idle', agents.length, { agent: req.params.kind, cwd: req.params.cwd || '/tmp/manager' }));
+        }
         // The subscription is the one connection that stays open and pushes.
         if (req.method === 'events.subscribe') {
           sock.write(`${JSON.stringify({ id: req.id, result: { subscribed: (req.params?.subscriptions || []).length } })}\n`);
@@ -775,6 +797,150 @@ test('the manager has a desk, and every key that writes refuses at it', async ()
     // And it said why each time rather than swallowing the key, which is the whole
     // difference between a desk that is quiet and a desk that looks broken.
     assert.ok(office.onScreen('it only reports'));
+  } finally {
+    await office.stop();
+  }
+});
+
+/* ------------------------------------------ hiring a manager without being asked */
+
+// The one thing the office does that starts a real agent without anybody pressing a key, so
+// it is the one thing most worth running against a herdr that is not real. `M` can be tried
+// by hand on a live floor and this cannot: it fires on a card opening, which is exactly what
+// somebody trying it out would do, and if the gate is wrong the failure is a pile of agent
+// sessions somebody is paying for.
+
+test('opening the manager card hires a manager, of the kind the floor is mostly made of', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0, { agent: 'codex' }), desk('w1:p2', 'working', 1, { agent: 'codex' }), desk('w1:p3', 'idle', 2)],
+    manifests: ['claude', 'codex', 'gemini'],
+    args: ['--board'],
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the hire', () => office.sent('agent.start').length === 1);
+    const started = office.sent('agent.start')[0].params;
+    assert.equal(started.kind, 'codex', 'it did not hire the kind the floor is made of');
+    assert.equal(started.pane_id, HIRED_PANE, 'it started an agent somewhere other than the tab it made');
+
+    // A plain tab, not a worktree. A manager never reads code, so the smallest thing that
+    // will hold one is an empty directory, and an empty directory is a smaller blast radius
+    // than the throwaway branch `M` defaults to: there is no repository there to damage.
+    assert.equal(office.sent('worktree.create').length, 0, 'it made a worktree for somebody who never reads code');
+    const tab = office.sent('tab.create')[0].params;
+    assert.equal(tab.focus, false, 'it took the reader off the card it was drawing');
+    assert.ok(tab.cwd.startsWith(os.tmpdir()), `it sat the manager somewhere permanent: ${tab.cwd}`);
+    assert.ok(fs.existsSync(tab.cwd), 'the directory it named does not exist');
+    assert.ok(!fs.existsSync(path.join(tab.cwd, '.git')), 'the manager room is a repository');
+    // And not where the desks are. The hand hire takes its cwd from whoever is focused, which
+    // is the right default for somebody who is going to write code and the wrong one for
+    // somebody who is going to read a paragraph.
+    assert.notEqual(tab.cwd, '/somewhere/repo', 'it sat the manager in a checkout somebody is working in');
+
+    // And it is trusted with nothing. `trust_repository` is never sent, by either hire path.
+    assert.ok(!('trust_repository' in tab), 'the office pre-trusted a repository');
+
+    // Named on the card as a person, like every other desk: the kind is what was started and
+    // the name is who is sitting there, and the card is about the latter.
+    await office.until('the card to name them', () => /\w+ · (nothing asked yet|reading the floor now)/.test(office.screen()));
+    assert.ok(!office.onScreen('nobody hired'), 'the card still said nobody was hired');
+    // The manager is not a desk the office reports on. It arrived on the floor a moment ago
+    // and a stall notice about the office's own manager would go into the manager's own next
+    // digest, which is the office summarizing its own report.
+    await office.until('the first ask', () => office.sent('agent.prompt').length === 1);
+    const prompt = office.sent('agent.prompt')[0];
+    assert.equal(prompt.params.target, HIRED_PANE);
+    assert.ok(!prompt.params.text.includes(HIRED_PANE), 'the manager was told about itself');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('nobody is hired for a card nobody opened', async () => {
+  // The gate, and the whole reason this is affordable. Without it every office run anywhere
+  // starts an agent, and the office is a wall display as often as it is a tool.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    cols: 140,
+  });
+  try {
+    await office.ready('2 desks');
+    await settle();
+    assert.deepEqual(office.sent('agent.start'), [], 'it hired somebody for a floor plan');
+    assert.deepEqual(office.sent('tab.create'), [], 'it opened a tab nobody asked for');
+    assert.deepEqual(office.sent('server.agent_manifests'), [], 'it went looking for kinds it had no use for');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('--no-manager opens the card and hires nobody', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    args: ['--board', '--no-manager'],
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the card', () => office.onScreen('nobody hired'));
+    await settle();
+    assert.deepEqual(office.sent('agent.start'), [], 'the flag did not stop the hire');
+    // And it still says which key would, because this is the office as it shipped.
+    assert.ok(office.onScreen('M hires a manager'));
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a hire that fails says what to press instead, and is not tried again', async () => {
+  // The loop this guards against is the expensive one: a card open that retries would start
+  // a tab and an agent every time somebody looked at the card.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    hireFails: 'agent.start',
+    args: ['--board'],
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the failure on the card', () => office.onScreen('could not hire a manager'));
+    assert.ok(office.onScreen('M hires one by hand'));
+    // Walk away and come back. `esc` closes the card and leaves the selection on the manager's
+    // desk, so `\r` reopens it, which is the keystroke that hires: if the one-attempt flag were
+    // missing this is where the second tab and the second agent would be started.
+    const failed = office.sent('agent.start').length;
+    office.type('\x1b');
+    await settle();
+    // Measured from here rather than against the whole screen, because `office.screen()` is
+    // everything the office has ever drawn and the first card is still in it. Anything found
+    // past this mark was drawn after the reopen.
+    const mark = office.screen().length;
+    office.type('\r');
+    await office.until('the card to come back', () => office.screen().slice(mark).includes('could not hire a manager'));
+    await settle();
+    assert.equal(office.sent('agent.start').length, failed, 'it tried to hire again');
+    assert.equal(office.sent('tab.create').length, 1, 'it opened a second tab for a second try');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'it asked a manager it never hired');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a machine that can start nothing is told so rather than asked to start nothing', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    args: ['--board'],
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the card to give up', () => office.onScreen('could not hire a manager'));
+    assert.deepEqual(office.sent('tab.create'), [], 'it opened a tab for an agent it could not name');
+    assert.deepEqual(office.sent('agent.start'), [], 'it started an agent with no kind');
   } finally {
     await office.stop();
   }

@@ -44,11 +44,13 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --demo` | Fake roster, no server needed (good for hacking on the art) |
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --once --board` | Same, with the office manager's card open, which is otherwise two keystrokes deep |
+| `node office.mjs --board` | Open straight onto the manager's card, which is also what hires a manager |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
 | `node office.mjs --no-git` | Never run git in anybody's checkout, so no desk shows uncommitted work |
 | `node office.mjs --no-context` | Never read anybody's screen for a context gauge, so no desk shows how full it is |
+| `node office.mjs --no-manager` | Never hire a manager on your behalf, so the card stays empty until you press `M` |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
@@ -86,7 +88,7 @@ would rather not.
 | `z` | zoom: floor plan, list view, one desk |
 | `b` | jump to the next raised hand |
 | `m` | walk to what the office manager has noticed |
-| `M` | hire an agent as office manager, from the manager's card |
+| `M` | hire a manager of your choosing, from the manager's card. Opening the card already hires one |
 | `a` (on the manager) | ask it a question about the floor, once one is hired |
 | `R` | ask it again, for a fresh read of the floor |
 | `X` | let the manager go. Its pane is left alone, running, for you to close |
@@ -196,10 +198,17 @@ repository.
 
 ### Hiring somebody to read it for you
 
-Fourteen accounts is still fourteen accounts. `M` on the manager's card starts an agent
-of your choice, in its own worktree, and gives it one job: read the floor and say what is
-happening in three sentences. Its answer appears on the card in a section of its own,
-above the accounts it was made from, and `a` asks it a question instead.
+Fourteen accounts is still fourteen accounts. So opening the manager's card hires somebody
+to read them: an agent gets started in an empty scratch directory and given one job, which
+is to read the floor and say what is happening in three sentences. Its answer appears on
+the card in a section of its own, above the accounts it was made from, and `a` asks it a
+question instead.
+
+The kind it hires is whichever kind your floor is mostly made of, on the theory that the
+one you already have six of is the one you are logged into. `M` still opens the picker if
+you want to choose, or want the manager in a worktree instead, and `--no-manager` turns the
+hiring off and leaves `M` as the only way in. One hire per run either way: a manager you
+fired with `X`, or one whose hire failed, is not replaced behind your back.
 
 ```
   ├─ what the manager says ─────────────────────────────────────────────┤
@@ -217,8 +226,8 @@ the summary checkable at a glance rather than something you have to trust.
 Four rules it is built around, each of which is a thing that would otherwise make the
 feature not worth having:
 
-- **It costs nothing unless you are looking at it.** No manager is hired until you press
-  `M`, and a hired one is only asked anything while its card is open. Close the card and
+- **It costs nothing unless you are looking at it.** No manager is hired until you open
+  the card, and a hired one is only asked anything while that card is open. Close it and
   it goes quiet. It is never re-asked faster than every twenty seconds, never asked twice
   about a floor that has not changed, and skipped rather than queued while it is mid-turn.
   What counts as changed is process states, git counts, branches, quoted lines and which
@@ -237,6 +246,12 @@ feature not worth having:
 - **It is not on its own floor.** A hired manager is excluded from its own digest, from
   the notices, and from `A`. Without that, a manager sitting idle becomes a stall notice
   within fifteen minutes and then reads about itself.
+- **It has nothing to break.** A manager never reads code, so it is started in an empty
+  directory under your temp dir rather than in a checkout. That matters because the digest
+  carries pane titles and quoted screen text written by other agents, which is
+  author-controlled text arriving at something with tool access, and an empty directory is
+  the smallest thing it could arrive at: there is no repository there to damage. The office
+  never writes there, and never sends `trust_repository`.
 
 `X` lets it go. That only forgets it: the pane, tab and worktree are left exactly as they
 are, running, for you to look at or close yourself.
@@ -254,7 +269,9 @@ is built around:
   card, and the one line of that a stall notice uses to say why.
 - **`y`, `n`, `s`, `Y`, `a`, `A` and `M` send real input to real agents.** They are the only
   things here that cannot be taken back, and they are the most guarded part of the
-  plugin. `--demo` prints what it would have sent instead.
+  plugin. `--demo` prints what it would have sent instead. Opening the manager's card also
+  starts an agent, once per run, which is the one thing in here that happens without a
+  keystroke aimed at it: `--no-manager` turns it off.
 - **Every line is exactly as wide as the pane.** One cell too many wraps and shoves the
   whole floor down a row. `test/grid.test.mjs` is the suite that matters.
 
@@ -275,9 +292,10 @@ Two rules that are easy to break by accident:
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
 - **Never test approve, deny, answer, grant, assign or hire against a live office.**
-  Those keys type at somebody's real agent or start a new one, and `M` does both. `--demo`
-  prints what it would have sent, and the tests send them for real down a socket no agent
-  is listening on.
+  Those keys type at somebody's real agent or start a new one, and `M` does both. So does
+  opening the manager's card, so a live `--board` is a hire and `--once --board` is not.
+  `--demo` prints what it would have sent, and `test/office.test.mjs` sends them for real
+  down a socket with a fake herdr on the other end.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22, and a separate job installs herdr and checks every request the
@@ -319,8 +337,14 @@ comment there is the source of truth rather than the doc.
   three-sentence limit gets cut off at three rows with an ellipsis, and one that answers
   the wrong question just reads wrong on the card. The accounts underneath are the check,
   which is why they are drawn separately rather than replaced.
-- **The hire path itself is only exercised against `--demo`.** `M`, like `+`, starts a
-  real agent in a real worktree, and no test can drive that without starting one.
+- **The worktree hire path is only exercised against `--demo`.** `M` and `+` can both put a
+  new agent in a fresh worktree, and no test can drive `worktree.create` without making one.
+  Hiring a manager into a scratch directory is covered end to end against the fake herdr in
+  `test/office.test.mjs`; the worktree branch of the same path is not.
+- **A manager hired for you is started in a directory it may not be able to work in.** The
+  scratch directory is deliberately not a repository, and an agent CLI that insists on a
+  trusted checkout before it will take a prompt will sit there not answering. The card says
+  what it is waiting for and `M` puts one in a worktree instead.
 - macOS and Linux only. Windows would work in principle (the socket helper falls back
   to the CLI path Herdr recommends) but is untested.
 

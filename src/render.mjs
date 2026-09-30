@@ -1807,6 +1807,10 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
 // `nothing asked yet` after a failed ask is a card that lost the only thing it knew.
 function chiefState(chief) {
   if (chief.error) return truncate(chief.error, 60);
+  // Said while the office is starting one, because opening this card is now what hires a
+  // manager and a cold agent can take a minute to come up. Without this the card spends that
+  // minute claiming nobody is coming, on the open that went and got somebody.
+  if (chief.hiring && !chief.hired) return 'hiring somebody to read this floor';
   if (!chief.hired) return 'nobody hired · M hires a manager to sum this up';
   const who = chief.name || 'the manager';
   if (chief.asking) return `${who} · reading the floor now`;
@@ -1895,7 +1899,7 @@ function managerPanel(view, panelRows) {
     // office cannot promise anything about what it does in its own worktree. What the
     // office can promise is the half that matters here: nothing it says is parsed, matched,
     // acted on or sent anywhere, so the worst a bad answer does is read wrong on this card.
-    ['can do', chief.hired ? 'nothing here: its answer is read, never acted on' : 'nothing: it reads the floor and writes lines', P.soft],
+    ['can do', chief.hired || chief.hiring ? 'nothing here: its answer is read, never acted on' : 'nothing: it reads the floor and writes lines', P.soft],
   ];
   for (let i = 0; i < Math.max(ART_ROWS, fields.length); i += 1) {
     const b = cells();
@@ -2047,12 +2051,16 @@ function managerPanel(view, panelRows) {
     // true of the card as it shipped and the one a narrow pane keeps when `fit` cuts the
     // rest off. Losing `M hires a manager` at sixty columns costs a reader a feature they
     // can still find in the README; losing `m` would cost them the card's only action.
+    // Mid-hire it offers neither, because `M` during a hire opens a picker that would start a
+    // second manager next to the one already coming, and `a` has nobody to ask yet.
     const desks = m.notices.length ? 'm walks to the desk each one is about' : 'nothing, which is the good outcome';
     const hint = chief.hired
       ? m.notices.length
         ? `  ${desks} · a asks it · R re-asks`
         : `  ${desks} · a asks it`
-      : `  ${desks} · M hires a manager`;
+      : chief.hiring
+        ? `  ${desks}`
+        : `  ${desks} · M hires a manager`;
     body.push(row(hint, [{ from: 0, to: Infinity, fg: P.dim }]));
   }
   body.push(edge('╰', '╯', PW, chrome));

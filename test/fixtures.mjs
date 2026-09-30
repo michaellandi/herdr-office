@@ -428,6 +428,6 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     board,
     // Whether anybody is hired as manager, and what they last said. Nobody, by default,
     // which is the office as it ships and the frame every test written before this drew.
-    chief: chief || { hired: false, name: null, asking: false, answer: null, question: '', ageMs: null, error: null },
+    chief: chief || { hired: false, hiring: false, name: null, asking: false, answer: null, question: '', ageMs: null, error: null },
   };
 }

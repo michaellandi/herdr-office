@@ -599,7 +599,8 @@ and the question underneath it never changed: what is happening, and who needs m
 
 Nothing in the office can answer that. Every module above takes a roster and returns
 strings, and "which of these four things matters most" is a judgement, not a count. The
-office already has a floor full of things that make judgements, so `M` hires one.
+office already has a floor full of things that make judgements, so opening the card hires
+one.
 
 What it gets is a digest, not a floor. `src/chief.mjs` builds the whole conversation and is
 pure: `report()` gives every desk an account, `digest()` flattens them, `ask()` wraps them
@@ -632,10 +633,30 @@ a page of text and asked a question about it.
 
 A summary that is recomputed every two seconds forever is a background process spending
 tokens on a floor nobody is watching, and that alone would make the feature not worth
-having. So the gate is the card: no manager is hired until `M`, and a hired one is asked
-nothing unless the card is open. Close it and the manager goes idle. The card is also
-asked about the moment it opens rather than on the next poll, because two seconds of a card
-that says nothing reads as a key that did not work.
+having. So the gate is the card: nobody is hired and nothing is asked unless the card is
+open. Close it and the manager goes idle. The card is also asked about the moment it opens
+rather than on the next poll, because two seconds of a card that says nothing reads as a key
+that did not work.
+
+That gate is also why the hire itself stopped being a keystroke. The first version had `M`,
+which was caution rather than design: starting an agent without being asked to felt like
+something the office should not do. But the gate it was guarding is the card, and somebody
+opening a card whose entire job is to hold a summary is somebody asking for the summary. A
+key between them and it is a question with one answer, and the second half of that answer,
+which kind, is a choice that does not matter for a job that is reading a page of text and
+writing three sentences. So it is made from the floor: whichever kind you already have the
+most of, which is the one you are logged into and have already paid for, ties broken by the
+sorted manifest list so the same floor picks the same manager twice.
+
+`M` stays, for the two cases the automatic path cannot serve: wanting a specific kind, and
+wanting the manager in a worktree. `--no-manager` turns the automatic path off entirely.
+
+One hire per run, win or lose, and that is one flag rather than a check on whether anybody
+is currently hired, because three different things all mean do not hire again. A hire that
+failed must not be retried on every card open, or looking at the card twice starts two
+panes. A manager fired with `X` is the clearest possible statement that you do not want one.
+A manager whose tab you closed is the same statement, made less deliberately. Restarting the
+office is how you change your mind, which is a cheap enough way to say it.
 
 Three more brakes on top of that:
 
@@ -686,10 +707,23 @@ the view, the `A` broadcast, and by extension the desk `m` walks to. Without the
 exclusion a manager sitting idle crosses the stall threshold in fifteen minutes, becomes a
 notice, and then reads about itself in its own next digest, which is both funny and a bug.
 
-It defaults into a worktree rather than a plain tab, and `t` still switches that back. The
-reason is blast radius rather than tidiness: this is the one agent on the floor that is
-handed text written by other agents, and if a prompt injection ever does land, a throwaway
-branch is a much smaller answer than the checkout everybody else is working in.
+Where it sits is the other half of that. This is the one agent on the floor that is handed
+text written by other agents, so if a prompt injection ever does land, what it can reach
+matters. `M` defaults into a worktree for that reason and `t` still switches it back: a
+throwaway branch is a much smaller answer than the checkout everybody else is working in.
+
+Hiring under the hood goes further and uses neither. A manager never reads code, so the
+smallest thing that will hold one is an empty directory, and it gets one fixed path under
+the system temp directory. That is a smaller blast radius than the worktree it replaced,
+because a worktree is a real checkout with real history and this is a directory with nothing
+in it at all. It is also the tidier answer to a hire that now happens on every office run
+that opens the card: a fresh worktree each time would leave a pile of `office/` branches to
+clean up, which is a different flavour of the annoyance this was meant to remove. The office
+never writes there, and never sends `trust_repository`, either here or from `M`.
+
+The cost of that choice is honest and is written down in the README: an agent CLI that
+refuses to take a prompt outside a trusted repository will sit in that directory saying
+nothing, and the card will say it is waiting. `M` and a worktree is the way out.
 
 What it costs to give up is the last piece. `X` forgets the manager and touches nothing
 else: the pane, the tab and the worktree are left exactly as they are, still running, for

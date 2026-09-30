@@ -850,3 +850,59 @@ test('the card stops promising something it cannot promise once somebody is hire
   assert.match(full, /never acted on/);
   assert.ok(!/it reads the floor and writes lines/.test(full), 'the hired card kept the unhired promise');
 });
+
+/* ------------------------------------------ the card while it is hiring somebody */
+
+// Opening this card is what hires a manager now, and a cold agent takes up to ninety seconds
+// to come up. That stretch is a state the card has to be able to say out loud: the summary is
+// coming, nobody is there yet, and neither of the keys that normally apply does anything.
+const hiring = (extra = {}) => ({
+  hired: false, hiring: true, name: null, asking: false, answer: null, question: '', ageMs: null, error: null, ...extra,
+});
+
+test('a card that is hiring says so instead of saying nobody is coming', () => {
+  // The open that went and got somebody must not spend the next minute advertising the key
+  // that gets somebody, which is what the unhired card exists to do.
+  const text = hiredCard(hiring()).join('\n');
+  assert.match(text, /hiring somebody to read this floor/);
+  assert.ok(!text.includes('nobody hired'), 'the card called it empty while it was filling');
+  assert.ok(!text.includes('what the manager says'), 'a heading over an answer that does not exist yet');
+});
+
+test('the keys the card offers mid-hire are the ones that would do something', () => {
+  // `M` during a hire opens a picker that starts a second agent beside the one already
+  // coming, and `a` has nobody to ask. The desks clause survives, because it is the only
+  // thing on this card that works in every state it has.
+  const hint = hiredCard(hiring(), [{ kind: 'stalled', ids: ['w1:p1'], text: 'Ada stopped' }])
+    .find((l) => l.includes('m walks to the desk'));
+  assert.ok(hint, 'the hint row went missing');
+  assert.ok(!hint.includes('M hires'), 'offered to hire a second one');
+  assert.ok(!hint.includes('a asks'), 'offered to ask nobody');
+});
+
+test('a hire that failed says so, and says what to press instead', () => {
+  // The one case where the office started something without being asked and it did not work.
+  // Silently going back to `nobody hired` would read as the card never having tried, and the
+  // office does not try again in the same run, so the key has to be named again here.
+  const text = hiredCard({ ...hiring(), hiring: false, error: 'could not hire a manager: TIMEOUT. M hires one by hand.' }).join('\n');
+  assert.match(text, /could not hire a manager/);
+  assert.match(text, /M hires one by hand/);
+  assert.ok(!text.includes('hiring somebody'), 'still claimed to be hiring after it gave up');
+});
+
+test('the card stops promising what it cannot promise as soon as somebody is on the way', () => {
+  // `nothing: it reads the floor and writes lines` is true of the office's own manager code
+  // and false the moment an agent session is involved. The line has to change when the hire
+  // starts, not when it lands: in between, there is already a real agent coming up.
+  assert.ok(hiredCard(hiring()).join('\n').includes('its answer is read, never acted on'));
+});
+
+test('a card mid-hire closes at every size', () => {
+  for (const [cols, rows] of SIZES) {
+    if (cols === 20) continue; // known: the panel does not close at 20x8, hired or not
+    const lines = hiredCard(hiring(), MANY, cols, rows);
+    const drawn = lines.filter((l) => /[│├╰╭]/.test(l));
+    assert.match(drawn[drawn.length - 1] || '', /╰─+╯/, `${cols}x${rows}`);
+    for (const line of lines) assert.ok(line.length <= cols, `${cols}x${rows}: ${line.length} cells`);
+  }
+});

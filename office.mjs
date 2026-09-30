@@ -12,14 +12,18 @@
 //   node office.mjs --no-graphics  text only, no pixel charts
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
+//   node office.mjs --no-manager  do not hire a manager when the manager's card opens
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID, MANAGER_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice, lastSaid } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
-import { typeChunk, sanitizeBranch, defaultBranch, nextIndex } from './src/hire.mjs';
+import { typeChunk, sanitizeBranch, defaultBranch, nextIndex, managerKind } from './src/hire.mjs';
 import { typePromptChunk, cleanPrompt, broadcastTargets } from './src/compose.mjs';
 import { width, formatDuration } from './src/text.mjs';
 import { runningCommand } from './src/process.mjs';
@@ -74,6 +78,12 @@ const GIT = !argv.has('--no-git');
 // up. Nothing off those screens is drawn or kept, and somebody who would still rather this
 // pane were not looking gets to say so in one flag.
 const HEAD = !argv.has('--no-context');
+// Whether opening the manager's card may hire a manager for it. On by default because the
+// card is a summary and without somebody to write one it is a list of notices with a heading;
+// opt-out because it is the only thing in here that starts a real agent without a keystroke,
+// and an agent costs tokens. `M` still works either way, so `--no-manager` is not a smaller
+// office, it is the same office with the starting decided by hand.
+const MANAGER = !argv.has('--no-manager');
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -1068,10 +1078,12 @@ function nextNotice() {
 // digest is drawn from the notices the next frame computes anyway, so opening it is one flag
 // and a redraw, and there is no loading state here to get stuck in.
 //
-// Opening it is also the only thing that ever asks a hired manager anything, which is why
-// `tickChief` is called here rather than left to the next poll. Two seconds of a card that
-// says nothing, on the keystroke whose whole purpose was to ask, reads as a key that did not
-// work. With nobody hired it returns immediately and this is the card it always was.
+// Opening it is also the only thing that ever hires a manager or asks one anything, which is
+// why both are called here rather than left to the next poll. Two seconds of a card that says
+// nothing, on the keystroke whose whole purpose was to ask, reads as a key that did not work.
+// Exactly one of the two does anything on any given open, and on the second and later opens
+// of a run neither does: `autoHire` has spent its one attempt and `tickChief` has its own
+// twenty-second floor and its own has-the-floor-moved check.
 function openBoard() {
   selectedId = MANAGER_ID;
   // The four panels are one slot, so opening this puts the others away, exactly as
@@ -1080,6 +1092,11 @@ function openBoard() {
   hire = null;
   board = true;
   prevLines = [];
+  // Before the draw, not after it. Everything in `autoHire` down to its first await is
+  // synchronous, including the flag that makes the card say it is hiring somebody, so calling
+  // it here is what stops the card flashing `nobody hired · M hires a manager` for one frame
+  // on the open that went and hired somebody.
+  autoHire();
   draw();
   tickChief();
 }
@@ -1503,6 +1520,10 @@ let chief = {
   // What was asked, when it was a question rather than the standing summary.
   question: '',
   at: 0,
+  // True between the card opening and herdr either starting a manager or failing to. It is
+  // its own field rather than a truthy `id`, because the card has to be able to say that
+  // somebody is on their way without quoting a pane that does not exist yet.
+  hiring: false,
   error: null,
 };
 
@@ -1520,17 +1541,83 @@ function chiefFloor() {
 }
 
 function setChief(id, kind) {
-  chief = { id, kind, nonce: null, asked: 0, print: '', answer: null, question: '', at: 0, error: null };
+  chief = { id, kind, nonce: null, asked: 0, print: '', answer: null, question: '', at: 0, hiring: false, error: null };
+  // Hiring one by hand also stops the office hiring one, which matters after the hand-hired
+  // manager is fired: `X` on somebody you chose yourself should not be answered by the office
+  // choosing somebody for you.
+  autoHired = true;
   closeTheBooks();
 }
 
 function dropChief(why) {
   if (!chief.id) return;
-  chief = { ...chief, id: null, kind: null, nonce: null, answer: null, question: '', error: null };
+  chief = { ...chief, id: null, kind: null, nonce: null, answer: null, question: '', hiring: false, error: null };
   closeTheBooks();
   if (why) note(why);
   prevLines = [];
   draw();
+}
+
+// Somewhere for a manager to sit. Not a worktree and not anybody's checkout: a manager never
+// reads code, so a directory with nothing in it is the whole requirement, and it is also the
+// smallest answer to the thing that made `M` default into a worktree. The digest carries pane
+// titles and quoted screen text off other agents, which is author-controlled text arriving at
+// something with tool access, and a throwaway branch was a smaller blast radius than the
+// checkout everybody is working in. An empty temp directory is smaller again: there is no
+// repository there to damage.
+//
+// One fixed path rather than a fresh `mkdtemp` per run, because a manager hired on every
+// office open would otherwise leave a pile of directories behind, and the pile is the exact
+// kind of annoying this change is about. Nothing is ever written here by the office.
+const MANAGER_ROOM = join(tmpdir(), 'herdr-office-manager');
+
+// One attempt per run, win or lose, and it is the reason this is a variable rather than a
+// check against `chief.id`. Three things all want to mean "do not hire again": a hire that
+// failed (retrying it on every card open is a loop that starts panes), a manager fired with
+// `X` (the clearest possible statement that you do not want one), and a manager whose tab was
+// closed. One flag covers all three, and restarting the office is how you change your mind.
+let autoHired = false;
+
+// Hiring under the hood, which is what the manager's card does now instead of asking you to
+// press `M` first. The gate is the card being open, which is the same gate that decides
+// whether the office asks a manager anything at all: somebody looking at a card whose whole
+// job is to hold a summary wants the summary, and a keystroke between them and it is a
+// question with one answer.
+//
+// `M` is still there and still opens the picker, for the two cases this cannot serve: wanting
+// a specific kind, and wanting the manager in a worktree.
+async function autoHire() {
+  if (DEMO || ONCE || !MANAGER || autoHired || chief.id || hire) return;
+  autoHired = true;
+  chief = { ...chief, hiring: true, error: null };
+  prevLines = [];
+  draw();
+  let side = null;
+  try {
+    const kind = managerKind(roster.people, await agentKinds());
+    if (!kind) throw new Error('herdr cannot start any agent on this machine');
+    mkdirSync(MANAGER_ROOM, { recursive: true });
+    side = await new ApiClient().open();
+    const made = await side.request('tab.create', { cwd: MANAGER_ROOM, label: 'manager', focus: false });
+    const paneId = made?.root_pane?.pane_id;
+    if (!paneId) throw new Error('herdr opened a tab with no pane in it');
+    await side.request('agent.start', { name: kind, kind, pane_id: paneId, timeout_ms: HIRE_TIMEOUT_MS }, HIRE_TIMEOUT_MS + 5000);
+    setChief(paneId, kind);
+    note(`${kind} is your office manager now`);
+    await refresh();
+    // Asked here rather than left to the next poll, for the reason `openBoard` says: the card
+    // has been sitting there saying it is hiring somebody, and the first thing that should
+    // happen when somebody arrives is that they read the floor.
+    tickChief();
+  } catch (err) {
+    // Whatever got made is left where it is, exactly as a hand hire leaves it. A tab the
+    // office opened and then deleted is a tab whose failure nobody can look at.
+    chief = { ...chief, hiring: false, error: `could not hire a manager: ${err.code || err.message}. M hires one by hand.` };
+  } finally {
+    side?.close();
+    prevLines = [];
+    draw();
+  }
 }
 
 // One pass, called from the poll. Either collects an answer that is outstanding or decides
@@ -1628,6 +1715,7 @@ function chiefCard() {
   const me = chief.id ? roster.find(chief.id) : null;
   return {
     hired: Boolean(chief.id),
+    hiring: Boolean(chief.hiring) && !chief.id,
     name: me?.name || chief.kind || null,
     kind: chief.kind,
     asking: Boolean(chief.nonce),
@@ -2047,6 +2135,10 @@ function onInput(chunk) {
   if (str === 'M') {
     if (selectedId !== MANAGER_ID) return refuse('m walks to the manager, and M hires one from there');
     if (chief.id) return refuse(`${chiefCard().name} is already your manager: X lets them go`);
+    // The picker would start a second agent next to the one already coming up, and the office
+    // would then keep the one that finished last. Refused rather than queued: the wait is
+    // under a minute and it says what it is waiting for.
+    if (chief.hiring) return refuse('already hiring one: give them a moment to come up');
     return openHire('manager');
   }
   // Letting them go. Only the office's idea of who the manager is: the pane, the tab and the
@@ -2348,6 +2440,11 @@ async function main() {
   }
   await refresh();
   draw();
+  // Opening straight onto the manager's card, which is what a plugin action wants when the
+  // question is "what is happening" rather than "show me the floor". After the first refresh
+  // rather than before it, because this is the one flag that hires somebody, and hiring wants
+  // a floor to pick a kind from.
+  if (argv.has('--board')) openBoard();
 }
 
 process.on('SIGINT', () => quit(0));

@@ -681,6 +681,31 @@ model asked for `- ` will send a hyphen, a star, a real bullet, `1.` or nothing,
 only place that knows how wide the row is and where the hanging indent under a wrapped point
 lines up.
 
+#### Which of them matters
+
+Four bullet points of equal weight is a list you have to read all of to find the one that
+wanted you, which is a smaller version of the problem the card was built to solve. So the
+manager is asked to put `!` at the front of any point that needs a person now, most urgent
+first, and to leave it off the rest.
+
+The mark is stripped in `src/chief.mjs` exactly as the bullet is, for the same reason: the
+card decides what a marked point looks like and all the office keeps is which ones. It is
+read *after* the bullet strip, because `- ! Ada is blocked` is what a model asked for both
+will write, and a point is not less urgent for arriving with its glyph still attached.
+
+Then the office rations it, because a mark on everything is a mark on nothing. At most two
+survive, kept in the order they arrived since the prompt asks for most urgent first, and a
+list where *every* point is marked has all its marks removed: two amber rows out of two is
+the same information as none out of two, said less legibly, and the reader's eye has nowhere
+to be drawn to.
+
+Drawn, it is `! ` in the raised-hand amber, bold. Two cells like the ordinary bullet, so a
+marked point and a plain one start in the same column and the list still reads as a list, and
+in that colour because the office already spends it on exactly one idea: this one wants you.
+A different glyph as well as a different colour, so the mark survives a screenshot and a
+colourblind reader. The text itself stays `P.soft` either way, since `P.ink` on this card is
+reserved for things the office measured and nothing here was measured.
+
 #### Only while you are looking at it
 
 A summary that is recomputed every two seconds forever is a background process spending
@@ -722,6 +747,28 @@ Three more brakes on top of that:
   desks have a `kind`, and a head going from hot to brimming changes the bucket. Notice
   *wording* is excluded too and only the kind is kept, since a sentence that renames the
   same fact is not new information.
+
+  That was the first attempt and it was not enough, because the print also carried four
+  fields that are downstream of a screen that is scrolling. `said` is the last line off the
+  visible pane and changes on every line an agent prints. `dirt` is a git count and ticks as
+  files are written. `title` and `command` advance as the work moves through its steps. None
+  of those is a clock and all four move every few seconds on a desk that is working, so a
+  floor of busy agents produced a new print on nearly every pass and the manager was re-asked
+  about a floor whose situation had not moved. That is the cost of the feature with none of
+  the benefit.
+
+  So the print is narrowed by status rather than by field. A desk that is **working** is
+  fingerprinted on the fact that it is working and on nothing it happens to be printing while
+  it does: its identity, its status, which checkout and branch it is in, whether it is inside
+  a notice, whether an event has landed on it, and which band its context window is in. Those
+  are the transitions. A desk that has **stopped** keeps the lot, because on a desk nobody is
+  driving, what it was doing when it stopped and what it left uncommitted and the last thing
+  it said are not noise, they are the entire report. `command` is dropped outright rather than
+  narrowed, since the roster only ever sets one on a desk that is working.
+
+  The rule underneath both halves: fingerprint the situation, not the output. Everything
+  volatile here is volatile *because the desk is working*, and a desk that is working is the
+  one thing on this floor nobody needs telling about twice.
 - **Skipped rather than queued** while the manager is mid-turn. A queue here would mean a
   manager permanently one floor behind, answering about a floor that has moved on.
 

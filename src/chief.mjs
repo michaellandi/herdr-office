@@ -37,12 +37,23 @@ import { pressure } from './head.mjs';
 // for, and a manager whose answer needs seven is answering a different question.
 export const ANSWER_LINES = 6;
 export const ANSWER_WIDTH = 200;
+export const URGENT_MAX = 2;
 
 // The bullet glyph belongs to the card, not to the model. Asked for `- ` and it will variously
 // send `-`, `*`, a real bullet, `1.` or nothing at all, so a card that drew whatever arrived
 // would have a list with four different markers down the left of it. Stripped here and put
 // back by src/render.mjs, which is the only thing that knows how wide the row is.
 const BULLET = /^\s*(?:[-*\u2022\u2023]|\d+[.)])\s+/;
+
+// The mark for a point that needs a person now, stripped the same way and for the same reason:
+// the card decides what a marked point looks like, and all the office wants back is which ones.
+const URGENT = /^!+\s*/;
+
+// How many of them the card will carry as marked. A mark that is on every point marks nothing,
+// and a model asked to flag what matters will flag four things out of four given the chance, so
+// the cap is the office's rather than the prompt's. The earliest survive because the prompt asks
+// for the most important first, and the ones that lose the mark keep their text: a point demoted
+// to ordinary is still a point, and dropping it would be the office deciding it was wrong.
 
 // The marker the reply has to be wrapped in, with a per-ask nonce in it.
 //
@@ -91,6 +102,7 @@ const ORDERS = [
 // actually worked as against how long it has been open, and the last thing it said.
 const SUMMARY_TASK = [
   'Write up to four bullet points on what this floor has got done, and what needs a person first.',
+  'Put "!" at the front of any point that needs a person now, most urgent first, and leave it off the rest. At most two, and none at all if nothing does: the mark is how the reader knows where to look, and a mark on everything is a mark on nothing.',
   'Lead with what changed, not with status. "Ada got the migration tests passing and has 7 files uncommitted" is useful; "Ada is idle" is not, because the office already draws every status itself and the reader can see them.',
   'The facts for that are in the digest: what each desk was working on, what came of it, what it has left uncommitted, how long it has actually worked, and its own last words.',
   'One bullet per line, each starting with "- ". Name desks. Do not guess why anything happened, and do not offer to fix it. You cannot see anything except the digest.',
@@ -98,6 +110,7 @@ const SUMMARY_TASK = [
 
 const QUESTION_TASK = [
   'Answer the question below in up to four bullet points, using only the digest.',
+  'Put "!" at the front of a point that needs a person now, at most two, and leave it off the rest.',
   'One bullet per line, each starting with "- ". If the digest does not say, reply that it does not. Do not guess and do not offer to go and look.',
 ];
 
@@ -143,8 +156,21 @@ export function answer(text, nonce) {
     // the emptiness check, so a line that was nothing but a bullet does not become a bullet
     // with nothing after it.
     .map((line) => line.replace(BULLET, '').trim())
-    .filter(Boolean);
-  return lines.length ? lines.slice(0, ANSWER_LINES) : null;
+    .filter(Boolean)
+    .slice(0, ANSWER_LINES)
+    // The mark is read after the bullet is stripped, because `- ! Ada is blocked` is how a model
+    // asked for both of them will write it, and a point is not less urgent for having arrived
+    // with its glyph still attached.
+    .map((line) => ({ text: line.replace(URGENT, ''), urgent: URGENT.test(line) }));
+  let marked = 0;
+  for (const point of lines) {
+    if (!point.urgent) continue;
+    marked += 1;
+    if (marked > URGENT_MAX) point.urgent = false;
+  }
+  // Every point marked is the same information as none of them marked, said less legibly.
+  if (lines.length && lines.every((point) => point.urgent)) for (const point of lines) point.urgent = false;
+  return lines.length ? lines : null;
 }
 
 // Whether the floor has changed enough to be worth asking about again.
@@ -168,21 +194,42 @@ export function floorPrint({ people = [], notices = [] } = {}) {
   }
   return (Array.isArray(people) ? people : [])
     .filter((p) => p && p.id)
-    .map((p) =>
-      [
+    .map((p) => {
+      // A desk that is working is fingerprinted on the fact that it is working, and on nothing
+      // it happens to be printing while it does.
+      //
+      // This is the second attempt at the clock problem and the more important one. Excluding
+      // durations stopped the print differing every second; it did not stop it differing every
+      // few seconds, because four of these fields are downstream of a screen that is scrolling.
+      // `said` is the last line off the visible pane and changes on every line an agent prints.
+      // `dirt` is a git count and ticks as files are written. `command` and `title` change as
+      // the work moves through its steps. So a floor of busy agents produced a new print on
+      // almost every pass and the manager was re-asked every twenty seconds about a floor
+      // whose situation had not moved at all, which is the cost of the feature with none of
+      // the benefit.
+      //
+      // What is kept for a working desk is what a summary could be different about: that it
+      // exists, that it is working, which checkout and branch it is in, whether it is in a
+      // notice, whether an event has landed on it, and which band its context window is in.
+      // Those are the transitions. The rest is a busy desk being busy, which is the one thing
+      // on this floor nobody needs telling about.
+      const busy = p.status === 'working';
+      return [
         p.id,
         p.status,
         kinds.get(p.id) || '',
-        p.title,
+        busy ? '' : p.title,
         p.branch,
         p.repo || p.cwd,
-        p.command,
+        // No `command`. The roster only ever sets one on a working desk, so a rule that excludes
+        // it there excludes it everywhere, and `npm test` becoming `npm run lint` is a busy desk
+        // getting on with it rather than a floor that needs summarising again.
         p.lastEvent?.label,
-        p.dirt?.files,
-        p.dirt?.conflicts,
+        busy ? '' : p.dirt?.files,
+        busy ? '' : p.dirt?.conflicts,
         pressure(p.head?.used),
-        p.status === 'blocked' ? p.ask : p.said,
-      ].join('|'),
-    )
+        busy ? '' : p.status === 'blocked' ? p.ask : p.said,
+      ].join('|');
+    })
     .join('\n');
 }

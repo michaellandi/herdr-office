@@ -211,7 +211,7 @@ fired with `X`, or one whose hire failed, is not replaced behind your back.
 
 ```
   ├─ what the manager says ─────────────────────────────────────────────┤
-  │   - Ada got the migration tests passing, then stopped with a hand up
+  │   ! Ada got the migration tests passing, then stopped with a hand up
   │   - Bo is in the same checkout as Ada, 7 files uncommitted between
   │     them
   │   - Everybody else has worked its whole shift and needs nothing
@@ -223,6 +223,12 @@ under every tile, which is the wall of true sentences the card exists to replace
 So it is asked what changed, and given the facts for it: what each desk was working on,
 what came of it, what it has left uncommitted, how long it has actually worked as against
 how long it has been open, and its own last words.
+
+`!` is the one it thinks wants you now, drawn in the same amber the floor uses for a raised
+hand. Four points of equal weight is a list you have to read all of to find the one that
+mattered, which is a smaller version of the problem this card was built to solve. At most two
+get the mark, and a manager that marks everything gets none of them drawn, because a mark on
+everything is a mark on nothing.
 
 The accounts those points were made from are one keystroke away rather than underneath:
 `m` walks to each desk the office noticed something about. They are still drawn on the
@@ -237,9 +243,13 @@ feature not worth having:
   the card, and a hired one is only asked anything while that card is open. Close it and
   it goes quiet. It is never re-asked faster than every twenty seconds, never asked twice
   about a floor that has not changed, and skipped rather than queued while it is mid-turn.
-  What counts as changed is process states, git counts, branches, quoted lines and which
-  desks are in a notice. Clocks are deliberately excluded: `idle for 30m00s` becoming
-  `30m01s` is not news, and treating it as news would mean asking forever.
+  What counts as changed is a situation moving: a status, a branch, a checkout, news
+  landing, a desk crossing into a notice. What does not is a desk getting on with it.
+  Clocks are the obvious case, since `idle for 30m00s` becoming `30m01s` is not news, but
+  the expensive one was subtler: a working desk's last line, git count, title and command
+  all move every few seconds, so a floor of busy agents was being re-summarised constantly
+  about nothing. Those four still count on a desk that has stopped, where what it left
+  behind is the entire report.
 - **It is sent facts, not screens.** What goes over is the same digest the card draws:
   one block per desk, each clause already capped and stripped. It is not given the socket,
   a pane id, or any way to reach the floor it is describing.
@@ -341,9 +351,10 @@ comment there is the source of truth rather than the doc.
   you close the card. If that is still more than you want, do not press `M`: nothing in
   the office hires one for you and everything else works without one.
 - **Nothing checks whether a hired manager answered sensibly.** A model that ignores the
-  three-sentence limit gets cut off at three rows with an ellipsis, and one that answers
-  the wrong question just reads wrong on the card. The accounts underneath are the check,
-  which is why they are drawn separately rather than replaced.
+  four-point limit gets cut off where the card runs out of room, with an ellipsis saying so,
+  and one that answers the wrong question just reads wrong on the card. Which points it marks
+  as wanting you is its judgement too: the office only rations the marks, it does not check
+  them. `m` walks the desks the summary was made from, which is the check.
 - **The worktree hire path is only exercised against `--demo`.** `M` and `+` can both put a
   new agent in a fresh worktree, and no test can drive `worktree.create` without making one.
   Hiring a manager into a scratch directory is covered end to end against the fake herdr in

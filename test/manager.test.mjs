@@ -15,6 +15,7 @@ import { manager, MANAGER_ID, SCREEN_COLS } from '../src/manager.mjs';
 import { renderFrame, MANAGER_ID as RE_EXPORTED, HIRE_ID } from '../src/render.mjs';
 import { width } from '../src/text.mjs';
 import { SIZES, FRAMES, officeRoster, viewOf, stripAnsi, isManagerRow } from './fixtures.mjs';
+import { STATUS, fg } from '../src/theme.mjs';
 
 // Notices as src/notices.mjs builds them, shaped by hand so nothing here depends on
 // which desks the roster fixture happens to put where.
@@ -604,8 +605,10 @@ const SAID = [
   'Nobody else is waiting on anything.',
 ];
 const hired = (extra = {}) => ({ hired: true, name: 'claude', asking: false, answer: SAID, question: '', ageMs: 42_000, error: null, ...extra });
-const hiredCard = (chief, notices = MANY, cols = 140, rows = 46) =>
-  plain(renderFrame(viewOf({ people: crowdedFloor(), cols, rows, board: true, selectedId: MANAGER_ID, notices, chief })));
+const hiredCard = (chief, notices = MANY, cols = 140, rows = 46) => paintedCard(chief, notices, cols, rows).map(stripAnsi);
+// The same card with its colours still on it, for the two tests that are about a colour.
+const paintedCard = (chief, notices = MANY, cols = 140, rows = 46) =>
+  renderFrame(viewOf({ people: crowdedFloor(), cols, rows, board: true, selectedId: MANAGER_ID, notices, chief })).lines;
 
 test('a card with nobody hired says so, and says which key hires', () => {
   // The discoverable half. A summary section that only appears once you have already
@@ -815,6 +818,40 @@ test('the card closes at every size with an answer on it, however long', () => {
         assert.match(drawn[drawn.length - 1] || '', /╰─+╯/, `${cols}x${rows} ${label} n=${notices.length}: the card does not close`);
       }
     }
+  }
+});
+
+test('a point that needs a person is marked, and marked in the one colour that already means that', () => {
+  // The whole of the important-things feature on the drawing side. Two rules: the mark is a
+  // different glyph, so it survives a screenshot and a colourblind reader, and it is the
+  // raised-hand amber, so a reader who is not reading yet looks in the right place. The office
+  // already spends that colour on exactly one idea and this is the same idea.
+  const card = paintedCard(hired({ answer: [
+    { text: 'URGENT Ada has a hand up', urgent: true },
+    { text: 'ORDINARY Bo is getting on with it', urgent: false },
+  ] }), [], 140, 46);
+  const hot = card.find((l) => l.includes('URGENT Ada'));
+  const cold = card.find((l) => l.includes('ORDINARY Bo'));
+  assert.ok(hot && cold, 'the points were not drawn at all');
+  assert.match(stripAnsi(hot), /│\s+!\s\S/, 'a marked point is not marked');
+  assert.match(stripAnsi(cold), /│\s+-\s\S/, 'an ordinary point lost its bullet');
+  assert.ok(hot.includes(fg(STATUS.blocked.fg)), 'the mark is not in the raised-hand amber');
+  assert.ok(!cold.includes(fg(STATUS.blocked.fg)), 'an ordinary point is drawn as if it were urgent');
+  // And both start in the same column, so the list still reads as a list.
+  const col = (l) => stripAnsi(l).indexOf('URGENT Ada') + stripAnsi(l).indexOf('ORDINARY Bo') + 1;
+  assert.equal(stripAnsi(hot).indexOf('URGENT'), stripAnsi(cold).indexOf('ORDINARY'), `the mark moved the text (${col(hot)})`);
+});
+
+test('a point the office has no mark for is drawn as an ordinary point', () => {
+  // An answer was a list of strings before the mark existed, and a plain string still arrives
+  // from the demo roster and from any caller that has not been told the shape changed. A card is
+  // not the place to find out about that, so a bare string is a point with no mark on it.
+  const card = paintedCard(hired({ answer: ['PLAIN Ada is fine', { text: 'SHAPED Bo is fine' }] }), [], 140, 46);
+  for (const name of ['PLAIN Ada', 'SHAPED Bo']) {
+    const line = card.find((l) => l.includes(name));
+    assert.ok(line, `${name} was not drawn`);
+    assert.match(stripAnsi(line), /│\s+-\s\S/, name);
+    assert.ok(!line.includes(fg(STATUS.blocked.fg)), `${name} was drawn urgent`);
   }
 });
 

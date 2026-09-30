@@ -223,6 +223,10 @@ if (PAPER_X + PILE_MAX + PAPER_MIN - 1 > KEYS_X) throw new Error('the pile reach
 // changes: a conflict is a fact about the same pile, not another pile.
 const PAPER_FG = '#dcd6c8';
 const SNAG_FG = eventTint('broke').ink;
+// The raised-hand amber, by the name the office uses for it everywhere else. The one colour on
+// the floor that already means "this one wants you", which is why the manager's urgent mark
+// borrows it rather than inventing a second vocabulary for the same idea.
+const HAND_FG = STATUS.blocked.fg;
 const DESK_FRONT = over(' '.repeat(INNER), '───', MON_X + 5);
 
 // Both slabs stuck on the cubicle wall, the tab card and the speech bubble, hang
@@ -1824,6 +1828,11 @@ function chiefState(chief) {
 // of a fact, so reusing it here would make a list of points look like one packed row.
 const MARK = '- ';
 
+// And the marker for a point the manager flagged as needing a person now. Two cells like the
+// other one, so a marked point and an ordinary one start in the same column and the list still
+// reads as a list: a mark that moved the text would make the important rows the ragged ones.
+const URGENT_MARK = '! ';
+
 // The manager's own words, and on a card that has them, the only thing on it the office did not
 // measure itself. Drawn in a section of its own under its own heading, never blended with
 // anything counted, because a paragraph a model wrote sitting in a list of facts the office
@@ -1855,7 +1864,11 @@ function chiefSays(chief, room, rows) {
   const out = [];
   let cut = false;
   for (const point of chief.answer) {
-    const lines = wrapField(point, text, Number.MAX_SAFE_INTEGER);
+    // Tolerant of a bare string, because that is what the answer was until the mark existed and
+    // a card is not the place to find out that a shape changed.
+    const body = typeof point === 'string' ? point : point?.text;
+    const urgent = typeof point === 'object' && Boolean(point?.urgent);
+    const lines = wrapField(body, text, Number.MAX_SAFE_INTEGER);
     for (let i = 0; i < lines.length; i += 1) {
       if (out.length >= cap) {
         cut = true;
@@ -1863,7 +1876,8 @@ function chiefSays(chief, room, rows) {
       }
       // The marker on the first row of a point and blanks under it, so a point that wrapped is
       // one point and not two.
-      out.push({ mark: i === 0 ? MARK : ' '.repeat(MARK.length), text: lines[i] });
+      const mark = urgent ? URGENT_MARK : MARK;
+      out.push({ mark: i === 0 ? mark : ' '.repeat(mark.length), text: lines[i], urgent });
     }
     if (cut) break;
   }
@@ -1983,8 +1997,12 @@ function managerPanel(view, panelRows) {
       const b = cells();
       b.add('  ');
       // The marker dimmer than what it marks, so the list reads as a list from across the room
-      // without a column of punctuation competing with the words.
-      b.add(line.mark, { fg: P.faint });
+      // without a column of punctuation competing with the words. Unless it is the mark for a
+      // point that needs a person, which is the one thing on this card that is supposed to catch
+      // an eye that is not reading yet: that gets the raised-hand amber, which is what the whole
+      // office already means by "this one wants you", and gets it bold because two cells of
+      // colour at the left margin is not much to see across a room.
+      b.add(line.mark, line.urgent ? { fg: HAND_FG, bold: true } : { fg: P.faint });
       // Not `P.ink`. The office's own facts are the bright text on this card and this is the
       // one block on it that nothing measured, so it reads as quoted rather than as reported.
       b.add(truncate(line.text, Math.max(0, TEXT - b.w)), { fg: P.soft });

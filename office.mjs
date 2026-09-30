@@ -2340,9 +2340,9 @@ function demoExtras() {
       // that still ships those draws a bullet list whose second bullet is half a sentence.
       // Written the way src/chief.mjs asks for them, so the GIF shows what the office gets.
       answer: [
-        'Ada got the migration tests passing, then stopped with a hand up',
-        'Bo is in the same checkout as Ada with 7 files uncommitted between them',
-        'Everybody else has worked its whole shift and is waiting on nothing',
+        { text: 'Ada got the migration tests passing, then stopped with a hand up', urgent: true },
+        { text: 'Bo is in the same checkout as Ada with 7 files uncommitted between them', urgent: false },
+        { text: 'Everybody else has worked its whole shift and is waiting on nothing', urgent: false },
       ],
       at: Date.now() - 42000,
     };

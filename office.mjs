@@ -13,6 +13,7 @@
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID, MANAGER_ID } from './src/render.mjs';
@@ -27,6 +28,8 @@ import { WATCH_PATTERN, eventFromMatch, newsFromEvent } from './src/events.mjs';
 import { windowTitle } from './src/title.mjs';
 import { escalate } from './src/escalate.mjs';
 import { notices } from './src/notices.mjs';
+import { report } from './src/briefing.mjs';
+import { ask as chiefAsk, answer as chiefAnswer, floorPrint } from './src/chief.mjs';
 import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
@@ -272,13 +275,26 @@ function openTheBooks() {
   // And the day book, which is per desk rather than per office, and which is checked
   // against herdr on the first poll rather than trusted now: see Roster's day book.
   roster.restoreStates(saved.desks, saved.savedAt);
+  // And who you hired as manager, which is a pane id and therefore a claim about the world
+  // rather than a number. It is not trusted either: `tickChief` looks it up in the roster on
+  // the first pass and forgets it out loud if the pane has gone. Day-scoped like everything
+  // else in this file, which happens to be the right lifetime: yesterday's pane id is almost
+  // certainly a pane that no longer exists.
+  if (saved.chief?.id) chief = { ...chief, id: saved.chief.id, kind: saved.chief.kind || null };
 }
 
 // The other half. Synchronous and failure-swallowing all the way down, which is what
 // lets `quit` call it without spending any of its half-second budget.
 function closeTheBooks() {
   if (DEMO) return;
-  saveState({ ...clocks.snapshot(), desks: roster.snapshotStates() });
+  // The manager's pane id but never its answer. A summary is about a floor as it was, and a
+  // paragraph restored from disk over a floor that has moved on is the office quoting itself
+  // about desks that have since finished.
+  saveState({
+    ...clocks.snapshot(),
+    desks: roster.snapshotStates(),
+    chief: chief.id ? { id: chief.id, kind: chief.kind } : null,
+  });
 }
 
 // One line about the gap, on the first poll after reopening. The point of it is less the
@@ -363,9 +379,15 @@ function view() {
     // roster, for the same reason the counts are: with a filter on, everything below
     // the header is about the desks you asked to see. It also keeps `m` honest, since
     // every notice is then about a desk the key can actually walk you to.
-    notices: notices({ people }),
+    //
+    // Minus the manager, if one is hired. It sits idle between asks, so within fifteen
+    // minutes it would be a stall notice, and a stall notice about the manager goes into the
+    // manager's next digest. See rule 4 above `tickChief`. It is still drawn as a desk,
+    // because it is one; it is only kept out of what the office says about the floor.
+    notices: notices({ people: people.filter(notChief) }),
     noticeAt,
     board,
+    chief: chiefCard(),
     total: roster.people.length,
     filter,
     filtering,
@@ -721,6 +743,9 @@ async function refresh() {
     refreshCommands();
     refreshBranches();
     refreshDirt();
+    // Returns on its second line unless the manager's card is open, which is the whole cost
+    // control: with the card shut this feature is not running.
+    tickChief();
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -1039,10 +1064,14 @@ function nextNotice() {
   if (where) selectedId = where;
 }
 
-// The manager's card. Nothing is fetched and nothing is remembered: the panel is drawn
-// from the notices the next frame computes anyway, so opening it is one flag and a
-// redraw. That is the difference between this desk and every other one on the floor, and
-// it is why there is no loading state here to get stuck in.
+// The manager's card. The mechanical half of it fetches nothing and remembers nothing: the
+// digest is drawn from the notices the next frame computes anyway, so opening it is one flag
+// and a redraw, and there is no loading state here to get stuck in.
+//
+// Opening it is also the only thing that ever asks a hired manager anything, which is why
+// `tickChief` is called here rather than left to the next poll. Two seconds of a card that
+// says nothing, on the keystroke whose whole purpose was to ask, reads as a key that did not
+// work. With nobody hired it returns immediately and this is the card it always was.
 function openBoard() {
   selectedId = MANAGER_ID;
   // The four panels are one slot, so opening this puts the others away, exactly as
@@ -1052,6 +1081,7 @@ function openBoard() {
   board = true;
   prevLines = [];
   draw();
+  tickChief();
 }
 
 // Switching shepherd mode on takes effect now rather than on the next poll, because
@@ -1261,19 +1291,37 @@ async function agentKinds() {
     .sort();
 }
 
-async function openHire() {
+// `role` is 'desk' for the empty desk, which is what it has always been, or 'manager' for
+// somebody hired to sit at the manager's desk and summarize the floor. The menu, the kinds
+// list, the worktree toggle, the branch field and every error path are the same either way:
+// the only difference is where the pane id ends up when it works.
+//
+// A manager defaults into a worktree rather than a plain tab, which is the opposite of the
+// desk default. It never needs to touch the code, so it costs a directory for nothing, and
+// that is the point: the digest carries pane titles and quoted screen text off other agents,
+// which is author-controlled text arriving at something with tool access. Nothing stops an
+// agent writing "ignore previous instructions" in its title, so the question is not whether
+// that reaches the manager but what it can reach from there, and a throwaway branch is a
+// smaller answer than the checkout everybody else is working in. `t` still switches it back.
+async function openHire(role = 'desk') {
   if (hire) return;
-  selectedId = HIRE_ID;
+  const manager = role === 'manager';
+  if (!manager) selectedId = HIRE_ID;
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
   board = false;
-  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
+  hire = { role, kinds: [], index: 0, pending: null, error: null, worktree: manager, branch: '', editing: false };
   prevLines = [];
   draw();
   try {
     const kinds = await agentKinds();
-    if (hire && !hire.pending) hire = { ...hire, kinds };
+    // The offered branch name waits for the kinds list, because it has the agent's own name
+    // in it. Only the manager opens with the worktree already on, so on the empty desk this
+    // is a no-op until `w` is pressed.
+    if (hire && !hire.pending) {
+      hire = { ...hire, kinds, branch: hire.worktree && !hire.named ? defaultBranch(kinds[hire.index]) : hire.branch };
+    }
   } catch (err) {
     if (hire) hire = { ...hire, error: `cannot ask herdr who it can start: ${err.code || err.message}` };
   }
@@ -1330,13 +1378,14 @@ function editBranch(on) {
 async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
   const wantsWorktree = hire.worktree;
+  const asManager = hire.role === 'manager';
   // Sanitized once, here, at the last possible moment: what goes on the wire is a
   // name git will accept, and the field keeps whatever was typed into it.
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
   if (DEMO) {
     note(wantsWorktree
-      ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
-      : `demo mode: would open a tab and start ${kind} in it`);
+      ? `demo mode: would make a worktree on ${branch} and start ${kind} in it${asManager ? ' as manager' : ''}`
+      : `demo mode: would open a tab and start ${kind} in it${asManager ? ' as manager' : ''}`);
     return;
   }
   hire = { ...hire, pending: kind, error: null, editing: false };
@@ -1362,8 +1411,21 @@ async function startHire(kind) {
     if (!paneId) throw new Error(`herdr made ${wantsWorktree ? 'a worktree' : 'a tab'} with no pane in it`);
     await side.request('agent.start', { name: kind, kind, pane_id: paneId, timeout_ms: HIRE_TIMEOUT_MS }, HIRE_TIMEOUT_MS + 5000);
     hire = null;
-    selectedId = paneId;
-    note(wantsWorktree ? `${kind} is on ${branch} now` : `${kind} is at a desk now`);
+    if (asManager) {
+      // Remembered before the refresh, so the first poll after this already knows to keep it
+      // out of its own notices rather than filing a notice about it and taking it back.
+      setChief(paneId, kind);
+      // Straight back to the card that sent you here, which is also what asks the first
+      // question. Selection stays on the manager's desk rather than following the new pane:
+      // this agent's own screen is the digest going past, and the card is the thing worth
+      // looking at.
+      selectedId = MANAGER_ID;
+      board = true;
+      note(`${kind} is your office manager now`);
+    } else {
+      selectedId = paneId;
+      note(wantsWorktree ? `${kind} is on ${branch} now` : `${kind} is at a desk now`);
+    }
     prevLines = [];
     await refresh();
   } catch (err) {
@@ -1380,6 +1442,200 @@ async function startHire(kind) {
     prevLines = [];
     draw();
   }
+}
+
+/* ------------------------------------------------------------ a real manager */
+
+// The manager's card, backed by an agent you hired for the job.
+//
+// Everything above it stays mechanical and stays the default: src/notices.mjs finds what is
+// worth saying, src/briefing.mjs gives each desk an account, and neither can manage
+// anything. What they cannot do is answer "what is happening", because seven accurate
+// accounts is seven things to read and the question was for one. So the manager's desk can
+// have somebody at it, hired the same way anybody else is, and then the card carries both:
+// what it said, and underneath, the digest it said it from.
+//
+// Four rules, and the first is the one that makes the rest affordable.
+//
+// 1. **It costs nothing unless you are looking at it.** The gate is `board`, the flag that
+//    says the card is open. Closed, this function returns on its second line and the office
+//    is exactly the office it was before this feature existed. That is not an optimisation,
+//    it is the reason the feature is allowed to exist: a manager that summarized a floor
+//    nobody was looking at would be spending somebody's tokens on a pane behind a tab.
+// 2. **It is sent facts, not screens.** The same digest the card draws, which is already
+//    scrubbed, already capped and an order of magnitude smaller than seven panes of ANSI.
+// 3. **Nothing it says is ever a command.** Its reply is display text. The office does not
+//    parse it, act on it or send it anywhere. See src/chief.mjs for why that is the only
+//    defence that actually holds against a pane title full of instructions.
+// 4. **It is not on its own floor.** A manager left idle between asks becomes a stall
+//    notice, and a stall notice about the manager goes into the manager's next digest, which
+//    is the office reporting on itself and then summarizing the report. It is kept out of
+//    the notices, out of the digest and out of the standup, and `notChief` is the one
+//    predicate all four of those go through.
+//
+// Killing it is one keystroke and leaves no trace: nothing above depends on any of this.
+
+// The floor moves every second and a summary of a floor that has moved twice is not twice as
+// useful. `board` already means the office only asks while somebody is reading, and this is
+// the second gate, on how fast a reader can possibly want a new paragraph.
+const CHIEF_MS = 20000;
+// After this the ask is written off. An agent that has not bracketed an answer in two
+// minutes is not about to, and a card that waits forever cannot be asked again.
+const CHIEF_WAIT_MS = 120000;
+// Enough of the manager's screen to hold the echoed prompt and the reply under it. `visible`
+// is what every other desk is read with, and it is not enough here: on a short pane the
+// opening marker scrolls off while the closing one is still on screen, and an answer whose
+// front is missing is not an answer.
+const CHIEF_LINES = 200;
+
+let chief = {
+  // The hired manager's real pane id, or null for nobody hired, which is the default and the
+  // state the office ships in.
+  id: null,
+  kind: null,
+  // The nonce of the ask in flight, and null when nothing is outstanding. See src/chief.mjs.
+  nonce: null,
+  asked: 0,
+  // The floor the answer on screen was made from, so the office can tell a floor that has
+  // moved from a clock that has ticked. src/chief.mjs floorPrint is the whole cost control.
+  print: '',
+  answer: null,
+  // What was asked, when it was a question rather than the standing summary.
+  question: '',
+  at: 0,
+  error: null,
+};
+
+const isChief = (id) => Boolean(chief.id) && id === chief.id;
+const notChief = (p) => !isChief(p.id);
+
+// The floor as the manager is told about it: whatever the card is showing, minus the
+// manager. Off the filtered floor for the same reason the notices are, which is that with a
+// filter on everything below the header is about the desks you asked to see. It is one
+// function so that the digest on the card and the digest on the wire cannot disagree: a
+// summary you cannot check against what is under it is a rumour.
+function chiefFloor() {
+  const people = filterPeople(roster.people, filter).filter(notChief);
+  return { people, notices: notices({ people }) };
+}
+
+function setChief(id, kind) {
+  chief = { id, kind, nonce: null, asked: 0, print: '', answer: null, question: '', at: 0, error: null };
+  closeTheBooks();
+}
+
+function dropChief(why) {
+  if (!chief.id) return;
+  chief = { ...chief, id: null, kind: null, nonce: null, answer: null, question: '', error: null };
+  closeTheBooks();
+  if (why) note(why);
+  prevLines = [];
+  draw();
+}
+
+// One pass, called from the poll. Either collects an answer that is outstanding or decides
+// whether to ask for a new one, never both, because an ask sent while one is in flight is
+// two prompts in a queue and the second one's digest is already stale.
+async function tickChief() {
+  if (DEMO || ONCE || !board || !chief.id) return;
+  const me = roster.find(chief.id);
+  // A manager whose tab you closed is not hired any more, and a card still quoting it would
+  // be quoting a desk that is not there. Said out loud rather than silently forgotten: the
+  // next thing that happens is the card offering to hire one, and that needs a reason.
+  if (!me) return dropChief('the manager you hired is gone');
+  if (chief.nonce) return collectChief();
+  if (Date.now() - chief.asked < CHIEF_MS) return;
+  // Skipped rather than queued. The manager is mid-turn, the floor will have moved again by
+  // the time it is free, and this runs every two seconds: waiting is free and queueing is
+  // an ask against a digest nobody will ever see. `blocked` is refused by herdr outright.
+  if (me.status === 'working' || me.status === 'blocked') return;
+  const { people, notices: list } = chiefFloor();
+  const print = floorPrint({ people, notices: list });
+  // A floor that has not changed does not get asked about again. Without this the office
+  // re-asks every twenty seconds forever on a completely static floor, which is the one
+  // failure mode that would make the whole thing not worth having.
+  if (print === chief.print && chief.answer) return;
+  await askChief({ print, people, notices: list });
+}
+
+async function askChief({ print, people, notices: list, question = '' }) {
+  // Fresh every ask, because the manager's screen still has the last conversation on it and
+  // a fixed marker would match the wrong copy of itself. See src/chief.mjs.
+  const nonce = randomBytes(3).toString('hex');
+  const text = chiefAsk({ accounts: report({ people, notices: list }), nonce, question });
+  chief = { ...chief, nonce, asked: Date.now(), print, question, error: null };
+  prevLines = [];
+  draw();
+  let side = null;
+  try {
+    // Its own connection, for the same reason a hire gets one: every request on the main
+    // socket is queued behind the one in front of it, and the office keeps polling and
+    // animating while the manager is reading.
+    side = await new ApiClient().open();
+    // No `wait`. The office is not blocked on this and neither is the poll: the answer is
+    // collected off the manager's own screen on a later pass, like everything else here.
+    await side.request('agent.prompt', { target: chief.id, text });
+  } catch (err) {
+    chief = { ...chief, nonce: null, error: `could not ask the manager: ${err.code || err.message}` };
+  } finally {
+    side?.close();
+    prevLines = [];
+    draw();
+  }
+}
+
+async function collectChief() {
+  if (Date.now() - chief.asked > CHIEF_WAIT_MS) {
+    chief = { ...chief, nonce: null, error: 'the manager did not answer' };
+    prevLines = [];
+    return draw();
+  }
+  let text = '';
+  try {
+    const res = await api.request('agent.read', { target: chief.id, source: 'recent_unwrapped', lines: CHIEF_LINES });
+    text = res?.read?.text ?? '';
+  } catch {
+    // A desk that will not talk gets asked again on the next pass, and the wait above is
+    // what stops that being forever.
+    return;
+  }
+  // Null while the closing marker has not arrived, which is a manager still typing. Half a
+  // summary reads exactly like a finished summary that happens to be wrong.
+  const rows = chiefAnswer(text, chief.nonce);
+  if (!rows) return;
+  chief = { ...chief, nonce: null, answer: rows, at: Date.now(), error: null };
+  prevLines = [];
+  draw();
+}
+
+// A fresh take on a floor that has not moved, which is the one thing the change check above
+// will never do on its own. The only reason it exists is that a summary is a judgement and
+// asking twice is how you find out how much of it was the floor.
+function reaskChief() {
+  if (!chief.id) return refuse('nobody is hired as manager: M hires one');
+  if (chief.nonce) return refuse('the manager is still answering the last one');
+  const me = roster.find(chief.id);
+  if (!me) return dropChief('the manager you hired is gone');
+  if (me.status === 'working') return refuse('the manager is mid-turn: try again in a moment');
+  const { people, notices: list } = chiefFloor();
+  askChief({ print: floorPrint({ people, notices: list }), people, notices: list });
+}
+
+// What the card is allowed to say about all this. A plain object rather than the live one,
+// because the renderer is a pure function of its view and `chief` is a mutable box with a
+// socket's worth of state in it.
+function chiefCard() {
+  const me = chief.id ? roster.find(chief.id) : null;
+  return {
+    hired: Boolean(chief.id),
+    name: me?.name || chief.kind || null,
+    kind: chief.kind,
+    asking: Boolean(chief.nonce),
+    answer: chief.answer,
+    question: chief.question,
+    ageMs: chief.at ? Date.now() - chief.at : null,
+    error: chief.error,
+  };
 }
 
 /* ------------------------------------------------------------- assigning work */
@@ -1407,7 +1663,14 @@ function refuse(text) {
 // a key that is telling you something: standing at the manager's desk and pressing `a` is
 // a reasonable thing to try exactly once.
 function whyNobody() {
-  if (selectedId === MANAGER_ID) return 'the manager does not take jobs: it only reports';
+  // Still true with a manager hired, and the wording says which half. It does not take jobs:
+  // a question put to it is answered on the card and nothing is done about the answer. What
+  // changes when somebody is at the desk is that there is now something to ask.
+  if (selectedId === MANAGER_ID) {
+    return chief.id
+      ? 'the manager does not take jobs: a asks it a question instead'
+      : 'the manager does not take jobs: it only reports. M hires one that can be asked';
+  }
   if (selectedId === HIRE_ID) return 'nobody sits there yet';
   return 'nobody selected';
 }
@@ -1429,9 +1692,21 @@ function openCompose(scope) {
     if (!person) return refuse(whyNobody());
     if (person.status !== 'blocked') return refuse(`${person.name} is not waiting on you: press a to give them a job`);
   }
+  // A question for the manager. It shares the field with the other three because typing a
+  // sentence to an agent is the same act whichever agent it is, and everything that makes it
+  // a different act happens on the way out: this one never reaches `agent.prompt` raw, it
+  // goes through `askChief` with the digest in front of it and the answer comes back on the
+  // card. So the `to` list is the manager and the confirm step is nobody's.
+  if (scope === 'chief') {
+    if (!chief.id) return refuse('nobody is hired as manager: M hires one');
+    if (chief.nonce) return refuse('the manager is still answering the last one');
+  }
   const { to, skipped } = scope === 'all'
-    ? broadcastTargets(roster.people)
-    : { to: [person], skipped: { blocked: 0, working: 0 } };
+    // Not the manager. A standup that handed the manager the same job as everybody else
+    // would be the office giving a coding task to the thing whose entire contract is that it
+    // only ever reports, and it would arrive there as a prompt with no digest in it.
+    ? broadcastTargets(roster.people.filter(notChief))
+    : { to: scope === 'chief' ? [roster.find(chief.id)].filter(Boolean) : [person], skipped: { blocked: 0, working: 0 } };
   if (scope === 'all' && !to.length) return refuse('nobody is free to take a new job right now');
   // Assign and the hire menu are the same half of the pane, and half-typed text is
   // the more valuable of the two, so opening one puts the other away.
@@ -1440,8 +1715,8 @@ function openCompose(scope) {
   board = false;
   compose = {
     scope,
-    id: person?.id || null,
-    name: person?.name || null,
+    id: (scope === 'chief' ? chief.id : person?.id) || null,
+    name: (scope === 'chief' ? chiefCard().name : person?.name) || null,
     // What they asked, so the answer is typed with the question on the screen. It
     // is the desk's own bubble text, which is the short form of the ask.
     ask: scope === 'reply' ? person.ask || null : null,
@@ -1492,6 +1767,23 @@ async function sendCompose() {
     compose = null;
     prevLines = [];
     draw();
+    return;
+  }
+  // A question for the manager leaves by a different door. It is not sent as typed: the
+  // digest goes in front of it, the reply has to come back bracketed, and the answer is
+  // display text on the card rather than something an agent was told to do. Everything the
+  // field did was collect a sentence, which is the only part these four scopes share.
+  if (compose.scope === 'chief') {
+    compose = null;
+    // Back to the card, because that is the only place the answer is drawn and the question
+    // was asked from there.
+    selectedId = MANAGER_ID;
+    board = true;
+    const { people, notices: list } = chiefFloor();
+    // The print is recorded as if this were a summary, so a question does not leave the
+    // office thinking the floor is unaccounted for and immediately asking again over the top
+    // of the answer that is on screen.
+    await askChief({ print: floorPrint({ people, notices: list }), people, notices: list, question: text });
     return;
   }
   const replying = compose.scope === 'reply';
@@ -1749,6 +2041,35 @@ function onInput(chunk) {
 
   if (str === '/') return openFilter();
   if (str === '+') return openHire();
+  // Hiring a manager, from the manager's desk or its card, which are the two places the
+  // question comes up. Deliberately not from anywhere else: it is a hire, and every other
+  // hire in the office takes two deliberate steps for the same reason.
+  if (str === 'M') {
+    if (selectedId !== MANAGER_ID) return refuse('m walks to the manager, and M hires one from there');
+    if (chief.id) return refuse(`${chiefCard().name} is already your manager: X lets them go`);
+    return openHire('manager');
+  }
+  // Letting them go. Only the office's idea of who the manager is: the pane, the tab and the
+  // worktree are left exactly where they are, for the same reason a failed hire leaves what
+  // it made. Closing somebody's pane on their behalf is not a thing this plugin does.
+  if (str === 'X') {
+    if (selectedId !== MANAGER_ID) return;
+    if (!chief.id) return refuse('nobody is hired as manager');
+    const who = chiefCard().name;
+    dropChief(`${who} is not the manager any more. Their pane is still open.`);
+    return;
+  }
+  // A fresh take on a floor that has not moved. Only ever from the card, because the card is
+  // the only place the answer is drawn and a re-ask you cannot see the result of is a
+  // keystroke that spends tokens and shows you nothing.
+  if (str === 'R') {
+    if (!board) return;
+    return reaskChief();
+  }
+  // `a` on the manager's desk used to refuse, on the grounds that the manager does not take
+  // jobs. It still does not: a question is not a job, the answer goes on the card and nothing
+  // is done about it. See `whyNobody`.
+  if (str === 'a' && selectedId === MANAGER_ID && chief.id) return openCompose('chief');
   if (str === 'a') return openCompose('one');
   if (str === 'A') return openCompose('all');
   if (str === '\x1b[A' || str === 'k') move(0, -1);
@@ -1903,6 +2224,25 @@ function demoExtras() {
       if (news) roster.setEvent(person.id, news.label, news.kind);
     }
   });
+  // A manager already hired, with something already said. Written here by hand rather than
+  // asked for, which is the same deal as every other number in the demo: the point of the
+  // demo is the art and the layout, and neither of those should need a running agent or
+  // somebody's tokens. Deliberately the shape of a real answer rather than a good one, so it
+  // is obvious on a screenshot that this block is quoted and the block under it is measured.
+  if (!chief.id) {
+    chief = {
+      ...chief,
+      // An id no demo desk has, so the fake manager does not take one of them out of the
+      // notices and quietly change what the demo floor is a picture of.
+      id: 'demo:manager',
+      kind: 'claude',
+      answer: [
+        'Two desks are stopped in the same checkout and one of them has a hand up, so that',
+        'is the one to look at first. Nobody else is waiting on anything.',
+      ],
+      at: Date.now() - 42000,
+    };
+  }
 }
 
 /* --------------------------------------------------------------------- boot */
@@ -1970,6 +2310,16 @@ async function main() {
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });
+    // The manager's card in one frame, for the same reason `--detail` exists: it is two
+    // keystrokes deep and a single printed frame is how this thing gets looked at, diffed
+    // and screenshotted. `board` rather than `openBoard()`, because that draws and then
+    // asks the manager a question, and neither belongs in a render that is about to print
+    // once and exit.
+    if (argv.has('--board')) {
+      selectedId = MANAGER_ID;
+      detail = null;
+      board = true;
+    }
     // Written *and flushed* before the exit. Whenever this render is being diffed,
     // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
     // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an

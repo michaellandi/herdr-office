@@ -593,3 +593,260 @@ test('an office with nobody in it has no manager either', () => {
   const frame = renderFrame(viewOf({ people: [], cols: 140, rows: 46, selectedId: null, notices: [] }));
   assert.ok(!frame.hitboxes.some((b) => b.id === MANAGER_ID));
 });
+
+/* ------------------------------------------ the card when somebody is hired */
+
+// A manager that has been hired and has said something. Two sentences, because one is
+// what the office asked for and three is what it will sometimes get, and the card has to
+// do something sensible with either.
+const SAID = [
+  'Ada and Bo are both stopped in herdr-office and Ada has a hand up, so Ada is the one to look at first.',
+  'Nobody else is waiting on anything.',
+];
+const hired = (extra = {}) => ({ hired: true, name: 'claude', asking: false, answer: SAID, question: '', ageMs: 42_000, error: null, ...extra });
+const hiredCard = (chief, notices = MANY, cols = 140, rows = 46) =>
+  plain(renderFrame(viewOf({ people: crowdedFloor(), cols, rows, board: true, selectedId: MANAGER_ID, notices, chief })));
+
+test('a card with nobody hired says so, and says which key hires', () => {
+  // The discoverable half. A summary section that only appears once you have already
+  // found the key that fills it is a feature nobody finds, so the empty state is the
+  // advertisement, and it sits in the field row rather than in a section of its own
+  // because an empty section is worse than no section.
+  const text = hiredCard(null).join('\n');
+  assert.match(text, /nobody hired/);
+  assert.match(text, /M hires a manager/);
+  // And no heading over nothing.
+  assert.ok(!text.includes('what the manager says'), 'an empty section was drawn');
+});
+
+test('a hired manager is named on the card before it has said anything', () => {
+  // The gap between pressing M and the first answer landing is twenty seconds of real
+  // time. A card that looks exactly like the unhired one for that whole stretch reads as
+  // a key that did not work, so the name goes up the moment the hire lands.
+  const text = hiredCard(hired({ answer: null, ageMs: null })).join('\n');
+  assert.match(text, /claude · nothing asked yet/);
+  assert.ok(!text.includes('what the manager says'), 'a heading with no answer under it');
+});
+
+test('a manager mid-answer says it is reading, not that it is silent', () => {
+  const text = hiredCard(hired({ asking: true, answer: null })).join('\n');
+  assert.match(text, /claude · reading the floor now/);
+});
+
+test('a manager still shows its last answer while it reads the floor again', () => {
+  // R and a both re-ask, and the twenty seconds after either one are the twenty seconds
+  // somebody is most likely to be looking at the card. Blanking the old answer to say
+  // `reading` would make pressing R look like it deleted something.
+  const text = hiredCard(hired({ asking: true })).join('\n');
+  assert.match(text, /reading the floor now/);
+  assert.match(text, /Ada is the one to look at first/);
+});
+
+test('an answer says how long ago it was asked for', () => {
+  // The one thing the office knows about the answer that the answer does not say. A
+  // summary of a floor is worth less the older it is, and there is no other clue: the
+  // text does not change when it goes stale, it just stops being true.
+  assert.match(hiredCard(hired()).join('\n'), /claude · asked 42s ago/);
+  assert.match(hiredCard(hired({ ageMs: 400 })).join('\n'), /claude · just asked/);
+});
+
+test('a manager that could not be reached says that instead of a summary', () => {
+  // The failure has to be visible on the card, because the card is the only place the
+  // manager exists. A socket that refused the prompt and a floor that is quiet look
+  // identical if the error is swallowed.
+  const text = hiredCard(hired({ error: 'claude did not answer in 2m00s', answer: null })).join('\n');
+  assert.match(text, /did not answer/);
+  assert.ok(!text.includes('what the manager says'), 'an error and a summary at once');
+});
+
+test('what the manager said is attributed to it and never blended with the accounts', () => {
+  // The rule the whole feature rests on. Everything under `what happened at each desk` is
+  // mechanical: a process state, a git count, a quoted line. The manager's sentences are a
+  // model's reading of those facts and can be wrong. Two headings, and the model's one
+  // first, so nobody reads a guess as a count.
+  const lines = hiredCard(hired());
+  const says = lines.findIndex((l) => l.includes('what the manager says'));
+  const desks = lines.findIndex((l) => l.includes('what happened at each desk'));
+  assert.ok(says >= 0, 'the manager said something and the card did not say who');
+  assert.ok(desks >= 0, 'the accounts are missing');
+  assert.ok(says < desks, 'the summary was drawn inside the accounts');
+});
+
+test('a question changes the heading, because the answer is no longer a summary', () => {
+  const asked = hiredCard(hired({ question: 'is anybody waiting on me?' })).join('\n');
+  assert.match(asked, /what the manager says about that/);
+  assert.match(hiredCard(hired()).join('\n'), /what the manager says\b/);
+});
+
+test('the manager still has nothing to click once it can be asked things', () => {
+  // The card grew two keys and a section of model-written text, and neither is a reason
+  // for it to grow a hitbox: a click inside this panel would be a panel reaching a pane.
+  const frame = renderFrame(viewOf({ people: crowdedFloor(), cols: 140, rows: 46, board: true, selectedId: MANAGER_ID, notices: MANY, chief: hired() }));
+  const rows = frame.lines.length;
+  assert.deepEqual(frame.hitboxes.filter((b) => b.y >= rows / 2 && b.action), []);
+});
+
+test('the hint names the keys that exist, and only those', () => {
+  // M is meaningless once somebody is hired and a is a lie until somebody is, and the
+  // card is the only surface either key is advertised on.
+  //
+  // One notice rather than thirty, because the hint is chrome and gives its row up to the
+  // accounts first: at this size a crowded floor with a summary on it has no room for the
+  // hint at all, which is the priority working rather than the wording being wrong.
+  //
+  // Matched on the hint row itself rather than on the whole card, because the field row above
+  // also names M and an assertion against the joined frame passes while the hint says nothing.
+  const hintRow = (chief) => hiredCard(chief, [STUCK]).find((l) => l.includes('m walks to the desk')) || '';
+  const bare = hintRow(null);
+  const full = hintRow(hired());
+  assert.match(bare, /M hires a manager/);
+  assert.ok(!/a asks it/.test(bare), 'the unhired card advertised asking');
+  assert.match(full, /a asks it/);
+  assert.match(full, /R re-asks/);
+  assert.ok(!/M hires/.test(full), 'the hired card advertised hiring again');
+});
+
+test('a quiet floor with a manager still offers the question', () => {
+  // The case the summary is least useful and the question is most: nothing is wrong, and
+  // "what did everybody get done" is the thing you actually want to ask.
+  const text = hiredCard(hired(), [], 140, 46).join('\n');
+  assert.match(text, /nothing, which is the good outcome/);
+  assert.match(text, /a asks it/);
+});
+
+test('what the manager says never costs the card the desks it is for', () => {
+  // The priority that makes the section safe to add. The accounts are why somebody opened
+  // the card; the summary is a convenience over the top. So at every size where the card
+  // could brief a desk without a manager, it still briefs one with a long answer on it.
+  for (const [cols, rows] of SIZES) {
+    const bare = hiredCard(null, MANY, cols, rows);
+    if (!bare.some((l) => / · stopped/.test(l))) continue;
+    const full = hiredCard(hired({ answer: [SAID.join(' '), SAID.join(' ')] }), MANY, cols, rows);
+    assert.ok(full.some((l) => / · stopped/.test(l)), `${cols}x${rows}: the summary ate every desk`);
+  }
+});
+
+test('the card closes at every size with an answer on it, however long', () => {
+  // The same border the unhired card holds a row back for, now with a variable number of
+  // rows of somebody else's prose above it. A model that replies with a paragraph is not
+  // a reason for a terminal to end mid-box.
+  const long = hired({ answer: [new Array(40).fill('a sentence that keeps going').join(', ')] });
+  for (const [cols, rows] of SIZES) {
+    if (!hiredCard(null, [], cols, rows).some((l) => l.includes('the floor is quiet'))) continue;
+    for (const [label, chief] of [['answered', hired()], ['long', long], ['asking', hired({ asking: true })]]) {
+      for (const notices of [[], MANY]) {
+        const drawn = drawnRows(hiredCard(chief, notices, cols, rows));
+        assert.match(drawn[drawn.length - 1] || '', /╰─+╯/, `${cols}x${rows} ${label} n=${notices.length}: the card does not close`);
+      }
+    }
+  }
+});
+
+test('an answer too long for the room is cut and says it was cut', () => {
+  // Three rows is the cap, and a reply that runs past it has to end in a way that reads as
+  // "there is more of this" rather than as the manager having trailed off.
+  const long = hiredCard(hired({ answer: [new Array(60).fill('and another clause').join(', ')] }));
+  const start = long.findIndex((l) => l.includes('what the manager says'));
+  const prose = long.slice(start + 1).filter((l) => l.includes('another clause'));
+  assert.ok(prose.length <= 3, `${prose.length} rows of prose`);
+  assert.match(prose[prose.length - 1], /…/);
+  // And it is the top that survives the cut, not the tail. The three sentences the office
+  // asked for are in the order the manager decided says most first, and `wrapField` slices
+  // from the end by default because everywhere else in the office it is packing a field
+  // somebody is still typing into. Reading the last three rows of a reply would put the
+  // manager's closing aside on the card and drop the desk it named.
+  const marked = hiredCard(hired({ answer: ['FIRST this is the thing to look at.', ...new Array(20).fill('and then some more about it'), 'LAST an aside.'] }));
+  const said = marked.slice(marked.findIndex((l) => l.includes('what the manager says')) + 1).join('\n');
+  assert.match(said.split('what happened at each desk')[0], /FIRST/);
+  assert.ok(!said.split('what happened at each desk')[0].includes('LAST'), 'the card read the reply backwards');
+});
+
+test('a heading is never the last thing inside the card', () => {
+  // What the row-budget check in front of the summary is for. The section costs a heading plus
+  // at least one row of prose, and a card that had room for the heading alone would draw
+  // `what the manager says` with the border directly under it, which reads as the manager
+  // having been asked and said nothing rather than as the pane being short.
+  const long = hired({ answer: [new Array(40).fill('a sentence that keeps going').join(', ')] });
+  for (const [cols, rows] of SIZES) {
+    for (const chief of [hired(), long]) {
+      for (const notices of [[], MANY]) {
+        const drawn = drawnRows(hiredCard(chief, notices, cols, rows));
+        for (let i = 0; i < drawn.length; i += 1) {
+          if (!drawn[i].includes('what the manager says')) continue;
+          const under = drawn[i + 1] || '';
+          assert.ok(!/^\s*[╰├]/.test(stripAnsi(under).trim()) && under.trim() !== '', `${cols}x${rows}: a heading with nothing under it`);
+        }
+      }
+    }
+  }
+});
+
+test('nothing a manager says can push a cell over, at any size', () => {
+  // The grid invariant again, against the one string in the whole office that the office
+  // did not write. Control characters, an emoji, a box drawing run that would break the
+  // border, and a line with no spaces in it for a word wrapper to break on.
+  const nasty = [
+    ['plain', hired()],
+    ['wide', hired({ answer: ['Ada \u001b[31mis\u001b[0m stuck \u{1F600} on ──── the patch'] })],
+    ['unbroken', hired({ answer: ['x'.repeat(400)] })],
+    ['many', hired({ answer: new Array(6).fill('a sentence about a desk') })],
+    ['named', hired({ name: 'y'.repeat(80), error: 'z'.repeat(200) })],
+  ];
+  for (const [cols, rows] of SIZES) {
+    for (const [label, chief] of nasty) {
+      for (const notices of [[], MANY]) {
+        const { lines } = renderFrame(viewOf({ people: crowdedFloor(), cols, rows, board: true, selectedId: MANAGER_ID, notices, chief }));
+        assert.equal(lines.length, rows, `${cols}x${rows} ${label}: ${lines.length} lines`);
+        lines.forEach((line, i) => assert.equal(width(line), cols, `${cols}x${rows} ${label}: line ${i} is ${width(line)} cells`));
+      }
+    }
+  }
+});
+
+/* ------------------------------------------------- asking it something */
+
+const asking = (extra = {}) => ({
+  scope: 'chief', id: 'w1:p9', name: 'claude', text: 'is anybody waiting on me?',
+  to: [{ id: 'w1:p9', name: 'claude', status: 'idle' }], ask: null, error: null,
+  sending: false, confirm: false, skipped: null, ...extra,
+});
+const askPanel = (extra) => plain(renderFrame(viewOf({ people, cols: 140, rows: 46, compose: asking(extra) })));
+
+test('asking the manager is a question, not an assignment', () => {
+  // Same panel, same keys, and the one word that changes is the whole difference: every
+  // other thing this box does sends work to an agent that will go and do it. This one
+  // sends a question to an agent that has been told not to.
+  const text = askPanel().join('\n');
+  assert.match(text, /ask · claude/);
+  assert.ok(!/assign/.test(text), 'the question box offered to assign work');
+  assert.match(text, /ask about the floor/);
+  assert.match(text, /the answer lands on the card/);
+});
+
+test('the keybar over a question offers to ask rather than to send', () => {
+  const text = askPanel().join('\n');
+  assert.match(text, /a question/);
+  assert.match(text, /ask it/);
+  assert.ok(!/send it/.test(text), 'the keybar offered to send a question');
+});
+
+test('a question is never broadcast and never asks who gets it', () => {
+  // The confirm step exists because A can reach every desk at once. A question reaches
+  // one agent by construction, so a card that asked `review who gets it` would be
+  // inventing a decision.
+  const text = askPanel().join('\n');
+  assert.ok(!/review who gets it/.test(text));
+  assert.ok(!/desks/.test(text.split('ask · claude')[1] || ''), 'a question was addressed to a floor');
+});
+
+test('the card stops promising something it cannot promise once somebody is hired', () => {
+  // The claim that was true of the office and stopped being true of the system. Unhired,
+  // `can do nothing` is a fact about src/manager.mjs: it takes notices and returns strings.
+  // Hired, the thing writing the summary is an agent with a shell, and a card still saying
+  // the manager can do nothing would be the office vouching for something it cannot see.
+  const bare = hiredCard(null, [STUCK]).join('\n');
+  const full = hiredCard(hired(), [STUCK]).join('\n');
+  assert.match(bare, /nothing: it reads the floor and writes lines/);
+  assert.match(full, /never acted on/);
+  assert.ok(!/it reads the floor and writes lines/.test(full), 'the hired card kept the unhired promise');
+});

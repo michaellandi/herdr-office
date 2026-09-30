@@ -385,7 +385,7 @@ export const FILTERS = [
 export const isManagerRow = (line) => /WATCHING|\d+ (?:DESKS?|THINGS?)\b/.test(line);
 export const personRow = (lines, name) => lines.find((l) => l.includes(name) && !isManagerRow(l)) || '';
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0, board = false }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0, board = false, chief = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -426,5 +426,8 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // Whether the manager's card is open. False by default, which is every frame drawn
     // before this existed.
     board,
+    // Whether anybody is hired as manager, and what they last said. Nobody, by default,
+    // which is the office as it ships and the frame every test written before this drew.
+    chief: chief || { hired: false, name: null, asking: false, answer: null, question: '', ageMs: null, error: null },
   };
 }

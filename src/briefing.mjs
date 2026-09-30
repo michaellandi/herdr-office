@@ -84,11 +84,32 @@ function headline(notice, person, others) {
   return notice.text || '';
 }
 
+// The headline for a desk nothing has been noticed about, which is every desk on a quiet
+// floor and most desks on a busy one. Only report() reaches this: the card briefs the
+// noticed desks and nobody else, whereas a summary of what work is happening has to
+// account for the seven desks where the answer is "fine, still going".
+//
+// Same vocabulary as the tile's status word, in a sentence rather than a chip. The dwell is
+// the interesting half: `working for 2m00s` and `working for 3h10m` are the same status and
+// very different pieces of news, and the second one is the one the office has no notice for
+// because a long turn is not a stall.
+const PLAIN = { working: 'working', blocked: 'waiting on an answer', done: 'done', idle: 'idle', unknown: 'status unknown' };
+
+function plainHead(person) {
+  const word = PLAIN[person.status] || PLAIN.unknown;
+  if (!Number.isFinite(person.statusMs) || person.statusMs < 1000) return word;
+  return `${word} for ${person.assumedSince ? 'at least ' : ''}${formatDuration(person.statusMs)}`;
+}
+
 // The account itself, in the order somebody would tell it: what the desk was asked to do,
 // where, what it ran, what came of that, what it left behind, how full its head got, and
 // the last thing it said. Missing facts drop out rather than becoming apologies, so a desk
 // the office knows two things about gets two clauses and not five parenthetical nothings.
-function factsFor(notice, person) {
+//
+// Takes the notice's kind rather than the notice, because the only thing it wants from one
+// is which clause the headline has already said, and a desk with no notice at all passes
+// null and gets the full set.
+function factsFor(kind, person) {
   const out = [];
   const task = quote(person.title, TASK_MAX);
   // Past tense for a desk that has stopped, because that is what the reader is being told:
@@ -100,7 +121,7 @@ function factsFor(notice, person) {
   // whether somebody else's work is in danger. The directory is dropped when the headline
   // has already named it, rather than said twice in four rows.
   const place = person.repo || dirName(person.cwd);
-  const where = [person.branch ? `on ${person.branch}` : '', place && notice.kind !== 'collision' ? `in ${place}` : ''].filter(Boolean).join(' ');
+  const where = [person.branch ? `on ${person.branch}` : '', place && kind !== 'collision' ? `in ${place}` : ''].filter(Boolean).join(' ');
   if (where) out.push(where);
 
   // Only ever present on a working desk: the roster drops the command the moment a desk
@@ -123,7 +144,7 @@ function factsFor(notice, person) {
   // are half empty, and a summary that spends a clause on `31% full` on every desk teaches
   // the reader to skip the row the interesting one is on. The `full` notice's headline
   // already says it, so it is not said twice there either.
-  if (notice.kind !== 'full' && ['hot', 'brimming'].includes(pressure(person.head?.used))) out.push(headWords(person.head));
+  if (kind !== 'full' && ['hot', 'brimming'].includes(pressure(person.head?.used))) out.push(headWords(person.head));
 
   // Their own words, last, because they are the longest clause and the only one the office
   // did not write. A raised hand is quoted as a question and a stopped desk as a statement,
@@ -174,10 +195,44 @@ export function brief({ people = [], notices = [] } = {}) {
       name: person.name || id,
       kind: list[0].kind,
       head: said(list[0]),
-      facts: [...list.slice(1).map(said), ...factsFor(list[0], person)],
+      facts: [...list.slice(1).map(said), ...factsFor(list[0].kind, person)],
     });
   }
   return out;
+}
+
+// Every desk on the floor, the noticed ones first in brief()'s order and the rest in the
+// floor's own order.
+//
+// This is the same accounts the card draws, for a different reader. The card answers "who
+// needs me", so it briefs the desks something has been noticed about and stops. A summary of
+// what work is happening has to cover the desk that is fine, because "six of them are fine"
+// is most of the answer and it cannot be said by a function that only ever sees the other
+// one. The quiet desks come last because the order is still an argument about what matters,
+// and nothing here re-ranks the noticed ones: notices.mjs already did that.
+//
+// Pure, like everything else in this file. No socket, no clock, no state. Whether a desk
+// belongs on the floor at all is the caller's question, which is how the manager keeps
+// itself out of its own report without this module knowing a manager exists.
+export function report({ people = [], notices = [] } = {}) {
+  const noticed = brief({ people, notices }).map((account) => ({ ...account, noticed: true }));
+  const seen = new Set(noticed.map((account) => account.id));
+  const quiet = [];
+  for (const person of Array.isArray(people) ? people : []) {
+    if (!person || !person.id || seen.has(person.id)) continue;
+    seen.add(person.id);
+    quiet.push({
+      id: person.id,
+      name: person.name || person.id,
+      // No notice, so no kind. Null rather than the status, because kind is what the
+      // renderer colours a headline by and a status has its own colour already.
+      kind: null,
+      noticed: false,
+      head: plainHead(person),
+      facts: factsFor(null, person),
+    });
+  }
+  return [...noticed, ...quiet];
 }
 
 // Clauses packed into rows of a given width, greedily, never splitting one.

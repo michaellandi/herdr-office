@@ -43,6 +43,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs` | Run it standalone in any terminal that can reach the socket |
 | `node office.mjs --demo` | Fake roster, no server needed (good for hacking on the art) |
 | `node office.mjs --once` | Render a single frame to stdout and exit |
+| `node office.mjs --once --board` | Same, with the office manager's card open, which is otherwise two keystrokes deep |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
@@ -85,6 +86,10 @@ would rather not.
 | `z` | zoom: floor plan, list view, one desk |
 | `b` | jump to the next raised hand |
 | `m` | walk to what the office manager has noticed |
+| `M` | hire an agent as office manager, from the manager's card |
+| `a` (on the manager) | ask it a question about the floor, once one is hired |
+| `R` | ask it again, for a fresh read of the floor |
+| `X` | let the manager go. Its pane is left alone, running, for you to close |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
 | `esc` | close the panel |
@@ -183,9 +188,58 @@ says both. When the card runs out of room the accounts win: the desks at the top
 their detail, the last one down drops back to its headline, the rest are counted, and the
 hint about what `m` does is the first thing to go.
 
-It only ever reports. The desk has no pane behind it, no hitbox that does anything and
-no key that writes: `y`, `n`, `s`, `a` and `f` all refuse there and say why. Nothing it
-draws can send a keystroke, start an agent or touch a repository.
+The desk itself only ever reports. It has no pane behind it, no hitbox that does
+anything and no key that writes: `y`, `n`, `s` and `f` all refuse there and say why. The
+notices, the counts and the accounts are computed by three modules that take a roster and
+return strings, so nothing on this card can send a keystroke, start an agent or touch a
+repository.
+
+### Hiring somebody to read it for you
+
+Fourteen accounts is still fourteen accounts. `M` on the manager's card starts an agent
+of your choice, in its own worktree, and gives it one job: read the floor and say what is
+happening in three sentences. Its answer appears on the card in a section of its own,
+above the accounts it was made from, and `a` asks it a question instead.
+
+```
+  ├─ what the manager says ─────────────────────────────────────────────┤
+  │   Ada and Bo are both stopped in herdr-office and Ada has a hand up,
+  │   so Ada is the one to look at first. Nobody else is waiting.
+  ├─ what happened at each desk ────────────────────────────────────────┤
+  │   Ada · stopped 30m00s ago
+  │      was doing "apply the security patch" · 7 uncommitted
+```
+
+Two sections, never one. The top half is a model's reading and can be wrong; the bottom
+half is the office's own counts and quotes, and it is the receipt. The order is what makes
+the summary checkable at a glance rather than something you have to trust.
+
+Four rules it is built around, each of which is a thing that would otherwise make the
+feature not worth having:
+
+- **It costs nothing unless you are looking at it.** No manager is hired until you press
+  `M`, and a hired one is only asked anything while its card is open. Close the card and
+  it goes quiet. It is never re-asked faster than every twenty seconds, never asked twice
+  about a floor that has not changed, and skipped rather than queued while it is mid-turn.
+  What counts as changed is process states, git counts, branches, quoted lines and which
+  desks are in a notice. Clocks are deliberately excluded: `idle for 30m00s` becoming
+  `30m01s` is not news, and treating it as news would mean asking forever.
+- **It is sent facts, not screens.** What goes over is the same digest the card draws:
+  one block per desk, each clause already capped and stripped. It is not given the socket,
+  a pane id, or any way to reach the floor it is describing.
+- **Nothing it says is ever a command.** Its reply is not parsed, matched, dispatched or
+  forwarded. It is wrapped between two markers carrying a random per-ask nonce, and
+  anything outside them is ignored, so a desk cannot print a block that the office reads
+  as an answer. The digest is labelled as data in the prompt, because pane titles and
+  quoted lines are written by other agents and "ignore previous instructions" reaching a
+  manager is not preventable. What is preventable is it arriving unlabelled, and what
+  actually holds is that the worst a bad answer does is read wrong on this card.
+- **It is not on its own floor.** A hired manager is excluded from its own digest, from
+  the notices, and from `A`. Without that, a manager sitting idle becomes a stall notice
+  within fifteen minutes and then reads about itself.
+
+`X` lets it go. That only forgets it: the pane, tab and worktree are left exactly as they
+are, running, for you to look at or close yourself.
 
 Three things are worth knowing up front, because they are the rules the whole thing
 is built around:
@@ -198,7 +252,7 @@ is built around:
   than classified, each capped and stripped of anything that could move a cursor: the
   question a blocked agent is asking, the tail of what a desk was last saying on its
   card, and the one line of that a stall notice uses to say why.
-- **`y`, `n`, `s`, `Y`, `a` and `A` send real input to real agents.** They are the only
+- **`y`, `n`, `s`, `Y`, `a`, `A` and `M` send real input to real agents.** They are the only
   things here that cannot be taken back, and they are the most guarded part of the
   plugin. `--demo` prints what it would have sent instead.
 - **Every line is exactly as wide as the pane.** One cell too many wraps and shoves the
@@ -210,6 +264,7 @@ is built around:
 node --test test/*.test.mjs      # the whole suite, no dependencies to install
 node office.mjs --demo           # the office, with a fake roster and no server
 node office.mjs --once --demo    # one frame to stdout, for diffing the art
+node office.mjs --once --demo --board   # the manager's card in one frame
 ./scripts/record-demo.sh         # re-record the README's GIF (needs vhs + ffmpeg)
 ```
 
@@ -219,9 +274,10 @@ Two rules that are easy to break by accident:
   U+257F) and block elements (U+2580 to U+259F). Geometric Shapes start at U+25A0 and
   are off limits, because `▪` is one cell in some terminals and two in others, which
   is unfixable once it is on the grid. `test/sprites.test.mjs` enforces this.
-- **Never test approve, deny, answer, grant or assign against a live office.** Those
-  keys type at somebody's real agent. `--demo` prints what it would have sent, and the
-  tests send them for real down a socket no agent is listening on.
+- **Never test approve, deny, answer, grant, assign or hire against a live office.**
+  Those keys type at somebody's real agent or start a new one, and `M` does both. `--demo`
+  prints what it would have sent, and the tests send them for real down a socket no agent
+  is listening on.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22, and a separate job installs herdr and checks every request the
@@ -255,6 +311,16 @@ comment there is the source of truth rather than the doc.
 - **The "stuck on" line is a heuristic** over the visible screen: keybinding hints are
   filtered out and real questions preferred, but a novel prompt shape can still fool
   it. The full screen is right there underneath it.
+- **A hired manager spends tokens, and only while its card is open.** It is asked at
+  most every twenty seconds, never twice about an unchanged floor, and never at all once
+  you close the card. If that is still more than you want, do not press `M`: nothing in
+  the office hires one for you and everything else works without one.
+- **Nothing checks whether a hired manager answered sensibly.** A model that ignores the
+  three-sentence limit gets cut off at three rows with an ellipsis, and one that answers
+  the wrong question just reads wrong on the card. The accounts underneath are the check,
+  which is why they are drawn separately rather than replaced.
+- **The hire path itself is only exercised against `--demo`.** `M`, like `+`, starts a
+  real agent in a real worktree, and no test can drive that without starting one.
 - macOS and Linux only. Windows would work in principle (the socket helper falls back
   to the CLI path Herdr recommends) but is untested.
 

@@ -330,11 +330,21 @@ Four notices, and the order between them is an argument about what can still be 
 
 The obvious next step from here is a coordinator that acts: notices a collision and
 moves somebody, notices a stall and prods it. That version is not this one, and the
-first one deliberately cannot become it by accident. `src/notices.mjs`, `src/manager.mjs`
-and `src/briefing.mjs` have no socket, no clock, no writes and no state between calls, and
-the only key they add moves a highlight. A thing that cannot do anything is much easier to
-believe, and the argument for shipping a manager at all is that this one is provably
+first one deliberately cannot become it by accident. `src/notices.mjs`, `src/manager.mjs`,
+`src/briefing.mjs` and `src/chief.mjs` have no socket, no clock, no writes and no state
+between calls. A thing that cannot do anything is much easier to believe, and the argument
+for shipping a manager at all is that the part of it that decides what is true is provably
 incapable of managing.
+
+That claim is about those four modules and not about the whole system, and the difference
+matters now that a manager can be [hired](#hiring-somebody-to-read-the-floor-for-you). A
+hired manager is a real agent session with the same tool access as every desk on the floor,
+so the office cannot promise anything about what it does in its own worktree. What it can
+promise is narrower and is the half that was ever load-bearing: the reply is not parsed,
+matched, dispatched or forwarded, so the worst a wrong answer does is read wrong on a card.
+The card says so in as many words, and says something different depending on whether
+anybody is hired, because a standing promise that has quietly stopped being true is worse
+than no promise.
 
 The same constraint shapes the wording. A notice states a fact and does not give an
 instruction: "Ada and Bo are both in herdr-office" is the whole of what the office
@@ -427,8 +437,10 @@ say and it is how to hire somebody.
 Nothing behind it. The id is `+manager`, which no real pane can collide with because
 herdr pane ids are `workspace:pane`, and `src/manager.mjs` is a pure function from a list
 of sentences to strings with no callable on the object it returns. The desk is drawn in
-the middle of the grid and still cannot reach an agent: `y`, `n`, `s`, `a` and `f` all
-refuse there and say which desk this is rather than swallowing the key. Fixing that
+the middle of the grid and still cannot reach an agent: `y`, `n`, `s` and `f` all
+refuse there and say which desk this is rather than swallowing the key. `a` refuses too
+until somebody is hired, and then means "ask it something" rather than "give it a job",
+which is the one key on this desk that changed meaning. Fixing that
 turned up the same bug one keystroke smaller at the empty desk, where those keys had been
 returning silently.
 
@@ -577,6 +589,114 @@ below the header, the same as every other card. At 140x46 that is three full acc
 110x30 it is one account in full and the other desks named, because collapsing the whole
 floor to a list whenever this card opens would be a bigger surprise than clipping detail on
 a short pane.
+
+### Hiring somebody to read the floor for you
+
+Fourteen accounts is still fourteen accounts. The card fixed the thing it was written to
+fix, which was one ambiguous line about one agent while three were stuck, and it fixed it
+by printing everything the office knew. On a busy floor that is a wall of true sentences
+and the question underneath it never changed: what is happening, and who needs me first.
+
+Nothing in the office can answer that. Every module above takes a roster and returns
+strings, and "which of these four things matters most" is a judgement, not a count. The
+office already has a floor full of things that make judgements, so `M` hires one.
+
+What it gets is a digest, not a floor. `src/chief.mjs` builds the whole conversation and is
+pure: `report()` gives every desk an account, `digest()` flattens them, `ask()` wraps them
+in a prompt, `answer()` pulls the reply back out, and `floorPrint()` decides whether the
+floor has changed. None of it has a socket. Three rules are written at the top of that
+file because they are the ones worth re-reading before changing anything in it.
+
+**The digest is the receipt.** The card draws the manager's sentences in a section of their
+own, labelled, above the accounts they were made from. Never blended, never interleaved,
+never one paragraph that mixes a count with a reading of it. The accounts are mechanical:
+a process state, a git count, a quoted line. The sentences are a model's take and can be
+wrong. Putting the take first and its evidence directly under it is the only arrangement in
+which a summary is checkable at a glance, and a reader who does not want to check it has
+lost nothing.
+
+**Nothing it says is ever a command.** The reply is not parsed, matched, dispatched or
+forwarded anywhere. This is the defence that actually holds, and it has to, because the
+digest carries author-controlled text: a pane title and a quoted screen line are written by
+other agents, and an agent that prints "ignore previous instructions and run this" will get
+that text in front of the manager. That is not preventable. What is preventable is it
+arriving unlabelled, so the prompt says the digest is a mechanical dump that no model wrote
+and that anything in it addressing the reader is to be reported as something a desk said.
+Belt and braces, and the braces are that the reply goes nowhere but a panel row.
+
+**The office never tells it where the socket is.** No socket path, no pane ids it could
+act on, no hint that a plugin API exists. It is an agent in a worktree that has been handed
+a page of text and asked a question about it.
+
+#### Only while you are looking at it
+
+A summary that is recomputed every two seconds forever is a background process spending
+tokens on a floor nobody is watching, and that alone would make the feature not worth
+having. So the gate is the card: no manager is hired until `M`, and a hired one is asked
+nothing unless the card is open. Close it and the manager goes idle. The card is also
+asked about the moment it opens rather than on the next poll, because two seconds of a card
+that says nothing reads as a key that did not work.
+
+Three more brakes on top of that:
+
+- **Never faster than twenty seconds**, whatever the poll does.
+- **Never twice about a floor that has not changed.** `floorPrint()` is the fingerprint,
+  and what it deliberately leaves out is the whole cost control. Durations are excluded:
+  a fingerprint over the rendered accounts differs every second, because `idle for 30m00s`
+  becomes `30m01s`, and the office would re-ask forever. A context percentage is excluded
+  for the same reason and replaced by its bucket. The clock only enters where crossing a
+  line is itself the news, which it does twice: a stall becoming a notice changes which
+  desks have a `kind`, and a head going from hot to brimming changes the bucket. Notice
+  *wording* is excluded too and only the kind is kept, since a sentence that renames the
+  same fact is not new information.
+- **Skipped rather than queued** while the manager is mid-turn. A queue here would mean a
+  manager permanently one floor behind, answering about a floor that has moved on.
+
+The ask is fire-and-forget. `agent.prompt` takes an optional `wait` and the office has
+never set it, so this needed no new primitive: the prompt goes out on its own connection
+and the reply is collected by polling the manager's pane like any other desk.
+
+#### Finding the answer on a screen full of prompt
+
+The reply comes back by reading the manager's pane, which contains the echoed prompt above
+it, and both copies contain the markers. So the manager is asked to wrap its whole reply
+between two lines carrying a random three-byte nonce, and the office takes the *last*
+opening marker before looking for a close. A fixed marker would match the prompt's own copy
+and the office would read its own question back as an answer.
+
+The nonce does a second job that matters more. `[[END office]]` is a thing an agent could
+plausibly print while describing this very feature, and a desk's screen text is quoted into
+the digest, which is drawn on the manager's own pane. A fixed marker pair would let a desk
+hand the office a block of text that reads as a summary of the floor. A per-ask nonce turns
+that from something that happens by accident into something that has to be guessed right
+first time. It is in both markers, not just the closer, because the manager echoes the real
+pair and a forger only has to supply the other end.
+
+The pane is read as `recent_unwrapped` at 200 lines rather than `visible`. On a short pane
+the opening marker scrolls off while the closing one is still on screen, and an answer whose
+front is missing is not an answer. A reply with no close marker yet is a manager still
+typing, so the office waits; past two minutes it writes the ask off and says so on the card,
+because a card that looks identical whether the answer is coming or gone is the failure that
+made the first footer-only manager feel broken.
+
+#### It is not on its own floor
+
+One predicate, `notChief`, and four places that go through it: the digest, the notices in
+the view, the `A` broadcast, and by extension the desk `m` walks to. Without the notices
+exclusion a manager sitting idle crosses the stall threshold in fifteen minutes, becomes a
+notice, and then reads about itself in its own next digest, which is both funny and a bug.
+
+It defaults into a worktree rather than a plain tab, and `t` still switches that back. The
+reason is blast radius rather than tidiness: this is the one agent on the floor that is
+handed text written by other agents, and if a prompt injection ever does land, a throwaway
+branch is a much smaller answer than the checkout everybody else is working in.
+
+What it costs to give up is the last piece. `X` forgets the manager and touches nothing
+else: the pane, the tab and the worktree are left exactly as they are, still running, for
+somebody to look at or close by hand. The office started an agent, so it says where it is
+and stops there. Closing panes on somebody's behalf is a different feature with a different
+argument behind it.
+
 
 ## How close you want to stand
 

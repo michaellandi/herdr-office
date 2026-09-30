@@ -706,8 +706,8 @@ function keyHints(view) {
       return [['enter', `send it to ${n} ${n === 1 ? 'person' : 'people'}`], ['esc', 'back to the text']];
     }
     return [
-      ['type', view.compose.scope === 'reply' ? 'your answer' : 'what they should do'],
-      ['enter', view.compose.scope === 'all' ? 'review who gets it' : 'send it'],
+      ['type', view.compose.scope === 'reply' ? 'your answer' : view.compose.scope === 'chief' ? 'a question' : 'what they should do'],
+      ['enter', view.compose.scope === 'all' ? 'review who gets it' : view.compose.scope === 'chief' ? 'ask it' : 'send it'],
       ['^w', 'last word'],
       ['^u', 'clear'],
       ['esc', 'drop it'],
@@ -1496,7 +1496,9 @@ function composePanel(view, panelRows) {
 
   const who = compose.scope === 'all'
     ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}`
-    : `${compose.scope === 'reply' ? 'answer' : 'assign'} · ${compose.name || compose.id}`;
+    // `ask` rather than `assign`, because that is the whole difference: this one comes back
+    // as words on the manager's card and nothing is done about the answer.
+    : `${compose.scope === 'reply' ? 'answer' : compose.scope === 'chief' ? 'ask' : 'assign'} · ${compose.name || compose.id}`;
   const head = cells();
   head.add('╭─ ');
   head.add(truncate(who, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
@@ -1561,7 +1563,9 @@ function composePanel(view, panelRows) {
           ? 'type it out · enter to review who gets it · esc to drop it'
           : compose.scope === 'reply'
             ? 'type your answer · enter sends it and the return key · esc to drop it'
-            : 'type it out · enter to send it · esc to drop it';
+            : compose.scope === 'chief'
+              ? 'ask about the floor · enter asks · the answer lands on the card'
+              : 'type it out · enter to send it · esc to drop it';
     body.push(row(truncate(hint, TEXT), [{ from: 0, to: Infinity, fg: compose.confirm ? STATUS.blocked.fg : P.faint }]));
   }
   body.push(edge('╰', '╯', PW, chrome));
@@ -1797,6 +1801,56 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
 // here that could take a click, because there is nothing here that does anything, and a
 // panel about a floor of agents that cannot touch one of them is worth being obvious
 // about.
+// Whether anybody is summarizing the floor, in one clause on the card's own `summary` row.
+//
+// The error wins over everything else, because a card that quietly went back to saying
+// `nothing asked yet` after a failed ask is a card that lost the only thing it knew.
+function chiefState(chief) {
+  if (chief.error) return truncate(chief.error, 60);
+  if (!chief.hired) return 'nobody hired · M hires a manager to sum this up';
+  const who = chief.name || 'the manager';
+  if (chief.asking) return `${who} · reading the floor now`;
+  if (!chief.answer) return `${who} · nothing asked yet`;
+  const when = Number.isFinite(chief.ageMs) && chief.ageMs >= 1000 ? `asked ${formatDuration(chief.ageMs)} ago` : 'just asked';
+  return `${who} · ${when}`;
+}
+
+// The manager's own words, above the digest they were made from.
+//
+// The order is the argument. What it said is the answer to the question somebody opened this
+// card with, and the accounts under it are the receipt: every clause the summary was made
+// from, in the office's own words, so a reader can check it. The two are never blended and
+// never unattributed, because a paragraph a model wrote sitting in a list of facts the office
+// measured is the one arrangement of these that would be dishonest.
+//
+// It gets at most a third of the room and never the rows the accounts need, which is the same
+// priority the rest of this panel runs on: the accounts are what the card is for, and a
+// summary that pushed them off the bottom would be a worse version of the bug the whole
+// briefing module was written to fix.
+// Word-wrapped rather than run through `wrap`, which is the briefing's clause packer and
+// would join two sentences with a `·`. This is prose: the office did not write it and does not
+// get to punctuate it. Reflowed into one paragraph because the manager's own line breaks were
+// for whatever width its pane happened to be, and the card is a different width.
+function chiefSays(chief, room, rows) {
+  if (!chief.hired || !Array.isArray(chief.answer) || !chief.answer.length) return [];
+  // A quarter of what is left, and never more than three rows. Three is a whole answer on
+  // anything wide, because src/chief.mjs asks for three short sentences and those reflow into
+  // two or three rows at a hundred cells. The quarter is what stops a narrow pane spending
+  // the accounts on prose: the accounts are what this card is for, and a summary that pushed
+  // them off the bottom would be the briefing bug with a paragraph in front of it.
+  const cap = Math.min(3, Math.floor(rows / 4));
+  // Only the rows are checked. There was a `room < 8` guard here too and it was unreachable:
+  // `PW` has a floor of twenty-four and the narrowest pane in the suite still leaves fourteen
+  // cells, so the branch was a line no size could take and no test could hold.
+  if (cap < 1) return [];
+  const all = wrapField(chief.answer.join(' '), room, Number.MAX_SAFE_INTEGER);
+  const kept = all.slice(0, cap);
+  // Cut visibly. A summary that stops mid sentence with no mark on it reads as the manager
+  // having stopped there, which is putting words in its mouth by omission.
+  if (all.length > cap && kept.length) kept[kept.length - 1] = truncate(`${kept[kept.length - 1]}…`, room);
+  return kept;
+}
+
 function managerPanel(view, panelRows) {
   const { size } = view;
   const m = manager({ notices: view.notices, width: size.cols });
@@ -1822,12 +1876,26 @@ function managerPanel(view, panelRows) {
   const art = managerPose(m.pose, view.frame);
   const who = identity(m.id);
   const own = m.count ? P.accent : P.dim;
+  const chief = view.chief || {};
   const fields = [
     // Both numbers, in the order they matter. How many desks need somebody is what you
     // came here to find out; how many things there are to say about them is why the list
     // below is longer than the count of people.
     ['noticed', m.count ? `${m.desks} desk${m.desks === 1 ? '' : 's'}, ${m.count} thing${m.count === 1 ? '' : 's'} worth mentioning` : 'nothing worth mentioning', own],
-    ['can do', 'nothing: it reads the floor and writes lines', P.soft],
+    // Who is summarizing, and whether anything is outstanding. The state lives on this row
+    // and the prose lives in its own section below, so a card that is waiting says so once
+    // rather than drawing an empty section with a spinner in it.
+    ['summary', chiefState(chief), chief.error ? STATUS.blocked.fg : chief.hired ? P.soft : P.dim],
+    // The card's standing promise, and the one line on it that had to change when the
+    // manager became somebody real. Unhired it is exactly true: the office's own manager
+    // code reads notices and returns strings and cannot reach a pane at all.
+    //
+    // Hired, the honest version is narrower. The thing writing the paragraph above is an
+    // agent session with the same tool access as every other desk on this floor, and the
+    // office cannot promise anything about what it does in its own worktree. What the
+    // office can promise is the half that matters here: nothing it says is parsed, matched,
+    // acted on or sent anywhere, so the worst a bad answer does is read wrong on this card.
+    ['can do', chief.hired ? 'nothing here: its answer is read, never acted on' : 'nothing: it reads the floor and writes lines', P.soft],
   ];
   for (let i = 0; i < Math.max(ART_ROWS, fields.length); i += 1) {
     const b = cells();
@@ -1874,6 +1942,28 @@ function managerPanel(view, panelRows) {
   const fit = (line) => {
     if (body.length < panelRows - 1) body.push(line);
   };
+
+  // The manager's own words first, then the digest they were made from. The prose answers the
+  // question somebody opened this card with and the accounts under it are the receipt, which
+  // is the only order in which a summary is checkable.
+  //
+  // There was a row-budget test in front of this call and it is gone, because it was a second
+  // copy of a rule `chiefSays` already enforces: both were derived from the rows left after
+  // `body`, and removing this one changed nothing at any size in the suite. Two mechanisms for
+  // one rule means neither is the place to read it, so the budget lives in `chiefSays` alone.
+  const says = chiefSays(chief, TEXT - 2, panelRows - body.length);
+  if (says.length) {
+    body.push(rule(chief.question ? `what the manager says about that` : 'what the manager says'));
+    for (const line of says) {
+      const b = cells();
+      b.add('  ');
+      // Not `P.ink`. The office's own facts are the bright text on this card and this is the
+      // one block on it that nothing measured, so it reads as quoted rather than as reported.
+      b.add(truncate(line, Math.max(0, TEXT - b.w)), { fg: P.soft });
+      b.gap(TEXT);
+      body.push(row(b.out().text, b.out().spans));
+    }
+  }
 
   body.push(rule('what happened at each desk'));
   if (!m.notices.length) {
@@ -1950,9 +2040,20 @@ function managerPanel(view, panelRows) {
   // having run out of room for the heading.
   if (body.length + 2 <= panelRows - TAIL) {
     body.push(rule('what to do about it'));
-    body.push(row(m.notices.length ? '  m walks to the desk each one is about' : '  nothing, which is the good outcome', [
-      { from: 0, to: Infinity, fg: P.dim },
-    ]));
+    // With nobody hired, the hint names the key that hires one, because the card having a
+    // summary section it never draws is the kind of feature nobody finds. With somebody
+    // hired it names the two keys the card is the only place to press.
+    // The clause about the desks comes first in all four, because it is the one that is
+    // true of the card as it shipped and the one a narrow pane keeps when `fit` cuts the
+    // rest off. Losing `M hires a manager` at sixty columns costs a reader a feature they
+    // can still find in the README; losing `m` would cost them the card's only action.
+    const desks = m.notices.length ? 'm walks to the desk each one is about' : 'nothing, which is the good outcome';
+    const hint = chief.hired
+      ? m.notices.length
+        ? `  ${desks} · a asks it · R re-asks`
+        : `  ${desks} · a asks it`
+      : `  ${desks} · M hires a manager`;
+    body.push(row(hint, [{ from: 0, to: Infinity, fg: P.dim }]));
   }
   body.push(edge('╰', '╯', PW, chrome));
 

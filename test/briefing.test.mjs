@@ -14,7 +14,7 @@
 // a negative test for each of those.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { brief, wrap, QUOTE_MAX } from '../src/briefing.mjs';
+import { brief, report, wrap, QUOTE_MAX } from '../src/briefing.mjs';
 import { width } from '../src/text.mjs';
 
 // A desk as the roster hands one over, spelled out rather than defaulted, for the same
@@ -314,6 +314,133 @@ test('an account is keyed by the desk and not by its name', () => {
 test('a desk with no name at all is briefed under its id', () => {
   const list = brief({ people: [{ ...desk('Ada'), name: '' }], notices: [said('stalled', ['w1:Ada'])] });
   assert.equal(list[0].name, 'w1:Ada');
+});
+
+/* ------- the whole floor, not just the part of it that needs you */
+
+test('a quiet floor is still a report', () => {
+  // The difference between report() and brief() in one test. brief() answers "who needs me",
+  // so a floor with nothing noticed about it is an empty answer. A summary of what work is
+  // happening on a floor where everybody is fine is not empty, it is "everybody is fine",
+  // and that sentence cannot be written by a function that only ever sees the exceptions.
+  const list = report({ people: [desk('Ada'), desk('Bo')], notices: [] });
+  assert.deepEqual(list.map((d) => d.name), ['Ada', 'Bo']);
+  assert.deepEqual(list.map((d) => d.noticed), [false, false]);
+  assert.deepEqual(brief({ people: [desk('Ada'), desk('Bo')], notices: [] }), [], 'and the card still says nothing');
+});
+
+test('an empty floor reports nobody', () => {
+  assert.deepEqual(report({ people: [], notices: [] }), []);
+  assert.deepEqual(report({}), []);
+  assert.deepEqual(report(), []);
+});
+
+test('the desks something is known about come first', () => {
+  // The order is still an argument about what matters and notices.mjs has already made it,
+  // so the noticed desks keep their own order and the rest follow in the floor's. A reader
+  // who stops halfway down has read the half worth reading.
+  const people = [desk('Ada'), desk('Bo'), desk('Cass'), desk('Dev')];
+  const list = report({ people, notices: [said('stalled', ['w1:Cass', 'w1:Ada'])] });
+  assert.deepEqual(list.map((d) => d.name), ['Cass', 'Ada', 'Bo', 'Dev']);
+  assert.deepEqual(list.map((d) => d.noticed), [true, true, false, false]);
+});
+
+test('a desk in a notice is not reported twice', () => {
+  // The bug this ordering makes easy: build the noticed half, then walk the floor and append
+  // it all. Ada would appear as a stall and again as an idle desk, which reads as two agents.
+  const list = report({ people: [desk('Ada')], notices: [said('collision', ['w1:Ada']), said('stalled', ['w1:Ada'])] });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].noticed, true);
+  assert.equal(list[0].head, 'working in herdr-office', 'and it is the notice that speaks, not the status');
+});
+
+test('a quiet desk says what it is doing and how long it has been at it', () => {
+  // The clause no notice covers, and the reason the quiet half is worth reporting at all.
+  // Fifteen minutes of working is a turn. Three hours of working is something worth knowing
+  // that the office has no notice for, because a long turn is not a stall.
+  const head = (extra) => report({ people: [desk('Ada', extra)], notices: [] })[0].head;
+  assert.equal(head({ status: 'working', statusMs: 11_400_000 }), 'working for 3h10m');
+  assert.equal(head({ status: 'idle', statusMs: 120_000 }), 'idle for 2m00s');
+  assert.equal(head({ status: 'done', statusMs: 45_000 }), 'done for 45s');
+  assert.equal(head({ status: 'blocked', statusMs: 60_000 }), 'waiting on an answer for 1m00s');
+  assert.equal(head({ status: 'working', statusMs: 60_000, assumedSince: true }), 'working for at least 1m00s', 'the same hedge the tile draws as a tilde');
+});
+
+test('a status the office could not read is not reported as an idle desk', () => {
+  // src/render.mjs is emphatic that `unknown` is not proof of completion, and a summary that
+  // flattens it to `idle` is the office telling a reader something it does not know.
+  assert.equal(report({ people: [desk('Ada', { status: 'unknown' })], notices: [] })[0].head, 'status unknown for 30m00s');
+  assert.equal(report({ people: [desk('Ada', { status: 'wat' })], notices: [] })[0].head, 'status unknown for 30m00s', 'and so is a status nobody has heard of');
+});
+
+test('a quiet desk with no clock behind it says the status without printing zeros', () => {
+  assert.equal(report({ people: [desk('Ada', { status: 'working', statusMs: 0 })], notices: [] })[0].head, 'working');
+  assert.equal(report({ people: [desk('Ada', { status: 'working', statusMs: NaN })], notices: [] })[0].head, 'working');
+});
+
+test('a quiet desk gets the same account a noticed one does', () => {
+  // One set of clauses in this file, not two. A report whose quiet half says less than its
+  // noticed half is a report that goes stale the moment somebody adds a clause above.
+  const person = desk('Ada', {
+    status: 'working',
+    title: 'port the tests',
+    command: 'npm test',
+    lastEvent: { label: 'the build broke', kind: 'broke', ageMs: 1_460_000 },
+    dirt: { files: 7 },
+    head: { used: 94 },
+    said: 'retrying the flaky one',
+  });
+  assert.deepEqual(report({ people: [person], notices: [] })[0].facts, [
+    'doing "port the tests"',
+    'on a-manager-who-notices in herdr-office',
+    'running npm test',
+    'the build broke 24m20s ago',
+    '7 uncommitted',
+    '94% full · about to compact',
+    'said "retrying the flaky one"',
+  ]);
+});
+
+test('a quiet desk has no notice kind for a renderer to colour by', () => {
+  assert.equal(report({ people: [desk('Ada')], notices: [] })[0].kind, null);
+  assert.equal(report({ people: [desk('Ada')], notices: [said('stalled', ['w1:Ada'])] })[0].kind, 'stalled');
+});
+
+test('a desk with no id is not reportable', () => {
+  const list = report({ people: [{ name: 'Nameless' }, desk('Ada')], notices: [] });
+  assert.deepEqual(list.map((d) => d.name), ['Ada']);
+  assert.deepEqual(report({ people: [null, undefined, desk('Ada')], notices: [] }).map((d) => d.name), ['Ada']);
+});
+
+test('two desks sharing an id are one account', () => {
+  // Not something a real roster produces, since a pane id is the key it is built on, but the
+  // report is about to be read by something that counts the lines, and a floor of seven that
+  // reports eight accounts is a summary nobody can check.
+  const list = report({ people: [desk('Ada'), { ...desk('Ada'), name: 'Ghost' }], notices: [] });
+  assert.deepEqual(list.map((d) => d.name), ['Ada']);
+});
+
+test('who is on the floor is the caller question', () => {
+  // How the manager stays out of its own report without this module knowing a manager
+  // exists. Nothing here filters by kind, name or id shape, so a desk the caller leaves out
+  // of `people` is absent from the report even while its notices are still in the list.
+  const list = report({ people: [desk('Ada')], notices: [said('stalled', ['w1:Ada', 'w1:Manager'])] });
+  assert.deepEqual(list.map((d) => d.name), ['Ada']);
+  assert.equal(list[0].head, 'stopped 30m00s ago', 'and the notice it was in still speaks about the desks that are there');
+});
+
+test('nothing off a screen reaches a report unsanitized', () => {
+  // The quiet half of the report is the half that does not go through brief(), so the scrub
+  // is asserted on both. This text is heading for an agent's prompt as well as a card now,
+  // and a control character in a prompt is a different kind of problem from one on a grid.
+  const nasty = '\u001b[31mred\u001b[0m\u0007 and \u0000 a \u{1f600} face → there';
+  const list = report({ people: [desk('Ada', { title: nasty, said: nasty })], notices: [] });
+  for (const fact of list[0].facts) {
+    assert.ok(!/\u001b/.test(fact), `escape survived: ${JSON.stringify(fact)}`);
+    assert.ok(!/[\u0000-\u001f\u007f]/.test(fact), `control character survived: ${JSON.stringify(fact)}`);
+    assert.ok(!/[\u{1f000}-\u{1ffff}]/u.test(fact), `emoji survived: ${JSON.stringify(fact)}`);
+    assert.ok(!/[←-⯿]/.test(fact), `symbol survived: ${JSON.stringify(fact)}`);
+  }
 });
 
 /* ------- clauses into rows */

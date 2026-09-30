@@ -659,17 +659,88 @@ test('a manager that could not be reached says that instead of a summary', () =>
   assert.ok(!text.includes('what the manager says'), 'an error and a summary at once');
 });
 
-test('what the manager said is attributed to it and never blended with the accounts', () => {
-  // The rule the whole feature rests on. Everything under `what happened at each desk` is
-  // mechanical: a process state, a git count, a quoted line. The manager's sentences are a
-  // model's reading of those facts and can be wrong. Two headings, and the model's one
-  // first, so nobody reads a guess as a count.
+test('what the manager said is attributed to it, and is never a row among the facts', () => {
+  // The rule the whole feature rests on. Every other row on this card is mechanical: a process
+  // state, a git count, a quoted line. The manager's points are a model's reading of those and
+  // can be wrong, so they sit under a heading that says whose they are and nothing counted is
+  // drawn inside that section.
   const lines = hiredCard(hired());
   const says = lines.findIndex((l) => l.includes('what the manager says'));
-  const desks = lines.findIndex((l) => l.includes('what happened at each desk'));
   assert.ok(says >= 0, 'the manager said something and the card did not say who');
-  assert.ok(desks >= 0, 'the accounts are missing');
-  assert.ok(says < desks, 'the summary was drawn inside the accounts');
+  const under = lines.slice(says + 1, lines.findIndex((l, i) => i > says && l.includes('what to do about it')));
+  assert.ok(under.length, 'the heading had nothing under it');
+  assert.ok(!under.some((l) => /Ada · stopped|Bo · stopped/.test(l)), 'an account was drawn inside the summary');
+});
+
+test('a bullet pays for its own marker out of the row it wraps to', () => {
+  // The marker takes two cells and the row is finite, so the wrapper has to know about it. When
+  // it did not, the wrap filled the whole row and the draw truncated two cells off the end of it,
+  // which chops a word rather than wrapping one. It only shows at the word lengths where a packed
+  // row lands within two cells of the edge, so the lengths are swept rather than picked.
+  for (let len = 4; len <= 12; len += 1) {
+    const word = 'w'.repeat(len);
+    const card = hiredCard(hired({ answer: [new Array(60).fill(word).join(' ')] }), [], 140, 46);
+    const start = card.findIndex((l) => l.includes('what the manager says'));
+    const prose = card.slice(start + 1).filter((l) => l.includes(word));
+    assert.ok(prose.length > 1, `word length ${len}: sixty words did not wrap`);
+    for (const line of prose) {
+      const inner = line.slice(line.indexOf('│') + 1, line.lastIndexOf('│'));
+      for (const w of inner.trim().split(/\s+/)) {
+        assert.ok(w === '-' || w === word, `word length ${len}: "${w}" was chopped rather than wrapped`);
+      }
+    }
+  }
+});
+
+test('nothing the card draws is a glyph whose width depends on the terminal', () => {
+  // The rule test/sprites.test.mjs holds over the art, held here over the one glyph on this card
+  // that was a choice rather than a table. A real bullet reads better than a hyphen and is one
+  // cell in some terminals and two in others, which is unfixable once it is on the grid.
+  for (const chief of [null, hired(), hired({ question: 'who is waiting?' })]) {
+    for (const line of hiredCard(chief, MANY)) {
+      for (const ch of line) {
+        const cp = ch.codePointAt(0);
+        const safe = cp < 0x2600 && !(cp >= 0x25a0 && cp <= 0x25ff);
+        assert.ok(safe, `the card drew U+${cp.toString(16).toUpperCase()} (${ch})`);
+      }
+    }
+  }
+});
+
+test('a summary replaces the accounts rather than sitting on top of them', () => {
+  // The complaint this answers: a card that summarised the floor and then printed the whole
+  // floor underneath is the wall of true sentences the summary exists to replace, with the
+  // replacement stapled to the front of it. One keystroke away instead, which the hint names.
+  const summarised = hiredCard(hired());
+  assert.ok(!summarised.some((l) => l.includes('what happened at each desk')), 'the accounts are still under the summary');
+  assert.ok(summarised.some((l) => l.includes('m walks to the desk')), 'and nothing says how to reach them');
+});
+
+test('the accounts are what a card with no summary on it draws instead', () => {
+  // The other half, and the reason the section was kept rather than deleted. With nobody hired,
+  // mid-hire, after a hire that failed, and in the minute before the first answer lands, the
+  // card has no summary to show and is not allowed to be empty.
+  for (const [label, chief] of [
+    ['nobody hired', null],
+    ['mid-hire', hiring()],
+    ['hire failed', { ...hired(), answer: null, error: 'could not hire a manager: NOPE' }],
+    ['not answered yet', hired({ answer: null })],
+  ]) {
+    const lines = hiredCard(chief, [STUCK]);
+    assert.ok(lines.some((l) => l.includes('what happened at each desk')), `${label}: no summary and no accounts either`);
+    assert.ok(lines.some((l) => /Ada · /.test(l)), `${label}: the accounts heading had no desk under it`);
+  }
+});
+
+test('each point gets one marker, and a point that had to wrap does not get two', () => {
+  // What makes it a list rather than a paragraph with hyphens in it. A point too long for the
+  // row hangs under its own marker, so four rows of two points read as two points.
+  const long = new Array(14).fill('a clause of some length').join(', ');
+  const card = hiredCard(hired({ answer: [long, 'a short second point'] }), [], 140, 46);
+  const start = card.findIndex((l) => l.includes('what the manager says'));
+  const prose = card.slice(start + 1).filter((l) => /a clause of some length|a short second point/.test(l));
+  assert.ok(prose.length >= 3, `${prose.length} rows for a point that has to wrap plus one that does not`);
+  assert.equal(prose.filter((l) => /│\s*-\s/.test(l)).length, 2, 'one marker per point, and only per point');
 });
 
 test('a question changes the heading, because the answer is no longer a summary', () => {
@@ -714,15 +785,20 @@ test('a quiet floor with a manager still offers the question', () => {
   assert.match(text, /a asks it/);
 });
 
-test('what the manager says never costs the card the desks it is for', () => {
-  // The priority that makes the section safe to add. The accounts are why somebody opened
-  // the card; the summary is a convenience over the top. So at every size where the card
-  // could brief a desk without a manager, it still briefs one with a long answer on it.
+test('a summary is drawn at every size the accounts would have been', () => {
+  // The inverse of the check this replaced, which held the accounts against the summary back
+  // when both were on the card. The summary is now what the card is for, so the rule is that
+  // wherever an unhired card could say something about the floor, a hired one says something
+  // too: a pane short enough to lose the answer and keep nothing in its place would be a card
+  // that got worse for having a manager.
   for (const [cols, rows] of SIZES) {
     const bare = hiredCard(null, MANY, cols, rows);
     if (!bare.some((l) => / · stopped/.test(l))) continue;
     const full = hiredCard(hired({ answer: [SAID.join(' '), SAID.join(' ')] }), MANY, cols, rows);
-    assert.ok(full.some((l) => / · stopped/.test(l)), `${cols}x${rows}: the summary ate every desk`);
+    assert.ok(full.some((l) => l.includes('what the manager says')), `${cols}x${rows}: no heading`);
+    // A marked row with something on it, rather than a phrase from the answer: at thirty columns
+    // the text wraps to nineteen cells and no sentence from it survives as one row.
+    assert.ok(full.some((l) => /│\s*-\s\S/.test(l)), `${cols}x${rows}: a heading and no answer`);
   }
 });
 
@@ -743,22 +819,25 @@ test('the card closes at every size with an answer on it, however long', () => {
 });
 
 test('an answer too long for the room is cut and says it was cut', () => {
-  // Three rows is the cap, and a reply that runs past it has to end in a way that reads as
+  // The cap is most of the panel now rather than three rows, so this is checked on a pane where
+  // the room genuinely runs out. A reply that runs past it has to end in a way that reads as
   // "there is more of this" rather than as the manager having trailed off.
-  const long = hiredCard(hired({ answer: [new Array(60).fill('and another clause').join(', ')] }));
+  const long = hiredCard(hired({ answer: new Array(6).fill(new Array(40).fill('and another clause').join(', ')) }), [], 70, 14);
   const start = long.findIndex((l) => l.includes('what the manager says'));
   const prose = long.slice(start + 1).filter((l) => l.includes('another clause'));
-  assert.ok(prose.length <= 3, `${prose.length} rows of prose`);
+  assert.ok(prose.length >= 1, 'a hundred rows of answer and the card showed none of it');
+  assert.ok(prose.length < long.length, `${prose.length} rows of prose in a ${long.length} row frame`);
   assert.match(prose[prose.length - 1], /…/);
-  // And it is the top that survives the cut, not the tail. The three sentences the office
-  // asked for are in the order the manager decided says most first, and `wrapField` slices
-  // from the end by default because everywhere else in the office it is packing a field
-  // somebody is still typing into. Reading the last three rows of a reply would put the
-  // manager's closing aside on the card and drop the desk it named.
-  const marked = hiredCard(hired({ answer: ['FIRST this is the thing to look at.', ...new Array(20).fill('and then some more about it'), 'LAST an aside.'] }));
+  assert.match(drawnRows(long)[drawnRows(long).length - 1], /╰─+╯/, 'the prose pushed the border off');
+  // And it is the top that survives the cut, not the tail. The points come back in the order
+  // the manager decided says most first, and `wrapField` slices from the end by default because
+  // everywhere else in the office it is packing a field somebody is still typing into. Reading
+  // the last rows of a reply would put the manager's closing aside on the card and drop the
+  // desk it named.
+  const marked = hiredCard(hired({ answer: ['FIRST this is the thing to look at.', ...new Array(20).fill('and then some more about it'), 'LAST an aside.'] }), [], 70, 14);
   const said = marked.slice(marked.findIndex((l) => l.includes('what the manager says')) + 1).join('\n');
-  assert.match(said.split('what happened at each desk')[0], /FIRST/);
-  assert.ok(!said.split('what happened at each desk')[0].includes('LAST'), 'the card read the reply backwards');
+  assert.match(said, /FIRST/);
+  assert.ok(!said.includes('LAST'), 'the card read the reply backwards');
 });
 
 test('a heading is never the last thing inside the card', () => {

@@ -14,7 +14,7 @@
 // a negative test for each of those.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { brief, report, wrap, QUOTE_MAX } from '../src/briefing.mjs';
+import { brief, report, wrap, dayWords, QUOTE_MAX } from '../src/briefing.mjs';
 import { width } from '../src/text.mjs';
 
 // A desk as the roster hands one over, spelled out rather than defaulted, for the same
@@ -475,4 +475,38 @@ test('a room with nothing in it gets no rows', () => {
   assert.deepEqual(wrap([], 40), []);
   assert.deepEqual(wrap(null, 40), []);
   assert.deepEqual(wrap(['', null, undefined, 'kept'], 40), ['kept'], 'and empty clauses do not become empty rows');
+});
+
+/* --- the day book, which is the one fact on an account no status word can give you --- */
+
+test('a desk says how much of its time it has actually worked', () => {
+  // The clause the manager was missing. Asked what the floor had got done while being told only
+  // what each desk was doing at that instant, the only honest answer was a status recital.
+  assert.equal(dayWords({ onShift: 7_200_000, worked: 660_000, waiting: 0 }), 'worked 11m00s of 2h00m up');
+});
+
+test('time spent waiting on a person is said, when there is any', () => {
+  assert.equal(
+    dayWords({ onShift: 7_200_000, worked: 660_000, waiting: 2_400_000 }),
+    'worked 11m00s of 2h00m up, waited on you 40m00s',
+  );
+});
+
+test('a desk that has only just opened has nothing to say about its day', () => {
+  // Every number under a minute rounds to seconds, and `worked 0s of 3s up` on a desk that
+  // appeared while you were reading the card is noise dressed as a finding.
+  assert.equal(dayWords({ onShift: 3_000, worked: 0, waiting: 0 }), '');
+  assert.equal(dayWords(null), '', 'and a desk with no day book at all says nothing');
+  assert.equal(dayWords(undefined), '');
+});
+
+test('the day book is only on an account when somebody attached one', () => {
+  // The card's own accounts are about who needs you now, so they never carry it: office.mjs
+  // attaches it on the way to the manager and nowhere else.
+  const day = { onShift: 7_200_000, worked: 660_000, waiting: 0 };
+  const people = [{ id: 'w1:p1', name: 'Ada', kind: 'claude', status: 'idle', cwd: '/r/app', day }];
+  const [account] = report({ people, notices: [] });
+  assert.ok(account.facts.some((f) => f.includes('worked 11m00s of 2h00m up')), account.facts.join(' | '));
+  const [bare] = report({ people: [{ ...people[0], day: null }], notices: [] });
+  assert.ok(!bare.facts.some((f) => f.includes('worked')), bare.facts.join(' | '));
 });

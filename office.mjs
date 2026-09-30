@@ -1536,7 +1536,14 @@ const notChief = (p) => !isChief(p.id);
 // function so that the digest on the card and the digest on the wire cannot disagree: a
 // summary you cannot check against what is under it is a rumour.
 function chiefFloor() {
-  const people = filterPeople(roster.people, filter).filter(notChief);
+  const now = Date.now();
+  // The day book, attached per desk, which is the only thing on an account that the poll does
+  // not already carry. `src/briefing.mjs` turns it into `worked 11m of 2h up`; nothing else reads
+  // it, and in particular `floorPrint` does not, which is load-bearing: a print that included a
+  // duration would differ on every tick and the office would re-ask a static floor forever.
+  const people = filterPeople(roster.people, filter)
+    .filter(notChief)
+    .map((p) => ({ ...p, day: clocks.desk(p.id, now) }));
   return { people, notices: notices({ people }) };
 }
 
@@ -2328,9 +2335,14 @@ function demoExtras() {
       // notices and quietly change what the demo floor is a picture of.
       id: 'demo:manager',
       kind: 'claude',
+      // One row per point, because that is what a real answer is now: the rows came back as two
+      // halves of a sentence while the card reflowed everything into a paragraph, and a demo
+      // that still ships those draws a bullet list whose second bullet is half a sentence.
+      // Written the way src/chief.mjs asks for them, so the GIF shows what the office gets.
       answer: [
-        'Two desks are stopped in the same checkout and one of them has a hand up, so that',
-        'is the one to look at first. Nobody else is waiting on anything.',
+        'Ada got the migration tests passing, then stopped with a hand up',
+        'Bo is in the same checkout as Ada with 7 files uncommitted between them',
+        'Everybody else has worked its whole shift and is waiting on nothing',
       ],
       at: Date.now() - 42000,
     };

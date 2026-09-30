@@ -102,6 +102,51 @@ test('a summary and a question are different jobs', () => {
   assert.ok(!asked.includes('what needs a person first'), 'and it is not asked to do both at once');
 });
 
+test('the summary is asked for progress rather than for status', () => {
+  // The complaint this encodes: the first version asked what was happening and got a sentence
+  // per desk restating the status word already drawn under every tile. The prompt now says what
+  // not to send back as well as what to, because "say what is happening" is a true description
+  // of a status recital.
+  const text = ask({ accounts: [account('Ada', 'idle for 1m00s')], nonce: NONCE });
+  assert.match(text, /what this floor has got done/);
+  assert.match(text, /Lead with what changed, not with status/);
+  assert.ok(text.includes('"Ada is idle" is not'), 'the prompt does not say what a bad answer looks like');
+});
+
+test('both jobs ask for a list, because the card draws one', () => {
+  for (const question of ['', 'who touched the migrations?']) {
+    const text = ask({ accounts: [account('Ada', 'idle for 1m00s')], nonce: NONCE, question });
+    assert.match(text, /One bullet per line, each starting with "- "/, question ? 'the question' : 'the summary');
+  }
+});
+
+test('a marker the manager chose for itself does not reach the card', () => {
+  // The card owns the glyph, because it is the only thing that knows how wide the row is and
+  // how the hanging indent under it lines up. Asked for `- ` and a model will send any of these,
+  // and a card that drew what arrived would have four different markers down its left edge.
+  const said = ['- a hyphen', '* a star', '\u2022 a bullet', '1. a number', '2) a bracket', '  - an indented one'];
+  const rows = answer(`${open(NONCE)}\n${said.join('\n')}\n${close(NONCE)}`, NONCE);
+  assert.deepEqual(rows, ['a hyphen', 'a star', 'a bullet', 'a number', 'a bracket', 'an indented one']);
+});
+
+test('a marker is only stripped when there is a point after it', () => {
+  // The strip needs whitespace after the glyph, so a lone `-` on its own row is kept and drawn
+  // as text. Which is the right way round: it costs one row of a card, and the alternative is a
+  // rule that silently eats a row whose whole content was a hyphen, which is a thing a manager
+  // might mean. The empty check after it still drops the row that was only whitespace.
+  const rows = answer(`${open(NONCE)}\n-\n- something\n*  \n   \n${close(NONCE)}`, NONCE);
+  assert.deepEqual(rows, ['-', 'something', '*']);
+});
+
+test('a minus sign in the middle of a point survives', () => {
+  // The strip is anchored, because `exit code -1` is a fact and a leading `- ` is punctuation.
+  // Both halves matter and only the second one holds the anchor: a point that starts with a
+  // marker is stripped identically either way, so the case that catches an unanchored pattern is
+  // the point that has a marker-shaped run in it and none at the front.
+  const rows = answer(`${open(NONCE)}\n- Ada exited with -1 after 3 - 2 retries\nBo is 1 - 2 hours off\n${close(NONCE)}`, NONCE);
+  assert.deepEqual(rows, ['Ada exited with -1 after 3 - 2 retries', 'Bo is 1 - 2 hours off']);
+});
+
 test('the question is scrubbed and capped like anything else the office carries', () => {
   // Typed by the user rather than read off a screen, so this is about accident rather than
   // malice, but it goes through the same scrub because there is only one idea of safe here.

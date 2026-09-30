@@ -516,8 +516,8 @@ count read as four times the work, and that is genuinely the directory's single 
 reasons are not: each agent's last words belong to that agent. So the count and the
 sentence were grouped together when only the count should have been.
 
-What the card draws now is one short account per desk, with the notice it came from as the
-account's first line:
+What the card draws when nobody is summarising for it is one short account per desk, with the
+notice it came from as the account's first line:
 
 ```
 ├─ what happened at each desk ──────────────────────────────────────────────┤
@@ -540,6 +540,15 @@ is only an order. Whoever reads it draws the conclusion, which is the right way 
 because they know things about this work that the office does not. A summary in the sense
 of prose written about the desk would need the manager to be a real hired agent with real
 tokens, which is a different and much larger question.
+
+It is also a question that has since been answered, which moved these accounts. They are no
+longer the card's normal content: a manager is hired when the card opens, and its points are
+what the card draws. The accounts are what it falls back to when there is no summary, and
+they are one keystroke away the rest of the time. Nothing in this section changed except when
+it is reached, and the reason it is worth keeping is in [Hiring somebody to read the floor for
+you](#hiring-somebody-to-read-the-floor-for-you): fourteen accounts under a summary of
+fourteen accounts is the complaint at the top of this chapter with a paragraph in front of
+it, but a card with neither is worse than either.
 
 Five decisions inside it, each of which was a bug first:
 
@@ -608,13 +617,25 @@ in a prompt, `answer()` pulls the reply back out, and `floorPrint()` decides whe
 floor has changed. None of it has a socket. Three rules are written at the top of that
 file because they are the ones worth re-reading before changing anything in it.
 
-**The digest is the receipt.** The card draws the manager's sentences in a section of their
-own, labelled, above the accounts they were made from. Never blended, never interleaved,
-never one paragraph that mixes a count with a reading of it. The accounts are mechanical:
-a process state, a git count, a quoted line. The sentences are a model's take and can be
-wrong. Putting the take first and its evidence directly under it is the only arrangement in
-which a summary is checkable at a glance, and a reader who does not want to check it has
-lost nothing.
+**It is sent facts, not screens.** What goes over is the same clauses the card draws: one
+block per desk, each already capped and stripped. Cheaper than raw panes by an order of
+magnitude, and cheap is not the point: a screen is whatever an agent last happened to print,
+and an account is what the office measured.
+
+The answer comes back into a labelled section of its own and is never blended with anything
+counted. The accounts are mechanical, a process state and a git count and a quoted line; the
+points are a model's reading of those and can be wrong, and a model's paragraph sitting in a
+list of the office's own numbers is the one arrangement of these that is dishonest.
+
+What changed is where the evidence lives. The accounts used to be drawn permanently under
+the answer, as its receipt, and that was right while the hire was a keystroke nobody had
+pressed: without a summary the card was the accounts, and with one it was both. With a
+manager hired on the way in, both means a reader who asked for a summary gets one and then
+thirty rows of the raw material printed underneath it, which is the wall of true sentences
+the summary replaced, stapled behind the replacement. So the evidence moved one keystroke
+away: `m` walks to each desk the office noticed something about. The accounts still draw in
+exactly the cases where there is no summary to draw instead, because in none of those is the
+card allowed to be empty.
 
 **Nothing it says is ever a command.** The reply is not parsed, matched, dispatched or
 forwarded anywhere. This is the defence that actually holds, and it has to, because the
@@ -628,6 +649,37 @@ Belt and braces, and the braces are that the reply goes nowhere but a panel row.
 **The office never tells it where the socket is.** No socket path, no pane ids it could
 act on, no hint that a plugin API exists. It is an agent in a worktree that has been handed
 a page of text and asked a question about it.
+
+#### Progress, not status
+
+The first version of the prompt asked the manager to say what was happening on the floor,
+which is a true description of the job and produced a sentence per desk restating the status
+word already printed under every tile. Ada is idle, Bo is blocked, Cass is working. That is
+the wall of true sentences this whole card exists to replace, reflowed by a model and charged
+for. The prompt now says what not to send back as well as what to: lead with what changed,
+and `Ada is idle` is explicitly named as the shape of a bad answer, because a rule about what
+to do is easier to follow with an example of the failure next to it.
+
+Asking for progress means having facts about progress, and one of them was missing. The
+accounts carried what each desk was working on, what came of it, what it had left
+uncommitted and its own last words, all of which are about what got done. What they did not
+carry was time: the punch clock has known since it was written that a desk has been up for
+two hours and worked for eleven minutes of them, and nothing was passing that to the
+manager. So `office.mjs` attaches each desk's day to the account on the way out, and
+`src/briefing.mjs` turns it into one clause. `worked 11m00s of 2h00m up` is the fact no
+status word can give you: a desk reading `idle` after two hours of which it worked eleven
+minutes is a different report from one that worked an hour and fifty.
+
+That clause goes only to the manager, never onto the card's own accounts, which answer "who
+needs me now" and have no use for a shift total. And it is deliberately not part of the
+floor print: a fingerprint with a duration in it would differ on every tick, and the office
+would re-ask a completely static floor forever.
+
+The answer comes back as bullet points rather than prose, and the card owns the marker. A
+model asked for `- ` will send a hyphen, a star, a real bullet, `1.` or nothing, so
+`src/chief.mjs` strips whatever arrived and `src/render.mjs` draws one, which is also the
+only place that knows how wide the row is and where the hanging indent under a wrapped point
+lines up.
 
 #### Only while you are looking at it
 
@@ -644,7 +696,7 @@ something the office should not do. But the gate it was guarding is the card, an
 opening a card whose entire job is to hold a summary is somebody asking for the summary. A
 key between them and it is a question with one answer, and the second half of that answer,
 which kind, is a choice that does not matter for a job that is reading a page of text and
-writing three sentences. So it is made from the floor: whichever kind you already have the
+writing a short list. So it is made from the floor: whichever kind you already have the
 most of, which is the one you are logged into and have already paid for, ties broken by the
 sorted manifest list so the same floor picks the same manager twice.
 

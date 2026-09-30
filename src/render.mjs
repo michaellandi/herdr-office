@@ -1819,40 +1819,61 @@ function chiefState(chief) {
   return `${who} · ${when}`;
 }
 
-// The manager's own words, above the digest they were made from.
-//
-// The order is the argument. What it said is the answer to the question somebody opened this
-// card with, and the accounts under it are the receipt: every clause the summary was made
-// from, in the office's own words, so a reader can check it. The two are never blended and
-// never unattributed, because a paragraph a model wrote sitting in a list of facts the office
+// The bullet marker. ASCII rather than a real bullet for two reasons: `•` is outside the ranges
+// test/sprites.test.mjs allows, and `·` is already the office's own separator between the clauses
+// of a fact, so reusing it here would make a list of points look like one packed row.
+const MARK = '- ';
+
+// The manager's own words, and on a card that has them, the only thing on it the office did not
+// measure itself. Drawn in a section of its own under its own heading, never blended with
+// anything counted, because a paragraph a model wrote sitting in a list of facts the office
 // measured is the one arrangement of these that would be dishonest.
 //
-// It gets at most a third of the room and never the rows the accounts need, which is the same
-// priority the rest of this panel runs on: the accounts are what the card is for, and a
-// summary that pushed them off the bottom would be a worse version of the bug the whole
-// briefing module was written to fix.
-// Word-wrapped rather than run through `wrap`, which is the briefing's clause packer and
-// would join two sentences with a `·`. This is prose: the office did not write it and does not
-// get to punctuate it. Reflowed into one paragraph because the manager's own line breaks were
-// for whatever width its pane happened to be, and the card is a different width.
+// Word-wrapped rather than run through `wrap`, which is the briefing's clause packer and would
+// join two points with a `·`. This is prose: the office did not write it and does not get to
+// punctuate it.
 function chiefSays(chief, room, rows) {
   if (!chief.hired || !Array.isArray(chief.answer) || !chief.answer.length) return [];
-  // A quarter of what is left, and never more than three rows. Three is a whole answer on
-  // anything wide, because src/chief.mjs asks for three short sentences and those reflow into
-  // two or three rows at a hundred cells. The quarter is what stops a narrow pane spending
-  // the accounts on prose: the accounts are what this card is for, and a summary that pushed
-  // them off the bottom would be the briefing bug with a paragraph in front of it.
-  const cap = Math.min(3, Math.floor(rows / 4));
-  // Only the rows are checked. There was a `room < 8` guard here too and it was unreachable:
-  // `PW` has a floor of twenty-four and the narrowest pane in the suite still leaves fourteen
-  // cells, so the branch was a line no size could take and no test could hold.
-  if (cap < 1) return [];
-  const all = wrapField(chief.answer.join(' '), room, Number.MAX_SAFE_INTEGER);
-  const kept = all.slice(0, cap);
-  // Cut visibly. A summary that stops mid sentence with no mark on it reads as the manager
-  // having stopped there, which is putting words in its mouth by omission.
-  if (all.length > cap && kept.length) kept[kept.length - 1] = truncate(`${kept[kept.length - 1]}…`, room);
-  return kept;
+  // The heading above and the border below, and the rest is the summary's.
+  //
+  // This was a quarter of the panel capped at three rows, from when the accounts were drawn
+  // underneath and a summary was not allowed to push them off the bottom. The accounts moved
+  // behind it, so the argument for rationing this went with them: on a card whose content is
+  // the summary, rows held back from it are rows left empty. What comes after is the `what to
+  // do about it` hint, which is chrome and already drops itself when the room runs out.
+  const cap = rows - 2;
+  // No early return for a cap of nought, and none for a narrow room either. There were both, and
+  // neither was a line any test could hold: the `out.length >= cap` check below stops the loop on
+  // its first pass at a cap of nought or less and the function returns the same empty list it
+  // would have returned up here, and the `room < 8` guard was unreachable because `PW` has a
+  // floor of twenty-four and the narrowest pane in the suite still leaves fourteen cells.
+  // One bullet at a time, each with a hanging indent under its own marker. The version before
+  // this joined every line with a space and reflowed the lot into a paragraph, which was right
+  // while the answer was three sentences and is wrong now that it is a list: bullets reflowed
+  // into a paragraph read as one rambling point and lose the only structure the answer has.
+  const text = Math.max(1, room - MARK.length);
+  const out = [];
+  let cut = false;
+  for (const point of chief.answer) {
+    const lines = wrapField(point, text, Number.MAX_SAFE_INTEGER);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (out.length >= cap) {
+        cut = true;
+        break;
+      }
+      // The marker on the first row of a point and blanks under it, so a point that wrapped is
+      // one point and not two.
+      out.push({ mark: i === 0 ? MARK : ' '.repeat(MARK.length), text: lines[i] });
+    }
+    if (cut) break;
+  }
+  // Cut visibly. A list that stops with no mark on it reads as the manager having had nothing
+  // further to say, which is putting words in its mouth by omission.
+  if (cut && out.length) {
+    const last = out[out.length - 1];
+    out[out.length - 1] = { ...last, text: truncate(`${last.text}…`, text) };
+  }
+  return out;
 }
 
 function managerPanel(view, panelRows) {
@@ -1947,9 +1968,9 @@ function managerPanel(view, panelRows) {
     if (body.length < panelRows - 1) body.push(line);
   };
 
-  // The manager's own words first, then the digest they were made from. The prose answers the
-  // question somebody opened this card with and the accounts under it are the receipt, which
-  // is the only order in which a summary is checkable.
+  // The manager's own words, and if it has none, the accounts instead. Asked for first because
+  // the summary is what somebody opened this card to read, and because what is left over after
+  // it is what decides whether the accounts draw at all.
   //
   // There was a row-budget test in front of this call and it is gone, because it was a second
   // copy of a rule `chiefSays` already enforces: both were derived from the rows left after
@@ -1961,82 +1982,100 @@ function managerPanel(view, panelRows) {
     for (const line of says) {
       const b = cells();
       b.add('  ');
+      // The marker dimmer than what it marks, so the list reads as a list from across the room
+      // without a column of punctuation competing with the words.
+      b.add(line.mark, { fg: P.faint });
       // Not `P.ink`. The office's own facts are the bright text on this card and this is the
       // one block on it that nothing measured, so it reads as quoted rather than as reported.
-      b.add(truncate(line, Math.max(0, TEXT - b.w)), { fg: P.soft });
+      b.add(truncate(line.text, Math.max(0, TEXT - b.w)), { fg: P.soft });
       b.gap(TEXT);
       body.push(row(b.out().text, b.out().spans));
     }
   }
 
-  body.push(rule('what happened at each desk'));
-  if (!m.notices.length) {
-    body.push(row('  the floor is quiet', [{ from: 0, to: Infinity, fg: P.dim }]));
-  } else {
-    // One block per desk rather than one row per notice, which is the whole point of the
-    // card and the one thing the first version of it got wrong. A list of notices here was
-    // a wider copy of the status line under the desk, so somebody who opened the card to
-    // find out what had happened to three stopped agents got the same one sentence about
-    // one of them, in a bigger box. See the top of src/briefing.mjs.
-    const blocks = brief({ people: view.people, notices: m.notices }).map((d) => ({ ...d, rows: wrap(d.facts, Math.max(0, TEXT - IND)) }));
+  // The accounts, now only when there is nothing above them.
+  //
+  // These used to be the point of the card and the summary was the thing rationed around them,
+  // which was right while nobody was hired: a list of notices with a heading is not a summary,
+  // and the accounts were the whole answer. With a manager hired on the way in, a reader who
+  // wanted a summary got one and then thirty rows of the raw material underneath it, which is
+  // the wall of true sentences the summary was there to replace, printed under the replacement.
+  //
+  // So they stay, and they stay for exactly the cases where there is no summary: `--no-manager`,
+  // a hire that failed, a machine that can start nothing, and the minute between opening the
+  // card and the first answer landing. In none of those is the card allowed to be empty. What
+  // they stopped being is the receipt sitting permanently under the answer: `m` walks to each
+  // desk the office noticed something about, which is one keystroke rather than nought.
+  if (!says.length) {
+    body.push(rule('what happened at each desk'));
+    if (!m.notices.length) {
+      body.push(row('  the floor is quiet', [{ from: 0, to: Infinity, fg: P.dim }]));
+    } else {
+      // One block per desk rather than one row per notice, which is the whole point of the
+      // card and the one thing the first version of it got wrong. A list of notices here was
+      // a wider copy of the status line under the desk, so somebody who opened the card to
+      // find out what had happened to three stopped agents got the same one sentence about
+      // one of them, in a bigger box. See the top of src/briefing.mjs.
+      const blocks = brief({ people: view.people, notices: m.notices }).map((d) => ({ ...d, rows: wrap(d.facts, Math.max(0, TEXT - IND)) }));
 
-    // What fits, with a desk's facts kept together and its headline never dropped while
-    // there is a row for it.
-    //
-    // The asymmetry is deliberate. A desk showing a name and a headline and no detail is
-    // the old card, which was worth something; a desk showing two of its four facts is the
-    // office looking like it does not know the other two, which is worse than saying less.
-    // So the facts are atomic and the headline is not, and the last desk on a short pane
-    // degrades to exactly the line it used to have.
-    const plan = (cap) => {
-      let used = body.length;
-      const out = [];
-      for (const d of blocks) {
-        if (used + 1 > cap) break;
-        used += 1;
-        const rows = used + d.rows.length <= cap ? d.rows : [];
-        used += rows.length;
-        out.push({ ...d, rows });
+      // What fits, with a desk's facts kept together and its headline never dropped while
+      // there is a row for it.
+      //
+      // The asymmetry is deliberate. A desk showing a name and a headline and no detail is
+      // the old card, which was worth something; a desk showing two of its four facts is the
+      // office looking like it does not know the other two, which is worse than saying less.
+      // So the facts are atomic and the headline is not, and the last desk on a short pane
+      // degrades to exactly the line it used to have.
+      const plan = (cap) => {
+        let used = body.length;
+        const out = [];
+        for (const d of blocks) {
+          if (used + 1 > cap) break;
+          used += 1;
+          const rows = used + d.rows.length <= cap ? d.rows : [];
+          used += rows.length;
+          out.push({ ...d, rows });
+        }
+        return out;
+      };
+      const shown = plan(panelRows - TAIL);
+      // Saying "and 2 more desks" costs a row that a list which fits does not have to spend,
+      // and the row is taken off the end rather than by planning the whole list again with
+      // one row less. Re-planning was the first version and it was a bad trade: one row short
+      // over four desks made every one of them give up its facts, so a card that had been
+      // three accounts and a name became four names, which is less of what somebody came here
+      // for. This way the desks at the top keep what they had and the last one down loses its
+      // detail, which is the one whose detail was least likely to be read anyway.
+      let used = body.length + shown.reduce((n, d) => n + 1 + d.rows.length, 0);
+      for (let i = shown.length - 1; i >= 0 && blocks.length > shown.length && used >= panelRows - TAIL; i -= 1) {
+        used -= shown[i].rows.length;
+        shown[i] = { ...shown[i], rows: [] };
       }
-      return out;
-    };
-    const shown = plan(panelRows - TAIL);
-    // Saying "and 2 more desks" costs a row that a list which fits does not have to spend,
-    // and the row is taken off the end rather than by planning the whole list again with
-    // one row less. Re-planning was the first version and it was a bad trade: one row short
-    // over four desks made every one of them give up its facts, so a card that had been
-    // three accounts and a name became four names, which is less of what somebody came here
-    // for. This way the desks at the top keep what they had and the last one down loses its
-    // detail, which is the one whose detail was least likely to be read anyway.
-    let used = body.length + shown.reduce((n, d) => n + 1 + d.rows.length, 0);
-    for (let i = shown.length - 1; i >= 0 && blocks.length > shown.length && used >= panelRows - TAIL; i -= 1) {
-      used -= shown[i].rows.length;
-      shown[i] = { ...shown[i], rows: [] };
-    }
 
-    for (const d of shown) {
-      const b = cells();
-      // The name is the handle, so it is what the eye lands on and the account hangs off
-      // it. No number in front of it: see the bottom of src/briefing.mjs for why the notice
-      // numbers went, which is that they stop counting once desks are the unit.
-      b.add('  ');
-      b.add(truncate(d.name, Math.max(0, TEXT - b.w - 4)), { fg: P.ink, bold: true });
-      b.add(truncate(` · ${d.head}`, Math.max(0, TEXT - b.w)), { fg: d.kind === 'collision' ? SNAG_FG : P.ink });
-      b.gap(TEXT);
-      body.push(row(b.out().text, b.out().spans));
-      for (const line of d.rows) {
-        const w = cells();
-        // Indented under the name rather than under the headline. Under the headline reads
-        // better and costs the width of the longest name in the pool, which on a narrow
-        // pane is the difference between a desk's own words fitting and not.
-        w.add(' '.repeat(IND));
-        w.add(truncate(line, Math.max(0, TEXT - w.w)), { fg: P.soft });
-        w.gap(TEXT);
-        body.push(row(w.out().text, w.out().spans));
+      for (const d of shown) {
+        const b = cells();
+        // The name is the handle, so it is what the eye lands on and the account hangs off
+        // it. No number in front of it: see the bottom of src/briefing.mjs for why the notice
+        // numbers went, which is that they stop counting once desks are the unit.
+        b.add('  ');
+        b.add(truncate(d.name, Math.max(0, TEXT - b.w - 4)), { fg: P.ink, bold: true });
+        b.add(truncate(` · ${d.head}`, Math.max(0, TEXT - b.w)), { fg: d.kind === 'collision' ? SNAG_FG : P.ink });
+        b.gap(TEXT);
+        body.push(row(b.out().text, b.out().spans));
+        for (const line of d.rows) {
+          const w = cells();
+          // Indented under the name rather than under the headline. Under the headline reads
+          // better and costs the width of the longest name in the pool, which on a narrow
+          // pane is the difference between a desk's own words fitting and not.
+          w.add(' '.repeat(IND));
+          w.add(truncate(line, Math.max(0, TEXT - w.w)), { fg: P.soft });
+          w.gap(TEXT);
+          body.push(row(w.out().text, w.out().spans));
+        }
       }
+      const over = blocks.length - shown.length;
+      if (over > 0) fit(row(`  and ${over} more desk${over === 1 ? '' : 's'}`, [{ from: 0, to: Infinity, fg: P.faint }]));
     }
-    const over = blocks.length - shown.length;
-    if (over > 0) fit(row(`  and ${over} more desk${over === 1 ? '' : 's'}`, [{ from: 0, to: Infinity, fg: P.faint }]));
   }
   // The rule and the line under it are one thing, drawn together or not at all. Passed
   // through `fit` separately they came out as a section heading with nothing beneath it on

@@ -35,6 +35,21 @@ import { dirName, listNames } from './notices.mjs';
 import { dirtWords } from './dirt.mjs';
 import { headWords, pressure } from './head.mjs';
 
+// How much of its time a desk has actually spent working. The detail card spells the same
+// numbers out across a row of its own; an account gets one clause, so this keeps the pair that
+// is about what got done and drops the buckets, the hand count and the longest wait.
+//
+// Under a minute on shift and it says nothing at all: every number there rounds to seconds, and
+// `worked 0s of 3s up` on a desk that opened while you were reading is noise dressed as a
+// finding. `waiting` is only added when there is some, because `waited on you 0s` is the normal
+// case and a clause every account carries is a clause nobody reads.
+export function dayWords(day, floorMs = 60000) {
+  if (!day || !(day.onShift >= floorMs)) return '';
+  const parts = [`worked ${formatDuration(day.worked)} of ${formatDuration(day.onShift)} up`];
+  if (day.waiting >= floorMs) parts.push(`waited on you ${formatDuration(day.waiting)}`);
+  return parts.join(', ');
+}
+
 // The longest quote off somebody's screen a briefing will carry. Larger than the 36 a
 // notice allows, and the difference is about room rather than about caution: a notice has
 // to share one status line with a whole sentence, whereas a clause here gets a row of a
@@ -139,6 +154,15 @@ function factsFor(kind, person) {
   // the difference between work to rescue and nothing to do.
   const changes = dirtWords(person.dirt);
   if (changes) out.push(changes);
+
+  // The day book, for the desks that have one. Not on the card's accounts, which are about who
+  // needs you now: this is only ever attached by office.mjs on the way to the manager, because
+  // it is the one fact on an account that no status word can give you. A desk reading `idle`
+  // after two hours of which it worked eleven minutes is a different report from one that
+  // worked an hour and fifty, and until this clause existed the manager was asked what the
+  // floor had got done while being told only what each desk was doing at this instant.
+  const day = dayWords(person.day);
+  if (day) out.push(day);
 
   // Only where it is part of the story. Every desk has a context window and most of them
   // are half empty, and a summary that spends a clause on `31% full` on every desk teaches

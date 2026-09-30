@@ -200,9 +200,8 @@ repository.
 
 Fourteen accounts is still fourteen accounts. So opening the manager's card hires somebody
 to read them: an agent gets started in an empty scratch directory and given one job, which
-is to read the floor and say what is happening in three sentences. Its answer appears on
-the card in a section of its own, above the accounts it was made from, and `a` asks it a
-question instead.
+is to say in a few bullet points what the floor has got done and what needs a person first.
+Its answer is what the card draws, and `a` asks it a question instead.
 
 The kind it hires is whichever kind your floor is mostly made of, on the theory that the
 one you already have six of is the one you are logged into. `M` still opens the picker if
@@ -212,16 +211,24 @@ fired with `X`, or one whose hire failed, is not replaced behind your back.
 
 ```
   ├─ what the manager says ─────────────────────────────────────────────┤
-  │   Ada and Bo are both stopped in herdr-office and Ada has a hand up,
-  │   so Ada is the one to look at first. Nobody else is waiting.
-  ├─ what happened at each desk ────────────────────────────────────────┤
-  │   Ada · stopped 30m00s ago
-  │      was doing "apply the security patch" · 7 uncommitted
+  │   - Ada got the migration tests passing, then stopped with a hand up
+  │   - Bo is in the same checkout as Ada, 7 files uncommitted between
+  │     them
+  │   - Everybody else has worked its whole shift and needs nothing
 ```
 
-Two sections, never one. The top half is a model's reading and can be wrong; the bottom
-half is the office's own counts and quotes, and it is the receipt. The order is what makes
-the summary checkable at a glance rather than something you have to trust.
+Progress, not status, which is the thing the first version of this got wrong. Asked what
+was happening it sent back a sentence per desk restating the status word already printed
+under every tile, which is the wall of true sentences the card exists to replace, reflowed.
+So it is asked what changed, and given the facts for it: what each desk was working on,
+what came of it, what it has left uncommitted, how long it has actually worked as against
+how long it has been open, and its own last words.
+
+The accounts those points were made from are one keystroke away rather than underneath:
+`m` walks to each desk the office noticed something about. They are still drawn on the
+card in the four cases where there is no summary to draw instead, which are `--no-manager`,
+a hire that failed, a machine that can start no agents, and the minute between opening the
+card and the first answer landing.
 
 Four rules it is built around, each of which is a thing that would otherwise make the
 feature not worth having:

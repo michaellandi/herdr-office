@@ -45,6 +45,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --once` | Render a single frame to stdout and exit |
 | `node office.mjs --once --board` | Same, with the office manager's card open, which is otherwise two keystrokes deep |
 | `node office.mjs --board` | Open straight onto the manager's card, which is also what hires a manager |
+| `node office.mjs --settings` | Open straight onto the settings card, where the six switches below live |
 | `node office.mjs --quiet` | Same, without the toast when somebody starts waiting on you |
 | `node office.mjs --no-title` | Same, leaving the window title alone |
 | `node office.mjs --no-graphics` | Text only, no pixel charts, even where the terminal can draw them |
@@ -66,6 +67,43 @@ description = "open the office"
 
 You get a Herdr toast when somebody starts waiting on you. Run it with `--quiet` if you
 would rather not.
+
+### Settings
+
+Every one of those six flags is also a switch on a card. Press `,` and you get this:
+
+```
+╭─ settings · space toggles one ──────────────────────────────────────╮
+│ ▌ hire a manager               on                                   │
+│   read how full each head is   on                                   │
+│   count what is uncommitted    on                                   │
+│   say when somebody needs you  on                                   │
+│   draw the pixel charts        on                                   │
+│   set the window title         off  --no-title this run             │
+├─ hire a manager ────────────────────────────────────────────────────┤
+│   Opening the manager's card starts an agent and asks it to read    │
+│   the floor. That spends tokens, every twenty seconds at most, and  │
+│   only while the card is open. Off, the card draws the accounts     │
+│   itself and M still hires one by hand.                             │
+│                                                                     │
+│   kept in ~/.config/herdr-office/settings.json                      │
+╰─────────────────────────────────────────────────────────────────────╯
+```
+
+`j` and `k` pick one, `space` flips it, `esc` closes the card. A flip takes effect
+immediately and is written to disk before your next keystroke, so the decision survives
+closing the pane.
+
+The flags exist because the office is usually started by a plugin manifest somebody wrote
+once, which means there is no command line in front of you at the moment you decide you
+would rather it did not hire a manager. The card is for that moment. A flag still wins for
+the run it was passed on, and the card says so rather than looking like it ignored your
+file; the file is untouched, so quitting leaves your preferences where they were.
+
+Only the switches you turned off are written down, so an office that later ships a better
+default can still give it to you. Set `HERDR_OFFICE_CONFIG` to put the file somewhere else,
+or `XDG_CONFIG_HOME` to move the directory. The reasoning is in
+[deciding what the office does](docs/design.md#deciding-what-the-office-does).
 
 ## Keys
 
@@ -94,6 +132,7 @@ would rather not.
 | `X` | let the manager go. Its pane is left alone, running, for you to close |
 | `f` | focus that agent's real pane |
 | `r` | refresh now |
+| `,` | settings: six switches for the six things the office does on your behalf |
 | `esc` | close the panel |
 | `q` | leave |
 
@@ -205,8 +244,10 @@ Its answer is what the card draws, and `a` asks it a question instead.
 
 The kind it hires is whichever kind your floor is mostly made of, on the theory that the
 one you already have six of is the one you are logged into. `M` still opens the picker if
-you want to choose, or want the manager in a worktree instead, and `--no-manager` turns the
-hiring off and leaves `M` as the only way in. One hire per run either way: a manager you
+you want to choose, or want the manager in a worktree instead, and the **hire a manager**
+switch on the settings card (or `--no-manager`) turns the hiring off and leaves `M` as the
+only way in. Turning that switch off while one is hired lets them go, exactly as `X` does,
+and leaves their pane running for you to close. One hire per run either way: a manager you
 fired with `X`, or one whose hire failed, is not replaced behind your back.
 
 ```
@@ -288,7 +329,8 @@ is built around:
   things here that cannot be taken back, and they are the most guarded part of the
   plugin. `--demo` prints what it would have sent instead. Opening the manager's card also
   starts an agent, once per run, which is the one thing in here that happens without a
-  keystroke aimed at it: `--no-manager` turns it off.
+  keystroke aimed at it: the first switch on the settings card turns it off, and so does
+  `--no-manager`.
 - **Every line is exactly as wide as the pane.** One cell too many wraps and shoves the
   whole floor down a row. `test/grid.test.mjs` is the suite that matters.
 
@@ -299,6 +341,7 @@ node --test test/*.test.mjs      # the whole suite, no dependencies to install
 node office.mjs --demo           # the office, with a fake roster and no server
 node office.mjs --once --demo    # one frame to stdout, for diffing the art
 node office.mjs --once --demo --board   # the manager's card in one frame
+node office.mjs --once --demo --settings  # the settings card in one frame
 ./scripts/record-demo.sh         # re-record the README's GIF (needs vhs + ffmpeg)
 ```
 
@@ -348,8 +391,8 @@ comment there is the source of truth rather than the doc.
   it. The full screen is right there underneath it.
 - **A hired manager spends tokens, and only while its card is open.** It is asked at
   most every twenty seconds, never twice about an unchanged floor, and never at all once
-  you close the card. If that is still more than you want, do not press `M`: nothing in
-  the office hires one for you and everything else works without one.
+  you close the card. If that is still more than you want, turn **hire a manager** off on
+  the settings card: everything else works without one, and `M` still hires one by hand.
 - **Nothing checks whether a hired manager answered sensibly.** A model that ignores the
   four-point limit gets cut off where the card runs out of room, with an ellipsis saying so,
   and one that answers the wrong question just reads wrong on the card. Which points it marks
@@ -363,6 +406,10 @@ comment there is the source of truth rather than the doc.
   scratch directory is deliberately not a repository, and an agent CLI that insists on a
   trusted checkout before it will take a prompt will sit there not answering. The card says
   what it is waiting for and `M` puts one in a worktree instead.
+- **A pane under twelve rows tall drops the last settings switches.** The card asks for
+  fourteen rows and takes whatever the pane has: at eleven rows the window title switch is
+  cut off, and it loses one more for every row below that. Nothing drawn is wrong and nothing
+  cut off is clickable, but in a pane that short the flag is the only way to those switches.
 - macOS and Linux only. Windows would work in principle (the socket helper falls back
   to the CLI path Herdr recommends) but is untested.
 

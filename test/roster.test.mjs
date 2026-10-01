@@ -603,3 +603,51 @@ test('the last thing a desk was seen saying is kept, and belongs to one task', (
   roster.setSaid(null, 'nobody');
   assert.equal(roster.said.has(''), false);
 });
+
+test('turning off the thing that filled a cache empties it rather than keeping the last answer', () => {
+  // The one caller for these is somebody flipping a switch on the settings card. A number
+  // that was true when it was read and is no longer being refreshed is the one thing this
+  // office cannot draw: everything on the floor is a claim that it was measured.
+  const roster = new Roster();
+  roster.update([agent('w1:p1', { cwd: '/repo' }), agent('w1:p2', { cwd: '/other' })]);
+  roster.setDirt('/repo', { files: 7, conflicts: 1 });
+  roster.setDirt('/other', { files: 2, conflicts: 0 });
+  roster.setHead('w1:p1', { used: 65 });
+  roster.setHead('w1:p2', { used: 20 });
+
+  roster.forgetDirt();
+  assert.equal(roster.find('w1:p1').dirt, null);
+  assert.equal(roster.find('w1:p2').dirt, null);
+  // Emptied rather than recorded as "nothing to say". Null is an answer here and an answer
+  // has an age, which would hold the next pass off for as long as a real reading would.
+  assert.equal(roster.dirtAge('/repo'), Infinity);
+  assert.equal(roster.dirtAge('/other'), Infinity);
+  // And the heads are untouched, because they are a different switch.
+  assert.equal(roster.find('w1:p1').head?.used, 65);
+
+  roster.forgetHeads();
+  assert.equal(roster.find('w1:p1').head, null);
+  assert.equal(roster.find('w1:p2').head, null);
+  assert.equal(roster.headAge('w1:p1'), Infinity);
+  assert.equal(roster.headAge('w1:p2'), Infinity);
+
+  // Turning either back on needs nothing else: the age is what the next pass sorts on, and
+  // a forgotten desk is the oldest thing on the floor.
+  roster.setDirt('/repo', { files: 3, conflicts: 0 });
+  assert.equal(roster.find('w1:p1').dirt.files, 3);
+  roster.setHead('w1:p1', { used: 40 });
+  assert.equal(roster.find('w1:p1').head.used, 40);
+});
+
+test('forgetting twice, or with nobody on the floor, is not an error', () => {
+  const roster = new Roster();
+  roster.forgetDirt();
+  roster.forgetHeads();
+  roster.update([agent('w1:p1', { cwd: '/repo' })]);
+  roster.forgetDirt();
+  roster.forgetDirt();
+  roster.forgetHeads();
+  roster.forgetHeads();
+  assert.equal(roster.find('w1:p1').dirt, null);
+  assert.equal(roster.find('w1:p1').head, null);
+});

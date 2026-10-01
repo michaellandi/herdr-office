@@ -13,6 +13,7 @@
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
 //   node office.mjs --no-manager  do not hire a manager when the manager's card opens
+//   node office.mjs --settings open on the settings card, where all six of those live
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -20,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
-import { renderFrame, nextZoom, ZOOMS, HIRE_ID, MANAGER_ID } from './src/render.mjs';
+import { renderFrame, nextZoom, ZOOMS, HIRE_ID, MANAGER_ID, SETTINGS_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice, lastSaid } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
 import { typeChunk, sanitizeBranch, defaultBranch, nextIndex, managerKind } from './src/hire.mjs';
@@ -44,46 +45,35 @@ import { readDirt } from './src/dirt.mjs';
 import { parseGauge, compactionNews } from './src/head.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
+import {
+  SETTINGS,
+  settle,
+  toggle as toggleSetting,
+  load as loadSettings,
+  save as saveSettings,
+  configFile,
+  setting,
+  shortPath,
+} from './src/settings.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
 const ONCE = argv.has('--once');
-// Toasts are on by default. The whole reason to watch the office is to find out
-// that somebody is waiting on you, and a default that has to be switched on by
-// editing an installed plugin's manifest is a default nobody ever gets.
-// `--notify` still parses, because it used to be the way to ask for this.
-const NOTIFY = !argv.has('--quiet');
-// The window title is the office's only presence outside its own pane, which is
-// exactly why it is opt-out: it is somebody else's window, and a title is a
-// shared surface that other things may also care about.
-const TITLE = !argv.has('--no-title');
-// Pixels, in the two places a chart beats a sentence. Opt-out for the same reason
-// toasts are: the pane is asked once whether it can draw at all, and a terminal
-// that says no is never asked again, so there is nothing here for a default to
-// break. What it is opt-out *for* is taste: some people want a terminal to be
-// only text, and that is a preference, not a capability.
-const GRAPHICS = !argv.has('--no-graphics');
-// Whether the office may run `git status` in the checkouts its desks are sitting in, to
-// say how much is uncommitted. Opt-out rather than opt-in because it is the answer to
-// the question people actually have about a floor of agents, and because what it runs is
-// a read that cannot take a lock (see src/dirt.mjs). Opt-out at all because it is the
-// one thing the office does that is not a socket call: somebody watching agents on a
-// machine where git is expensive, or who would simply rather this pane never shelled
-// out into their repositories, gets to say no in one flag.
-const GIT = !argv.has('--no-git');
-// Whether the office may read how full each agent's context window is (see src/head.mjs).
-// On by default because it is the question a floor of agents cannot otherwise answer, and
-// opt-out because of what it costs on the wire: this is the one feature that reads the
-// visible screen of every desk on a rotation rather than only the desks with their hands
-// up. Nothing off those screens is drawn or kept, and somebody who would still rather this
-// pane were not looking gets to say so in one flag.
-const HEAD = !argv.has('--no-context');
-// Whether opening the manager's card may hire a manager for it. On by default because the
-// card is a summary and without somebody to write one it is a list of notices with a heading;
-// opt-out because it is the only thing in here that starts a real agent without a keystroke,
-// and an agent costs tokens. `M` still works either way, so `--no-manager` is not a smaller
-// office, it is the same office with the starting decided by hand.
-const MANAGER = !argv.has('--no-manager');
+// The six things you can turn off, as a file plus the flags that used to be the only way
+// to say any of it (see src/settings.mjs for what each one costs and why all six are
+// opt-outs). Mutable, because the settings card changes them while the office is running,
+// and read at the call site every time rather than captured into a const: a preference you
+// have to restart the pane to express is the thing this replaced.
+//
+// Nothing on disk is read under `--demo`. A demo office has to be the same office every
+// time or the GIF is of whatever the person recording it happens to prefer. Flags still
+// apply, because those are on the command line in front of you.
+let prefs = settle(DEMO ? null : loadSettings(), [...argv]);
+// Which switch the card has under its cursor, and what went wrong last time it tried to
+// save. The values themselves live in `prefs` and not in here, because they are the
+// office's and not the card's: if the card owned them, closing it would be a decision
+// about them.
+let settingsCard = null;
 const FOLLOW = argv.has('--follow');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
@@ -397,6 +387,13 @@ function view() {
     notices: notices({ people: people.filter(notChief) }),
     noticeAt,
     board,
+    // The card gets the office's values rather than a copy of its own, and `source` with
+    // them, so a switch that reads `off` because of a flag can say so instead of looking
+    // like the file was ignored. The path is for the one footer line that tells you where
+    // this is being kept; nothing is kept in demo mode, and the footer says that instead.
+    settings: settingsCard
+      ? { ...settingsCard, values: prefs.values, source: prefs.source, file: DEMO ? null : shortPath(configFile()) }
+      : null,
     chief: chiefCard(),
     total: roster.people.length,
     filter,
@@ -552,7 +549,7 @@ async function refreshScreens() {
   // fairly instead of starving the ones at the bottom. Every desk counts, not just the
   // working ones: an idle agent that is ninety per cent full is precisely the desk you
   // were about to hand the next job to.
-  const dueGauges = HEAD
+  const dueGauges = prefs.values.context
     ? roster.people
       .filter((p) => !asking.has(p.id) && roster.headAge(p.id) >= GAUGE_MS)
       .sort((a, b) => roster.headAge(b.id) - roster.headAge(a.id))
@@ -573,7 +570,7 @@ async function refreshScreens() {
         const lines = cleanOutput(text);
         roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines));
       }
-      if (HEAD) readHead(person, text);
+      if (prefs.values.context) readHead(person, text);
       // The last thing this desk was seen saying, off the screen that was read anyway.
       // This used to be thrown away for every desk that was not blocked, which is why
       // "Dev stopped 16m ago with 7 files uncommitted" could never say what happened:
@@ -662,7 +659,7 @@ async function refreshBranches() {
 // never runs git speculatively in a directory somebody's pane happens to be sitting in,
 // only in checkouts the server has already told it are checkouts.
 async function refreshDirt() {
-  if (!GIT) return;
+  if (!prefs.values.git) return;
   const dirs = [...new Set(roster.people.filter((p) => p.cwd && p.repo).map((p) => p.cwd))]
     .filter((cwd) => roster.dirtAge(cwd) >= DIRT_MS)
     .sort((a, b) => roster.dirtAge(b) - roster.dirtAge(a))
@@ -682,7 +679,7 @@ async function refreshDirt() {
 // eighteen characters is pure noise on the socket.
 let lastTitle = '';
 function syncTitle() {
-  if (!TITLE || DEMO || ONCE) return;
+  if (!prefs.values.title || DEMO || ONCE) return;
   const title = windowTitle(roster.counts());
   if (title === lastTitle) return;
   api
@@ -702,8 +699,12 @@ function syncTitle() {
 
 // Hands the window back on the way out. Bounded by the caller, because a hung
 // socket must never be the reason ctrl-c does not work.
-function clearTitle() {
-  if (!TITLE || DEMO || ONCE || !lastTitle) return Promise.resolve();
+//
+// `force` is for the one caller that is turning the setting off: by the time it runs, the
+// office already believes the title is not its business, so the check below would leave the
+// last title it set sitting on somebody's window forever.
+function clearTitle(force = false) {
+  if ((!force && !prefs.values.title) || DEMO || ONCE || !lastTitle) return Promise.resolve();
   lastTitle = '';
   return api?.request('client.window_title.clear', {}, 400) ?? Promise.resolve();
 }
@@ -758,7 +759,7 @@ async function refresh() {
     tickChief();
     syncTitle();
     nudge();
-    if (NOTIFY) {
+    if (prefs.values.notify) {
       for (const id of newlyBlocked) {
         const person = roster.find(id);
         if (!person || person.firstSeen) continue;
@@ -784,7 +785,7 @@ async function refresh() {
 let watching = false;
 let escalation = null;
 function nudge() {
-  if (!NOTIFY || DEMO || ONCE) return;
+  if (!prefs.values.notify || DEMO || ONCE) return;
   const { toast, state } = escalate({ people: roster.people, state: escalation, watching });
   escalation = state;
   if (!toast) return;
@@ -1099,6 +1100,96 @@ function openBoard() {
   autoHire();
   draw();
   tickChief();
+}
+
+/* ------------------------------------------------------------ the settings card */
+
+// Opens on the first switch every time rather than remembering where you were. The first
+// switch is the manager, which is the one almost everybody comes here for, and it is also
+// the one whose help text is worth reading before you flip it.
+function openSettings() {
+  detail = null;
+  hire = null;
+  board = false;
+  settingsCard = { index: 0, error: null };
+  prevLines = [];
+  draw();
+}
+
+function closeSettings() {
+  settingsCard = null;
+  prevLines = [];
+  draw();
+}
+
+function moveSetting(dy) {
+  if (!settingsCard) return;
+  settingsCard = { ...settingsCard, index: nextIndex(settingsCard.index, 0, dy, 1, SETTINGS.length) };
+  draw();
+}
+
+// One switch, flipped, done, written. The write is on the keystroke rather than on the way
+// out of the card because there is no way out of the card that is guaranteed to run: this
+// pane is closed by closing a herdr tab at least as often as it is closed by pressing esc,
+// and a preference that survives one of those but not the other is worse than no file.
+function flipSetting(key) {
+  if (!settingsCard || !setting(key)) return;
+  const on = prefs.values[key] === false;
+  prefs = toggleSetting(prefs, key);
+  applyPref(key, on);
+  // Nothing is written in demo mode, where the settings were never read either. A GIF must
+  // not be able to change the preferences of the person recording it.
+  let error = null;
+  if (!DEMO && !saveSettings(prefs.values, configFile())) error = `could not write ${shortPath(configFile())}`;
+  settingsCard = { ...settingsCard, error };
+  // The label rather than the key, because the label is what is on the card in front of you.
+  note(`${setting(key).label}: ${on ? 'on' : 'off'}`);
+  prevLines = [];
+  draw();
+}
+
+// What a flip actually does to a running office. Everything in here is the difference
+// between a switch and a switch that works: `prefs` is already flipped by the time this
+// runs, so every call site that reads it is already behaving differently, and this is only
+// for the state that was built while the setting was the other way.
+function applyPref(key, on) {
+  if (key === 'manager') {
+    // Off is exactly what `X` does, for the same reason: the cost of a manager is the asking,
+    // and the pane is somebody else's to close.
+    if (!on) dropChief(`${chiefCard().name} is not the manager any more. Their pane is still open.`);
+    // On spends the one attempt again. The flag exists to stop a failed hire being retried on
+    // every card open, and a keystroke aimed at this switch is not that loop: it is the
+    // clearest statement anybody can make that they want one now.
+    //
+    // Nobody is hired here, only allowed to be. The four panels are one slot, so this card
+    // being open is the manager's card being shut, and there is nothing on screen for a
+    // manager to be hired into: opening that card again is what spends the attempt.
+    else autoHired = false;
+  } else if (key === 'title') {
+    if (on) syncTitle();
+    else clearTitle(true);
+  } else if (key === 'graphics') {
+    if (!on) {
+      // No `prevLines` reset needed for the layers themselves: paintPixels repaints every row
+      // it used to cover as soon as there is nothing covering it. flipSetting resets anyway,
+      // because the card under them changed too.
+      graphics?.clear();
+      graphics = null;
+    } else if (api && OWN_PANE) {
+      // Probed here rather than at startup, so an office started with `--no-graphics` really
+      // never asks the terminal anything, and the one that asks is the one that was told to.
+      graphics = new Graphics(api, OWN_PANE);
+      graphics.probe().then(draw).catch(() => {});
+    }
+  } else if (key === 'git' && !on) {
+    // The counts were true when they were read and are not being refreshed any more, and an
+    // office that draws a number nobody is maintaining is the one thing this office cannot do.
+    roster.forgetDirt();
+  } else if (key === 'context' && !on) {
+    roster.forgetHeads();
+  }
+  // `notify` needs nothing: the only thing it gates is a call made at the moment a hand goes
+  // up, and the next hand reads the new value.
 }
 
 // Switching shepherd mode on takes effect now rather than on the next poll, because
@@ -1594,7 +1685,7 @@ let autoHired = false;
 // `M` is still there and still opens the picker, for the two cases this cannot serve: wanting
 // a specific kind, and wanting the manager in a worktree.
 async function autoHire() {
-  if (DEMO || ONCE || !MANAGER || autoHired || chief.id || hire) return;
+  if (DEMO || ONCE || !prefs.values.manager || autoHired || chief.id || hire) return;
   autoHired = true;
   chief = { ...chief, hiring: true, error: null };
   prevLines = [];
@@ -1954,7 +2045,14 @@ function onMouse(ev) {
   const { drag: next, act } = nextDrag(drag, ev, hitboxes);
   drag = next;
   if (!act) return;
-  if (act.id) selectedId = act.id;
+  // A switch on the settings card is not a desk, so clicking one must not move who you are
+  // standing in front of. It carries an id at all because the hitbox list is keyed by one.
+  // A switch is not a desk. Selecting one would leave the office pointed at a seat nobody
+  // is in, so `esc` and then `enter` would open nothing at all. `ensureSelection` puts it
+  // back on a real desk at the next poll, which is why no test in the suite can hold this
+  // line: what it buys is the two seconds before that, and those are the two seconds
+  // somebody is actually in.
+  if (act.id && act.id !== SETTINGS_ID) selectedId = act.id;
   if (act.type === 'answer') {
     // The empty desk and the menu cells are buttons like [y] and [n] are, so they
     // arrive here. Neither one starts anything by itself: the desk opens the menu,
@@ -1964,6 +2062,7 @@ function onMouse(ev) {
     else if (act.action === 'hire:where:worktree') setWorktree(true);
     else if (act.action === 'hire:branch') editBranch(true);
     else if (act.action.startsWith('hire:start:')) startHire(act.action.slice(11));
+    else if (act.action.startsWith('settings:toggle:')) flipSetting(act.action.slice(16));
     else respond(act.action);
   } else if (act.type === 'open') {
     if (act.id === HIRE_ID) openHire();
@@ -2034,6 +2133,7 @@ function onInput(chunk) {
       return;
     }
     if (hire) return closeHire();
+    if (settingsCard) return closeSettings();
     // The field, then whatever panel is open, then the filter itself. So esc walks
     // back out the way you came in rather than throwing away a filter you are
     // still using because a panel happened to be open.
@@ -2118,6 +2218,18 @@ function onInput(chunk) {
     return;
   }
 
+  // Same bargain as the menu above: while the settings card is open the arrows are
+  // picking a switch, and everything else is swallowed. It matters more here than
+  // anywhere else, because a stray `y` falling through to the floor would answer an
+  // approval prompt at a desk you are not even looking at.
+  if (settingsCard) {
+    if (str === '\x1b[A' || str === 'k') moveSetting(-1);
+    else if (str === '\x1b[B' || str === 'j') moveSetting(1);
+    else if (str === '\r' || str === '\n' || str === ' ') flipSetting(SETTINGS[settingsCard.index]?.key);
+    else if (str === ',') return closeSettings();
+    return;
+  }
+
   // Same bargain as the assign field: while the filter has the keyboard every
   // printable key is a letter in it, so a `y` typed into a filter cannot answer
   // somebody's approval prompt.
@@ -2135,6 +2247,9 @@ function onInput(chunk) {
   }
 
   if (str === '/') return openFilter();
+  // A comma, because every letter that could have stood for this was already a key and
+  // because punctuation is what is left when the alphabet is full.
+  if (str === ',') return openSettings();
   if (str === '+') return openHire();
   // Hiring a manager, from the manager's desk or its card, which are the two places the
   // question comes up. Deliberately not from anywhere else: it is a hire, and every other
@@ -2315,7 +2430,7 @@ function demoExtras() {
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
     roster.setDirt(person.cwd, DEMO_DIRT[i % DEMO_DIRT.length]);
-    if (HEAD) roster.setHead(person.id, DEMO_HEADS[i % DEMO_HEADS.length]);
+    if (prefs.values.context) roster.setHead(person.id, DEMO_HEADS[i % DEMO_HEADS.length]);
     // Every third desk has just had some news, so the demo shows the slab without
     // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {
@@ -2424,6 +2539,13 @@ async function main() {
       detail = null;
       board = true;
     }
+    // Same again for the settings card, and the same reason it is the state rather than
+    // `openSettings()`: that draws, and this is about to.
+    if (argv.has('--settings')) {
+      detail = null;
+      board = false;
+      settingsCard = { index: 0, error: null };
+    }
     // Written *and flushed* before the exit. Whenever this render is being diffed,
     // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
     // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an
@@ -2446,7 +2568,7 @@ async function main() {
   // knows it is a text-only terminal by the time it has anything to draw. A pane id
   // is required and comes from the environment herdr started us in, so an office run
   // by hand outside herdr is simply text, which is correct.
-  if (GRAPHICS && api && OWN_PANE) {
+  if (prefs.values.graphics && api && OWN_PANE) {
     graphics = new Graphics(api, OWN_PANE);
     await graphics.probe();
   }
@@ -2457,6 +2579,7 @@ async function main() {
   // rather than before it, because this is the one flag that hires somebody, and hiring wants
   // a floor to pick a kind from.
   if (argv.has('--board')) openBoard();
+  if (argv.has('--settings')) openSettings();
 }
 
 process.on('SIGINT', () => quit(0));

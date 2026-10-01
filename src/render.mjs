@@ -13,6 +13,7 @@ import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 // rounding contest.
 import { allot } from './charts.mjs';
 import { manager, managerLine, MANAGER_ID } from './manager.mjs';
+import { SETTINGS, setting } from './settings.mjs';
 import { brief, wrap } from './briefing.mjs';
 import {
   pose,
@@ -48,6 +49,11 @@ const CHROME_ROWS = 4; // header bar + spacer, spacer + key bar
 // reach it with no special case. It cannot collide with a real pane id: herdr
 // pane ids are `<workspace>:<pane>`, and none of them start with a plus.
 export const HIRE_ID = '+hire';
+
+// And the settings card, which is not a desk at all: nothing walks to it and nothing is
+// selected on it. It stands where a pane id would for exactly one reason, which is that
+// the hitbox list is keyed by id and a switch has to be clickable.
+export const SETTINGS_ID = '+settings';
 
 // Re-exported so callers that already import the renderer's ids get both from one
 // place, rather than having to know that one desk with no pane behind it lives in
@@ -731,6 +737,16 @@ function keyHints(view) {
       ['esc', 'never mind'],
     ];
   }
+  // Same reasoning again while the settings card is open: j and k are picking a switch
+  // rather than walking the floor, and the one key that matters here is not on the floor's
+  // list at all. Everything else is swallowed, so the footer must not go on offering it.
+  if (view.settings) {
+    return [
+      ['jk', 'pick a switch'],
+      ['space', view.settings.values?.[SETTINGS[view.settings.index ?? 0]?.key] === false ? 'turn it on' : 'turn it off'],
+      ['esc', 'close'],
+    ];
+  }
   // While the filter field has the keyboard every printable key is a letter in it,
   // the same as the assign field, so the footer must stop advertising the floor.
   if (view.filtering) {
@@ -776,6 +792,10 @@ function keyHints(view) {
     ...(terms(view.filter).length ? [] : [['/', 'filter']]),
     ['f', 'jump to pane'],
     ['r', 'refresh'],
+    // Last but one, because it is the only hint here that is not about the floor: a
+    // preference is a thing you set once and then never look for again, and a key that
+    // earned a higher seat would be taking it from something you need every minute.
+    [',', 'settings'],
     ['q', 'leave'],
   ];
 }
@@ -2131,6 +2151,144 @@ function managerPanel(view, panelRows) {
 
 /* --------------------------------------------------------------------- frame */
 
+/* ------------------------------------------------------------ settings panel */
+
+// The widest label plus a gap, so the switch states line up in a column instead of
+// following each label around. Measured rather than guessed, because a hard-coded
+// number here would be wrong the first time somebody adds a seventh setting.
+const SWITCH_X = Math.max(...SETTINGS.map((s) => width(s.label))) + 2;
+
+// The card that says what this office is allowed to do, and lets you change it.
+//
+// Every switch on it was a command line flag first, and a flag is the wrong shape for all
+// of them: the office is opened by clicking a thing in herdr, so the one moment you are
+// not standing at a command line is the moment you decide you would rather it did not
+// hire a manager. See src/settings.mjs for the precedence and what is written where.
+//
+// Three rows are mandatory at every pane size: the title, the six switches, the bottom
+// edge. That is eight rows and the panel's floor is eight, so the switches are never the
+// thing that gets dropped. "space toggles" rides in the title for the same reason the
+// hire card's destination does, which is that it is the one row always on the screen.
+function settingsPanel(view, panelRows, hitboxes, startRow) {
+  const { size } = view;
+  const open = view.settings || {};
+  const values = open.values || {};
+  const source = open.source || {};
+  const PW = Math.min(size.cols, Math.max(24, size.cols - 4));
+  const TEXT = PW - 4;
+  const left = Math.max(0, Math.floor((size.cols - PW) / 2));
+  const chrome = { borderFg: open.error ? STATUS.blocked.fg : P.wall, bold: false };
+  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const body = [];
+
+  const head = cells();
+  head.add('╭─ ');
+  head.add('settings', { fg: P.ink, bold: true });
+  head.add(truncate(' · space toggles one', Math.max(0, PW - head.w - 2)), { fg: P.dim });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
+  head.add('╮');
+  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  const index = Number.isInteger(open.index) ? Math.max(0, Math.min(SETTINGS.length - 1, open.index)) : 0;
+  for (let i = 0; i < SETTINGS.length; i += 1) {
+    const s = SETTINGS[i];
+    const on = values[s.key] !== false;
+    const here = i === index;
+    const b = cells();
+    b.add(here ? '▌' : ' ', { fg: P.accent });
+    b.add(' ');
+    // An off switch takes its whole row down a shade, label included. The state word on
+    // its own is two cells of a card with six rows of text on it, and a reader scanning
+    // for what they turned off should be able to find it without reading any of them.
+    b.add(truncate(s.label, Math.max(1, TEXT - b.w)), { fg: on ? (here ? P.ink : P.soft) : P.dim, bold: here });
+    b.gap(Math.min(TEXT, SWITCH_X + 2));
+    // `on` in the accent rather than in green. Green is a working monitor and amber is a
+    // raised hand, and a switch is neither of those: borrowing either would mean the one
+    // colour on this floor that must always win the eye could be won by a preference.
+    b.add(on ? 'on' : 'off', { fg: on ? P.accent : P.faint, bold: on });
+    // Why it says what it says, but only when the answer is surprising. A switch reading
+    // `off` on an office you remember saving as `on` looks broken, and the true
+    // explanation is one flag long. Nothing is said for a default or for a saved value,
+    // because those are the card agreeing with itself.
+    if (source[s.key] === 'flag') {
+      b.add('  ');
+      b.add(truncate(`${s.flag} this run`, Math.max(0, TEXT - b.w)), { fg: P.faint });
+    }
+    b.gap(TEXT);
+    // The whole row, not just the word: a switch is a thing you point at, and a two-cell
+    // target next to twenty-eight cells of its own label is a target that gets missed.
+    //
+    // And only for a row that is going to be drawn. The card is cut to the panel's height
+    // at the bottom of this function, so in a pane too short to hold all six the last ones
+    // never appear, and a hitbox for a row nobody can see is a click that does something
+    // invisible to whatever is actually at those coordinates.
+    if (body.length < panelRows) {
+      hitboxes.push({ id: SETTINGS_ID, action: `settings:toggle:${s.key}`, x: left + 2, y: startRow + body.length, w: Math.max(1, Math.min(TEXT, PW - 4)), h: 1 });
+    }
+    body.push(row(b.out().text, b.out().spans));
+  }
+
+  const rule = (label) => {
+    const text = truncate(label, Math.max(0, PW - 5));
+    const tag = `├─ ${text} `;
+    return paint(tag + '─'.repeat(Math.max(0, PW - width(tag) - 1)) + '┤', [{ from: 3, to: 3 + [...text].length, fg: P.soft }], {
+      fg: chrome.borderFg,
+      bg: P.cubicle,
+    });
+  };
+
+  // What the one under the cursor costs. This is the whole reason the card is a card and
+  // not a row of six words: the labels say what each switch is and none of them says what
+  // it is doing to your machine, which is the only thing anybody opens this to find out.
+  //
+  // Only the selected one, and only when there is room. Six help texts at once is the
+  // wall of true sentences every other surface in this office exists to avoid, and a
+  // pane too short for any of them still has the six switches, which are the point.
+  const picked = setting(SETTINGS[index]?.key);
+  const roomForHelp = panelRows - body.length - 2;
+  if (picked && roomForHelp >= 2) {
+    body.push(rule(picked.label));
+    const lines = wrapField(picked.help, TEXT - 2, Number.MAX_SAFE_INTEGER);
+    const room = Math.min(lines.length, roomForHelp - 1);
+    for (let i = 0; i < room; i += 1) {
+      const last = i === room - 1 && room < lines.length;
+      const b = cells();
+      b.add('  ');
+      b.add(truncate(last ? `${lines[i]}…` : lines[i], Math.max(0, TEXT - b.w)), { fg: P.soft });
+      b.gap(TEXT);
+      body.push(row(b.out().text, b.out().spans));
+    }
+  }
+
+  // Where this is kept, or why it is not kept. The path is here because a settings file
+  // nobody can find is a settings file nobody trusts, and the home directory is collapsed
+  // because this pane gets screen-shared and the absolute path is both longer and more
+  // personal than the fact anybody wanted.
+  if (body.length < panelRows - 1) {
+    // Pushed to the bottom edge rather than left under the help text, which is the only
+    // thing keeping the two apart in a terminal somebody has read the colours out of.
+    while (body.length < panelRows - 2) body.push(row(''));
+    const b = cells();
+    b.add('  ');
+    if (open.error) b.add(truncate(open.error, Math.max(0, TEXT - b.w)), { fg: STATUS.blocked.fg });
+    else b.add(truncate(open.file ? `kept in ${open.file}` : 'nowhere to keep this, so it is this run only', Math.max(0, TEXT - b.w)), { fg: P.faint });
+    b.gap(TEXT);
+    body.push(row(b.out().text, b.out().spans));
+  }
+  body.push(edge('╰', '╯', PW, chrome));
+
+  const lines = [];
+  for (let i = 0; i < panelRows; i += 1) {
+    if (i >= body.length) {
+      lines.push(fill(size.cols, P.carpet));
+      continue;
+    }
+    lines.push(fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return lines;
+}
+
 export function renderFrame(view) {
   const { cols, rows } = view.size;
   const out = [...headerLines(view)];
@@ -2146,8 +2304,19 @@ export function renderFrame(view) {
   // The manager's card is last, because it is the only one of the four holding nothing:
   // the other three are each a thing you are in the middle of, and this one you can
   // reopen from the desk in one keystroke.
-  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : view.board ? 'board' : null;
-  const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
+  // The settings card is last of the five, which is the same argument that put the
+  // manager's card fourth taken one step further: the other four are each a thing you are
+  // in the middle of, the manager's card you can reopen in one keystroke, and this one you
+  // can reopen in one keystroke from anywhere at all.
+  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : view.board ? 'board' : view.settings ? 'settings' : null;
+  // The settings card asks for six rows more than the other four, and it is the only one
+  // with a reason to: a switch with nothing under it is a switch you have to flip to find
+  // out what it does, and two of these six spend money or touch your repositories. Eight
+  // rows are the card (title, six switches, bottom edge) and the six on top are the rule,
+  // the help text and the line saying where this is kept. Still capped by the floor it is
+  // standing on, so a short pane gets a shorter card rather than no floor.
+  const panelFloor = panel === 'settings' ? 14 : 8;
+  const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(panelFloor, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
   const hitboxes = [];
@@ -2345,6 +2514,7 @@ export function renderFrame(view) {
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   else if (panel === 'board') out.push(...managerPanel(view, detailRows));
+  else if (panel === 'settings') out.push(...settingsPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid, regions };
 }

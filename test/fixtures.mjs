@@ -385,7 +385,7 @@ export const FILTERS = [
 export const isManagerRow = (line) => /WATCHING|\d+ (?:DESKS?|THINGS?)\b/.test(line);
 export const personRow = (lines, name) => lines.find((l) => l.includes(name) && !isManagerRow(l)) || '';
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0, board = false, chief = null }) {
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, noticeAt = 0, board = false, chief = null, settings = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -423,6 +423,10 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     // the point: the footer has to hold a real one at every size.
     notices: notices || noticesOf({ people }),
     noticeAt,
+    // The settings card, when it is open, exactly as office.mjs hands it over: the index
+    // under the cursor plus the office's own values and where each one came from. Null by
+    // default, which is every frame drawn before this existed.
+    settings,
     // Whether the manager's card is open. False by default, which is every frame drawn
     // before this existed.
     board,

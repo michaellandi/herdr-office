@@ -308,6 +308,24 @@ export class Roster {
     return this.heads.get(id)?.gauge || null;
   }
 
+  // Both of these exist for one caller, which is somebody turning off the thing that
+  // filled them (see the settings card). A count that was true when it was read and is
+  // not being refreshed is worse than no count at all: the office's whole claim is that
+  // what it draws is what it measured, and a stale number nobody is watching breaks it.
+  //
+  // The cache is emptied rather than every entry being set to null, because null is an
+  // answer here and an answer rate-limits the retry. Switching the reads back on should
+  // read on the next pass, not in whatever is left of a cache timer.
+  forgetDirt() {
+    this.dirt.clear();
+    for (const person of this.people) person.dirt = null;
+  }
+
+  forgetHeads() {
+    this.heads.clear();
+    for (const person of this.people) person.head = null;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;

@@ -52,10 +52,11 @@ const desk = (id, status, i, extra = {}) => ({
 // Deliberate, and the reason these tests can see a duplicate at all. The real
 // herdr resets instead, so on the machine this was found on the duplicate was
 // dropped by the kernel and looked like nothing was wrong.
-async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null, book = null, manifests = null, hireFails = null } = {}) {
+async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText = 'all done here', worktrees = null, git = null, book = null, manifests = null, hireFails = null, settings = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-office-run-'));
   const sockPath = path.join(dir, 's');
   const gitLog = path.join(dir, 'git-calls');
+  const configPath = path.join(dir, 'settings.json');
   const asked = [];
   let out = '';
 
@@ -145,6 +146,12 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
   // production default stays where it is and this run is simply allowed to be slow.
   env.HERDR_OFFICE_GIT_TIMEOUT_MS = '30000';
 
+  // Settings, in a scratch file, always. Not only when a test asks for some: the card
+  // writes on every flip, and a run that fell through to the real path would edit the
+  // preferences of whoever is running the suite.
+  env.HERDR_OFFICE_CONFIG = configPath;
+  if (settings) fs.writeFileSync(configPath, JSON.stringify(settings));
+
   // An office that is opening for the second time today, with a real state file written
   // by a real earlier run. Seeded through the same file the office writes rather than
   // through an injected object, because every other part of this is the real thing: the
@@ -153,7 +160,11 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
   if (book) {
     const stateDir = path.join(dir, 'state');
     fs.mkdirSync(stateDir, { recursive: true });
-    const d = new Date(book.savedAt);
+    // Today, rather than the day `savedAt` lands on. The office throws away a book from
+    // another day and it is right to, but a fixture that says "shut forty minutes ago" is
+    // about the gap and not about midnight, and dating it off `savedAt` made this test fail
+    // for the first forty minutes of every local day.
+    const d = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     fs.writeFileSync(
       path.join(stateDir, 'punchclock.json'),
@@ -205,9 +216,35 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
     },
     screen: () => out.replace(ANSI, ''),
     sent: (method) => asked.filter((a) => a.method === method),
+    // Whatever the settings card has written, or null if it has not written anything.
+    settingsFile: () => (fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : null),
     // Every argument list the office handed to git, in order.
     gitCalls: () => (fs.existsSync(gitLog) ? fs.readFileSync(gitLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),
     type: (keys) => child.stdin.write(keys),
+    // The screen as a terminal would be showing it, row by row. `screen()` is every frame
+    // ever drawn concatenated, which is the right thing for "did this text appear" and no
+    // use at all for "which row is it on". Every row the office draws is written with an
+    // explicit move to column one of a known line, so replaying those moves in order
+    // rebuilds the current frame. A test that wants to click something needs this.
+    frame() {
+      const rowsOut = [];
+      const moves = /\x1b\[(\d+);1H((?:[^\x1b]|\x1b\[[0-9;]*m)*)/g;
+      let m;
+      while ((m = moves.exec(out))) rowsOut[Number(m[1]) - 1] = m[2].replace(ANSI, '');
+      return rowsOut;
+    },
+    // Where something is, in the frame as it stands, or -1.
+    at(text) {
+      const rowsOut = office.frame();
+      const y = rowsOut.findIndex((l) => (l || '').includes(text));
+      return y < 0 ? { x: -1, y: -1 } : { x: rowsOut[y].indexOf(text), y };
+    },
+    // A left-button press and release in the same place, SGR, which is what the office
+    // turns on and what a real terminal sends. Both halves, because the two things a click
+    // can mean are decided at different moments: a button answers on the press, and opening
+    // a desk waits for the release, since a press that travels was a drag rather than a
+    // request to open anything. One write, because the office reads every report in a chunk.
+    click: (x, y) => child.stdin.write(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`),
     // Poll rather than sleep: a fixed wait is either flaky or slow, and on a
     // failure the message has to say what the office was showing instead.
     async until(what, pred, ms = 8000) {
@@ -941,6 +978,360 @@ test('a machine that can start nothing is told so rather than asked to start not
     await office.until('the card to give up', () => office.onScreen('could not hire a manager'));
     assert.deepEqual(office.sent('tab.create'), [], 'it opened a tab for an agent it could not name');
     assert.deepEqual(office.sent('agent.start'), [], 'it started an agent with no kind');
+  } finally {
+    await office.stop();
+  }
+});
+
+/* -------------------------------------------------------------- the settings card */
+
+test('a comma opens the switches, and esc puts them away', async () => {
+  const office = await openOffice({ agents: [desk('w1:p1', 'idle', 0)] });
+  try {
+    await office.ready('1 desk');
+    assert.ok(!office.onScreen('hire a manager'), 'the card was open before anybody asked');
+    office.type(',');
+    await office.until('the card', () => office.onScreen('hire a manager'));
+    // All six, through the real office rather than a rendered view model.
+    for (const label of ['read how full each head is', 'count what is uncommitted', 'say when somebody needs you', 'draw the pixel charts', 'set the window title']) {
+      assert.ok(office.onScreen(label), `${label} is not on the card`);
+    }
+    // And where it is being kept, which is a real path on this machine.
+    assert.ok(office.onScreen('kept in'), 'the card does not say where this is kept');
+
+    const before = office.screen().length;
+    office.type('\x1b');
+    await office.until('the card to close', () => !office.screen().slice(before).includes('hire a manager'));
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a switch flipped on the card is on disk before the next keystroke', async () => {
+  const office = await openOffice({ agents: [desk('w1:p1', 'idle', 0)], args: ['--settings'] });
+  try {
+    await office.ready('1 desk');
+    assert.equal(office.settingsFile(), null, 'something was written before anybody flipped anything');
+    office.type(' ');
+    await office.until('the file', () => office.settingsFile()?.manager === false);
+    // Only the disagreement. Five switches nobody argued about stay out of the file so a
+    // better default can still reach this office later.
+    assert.deepEqual(office.settingsFile(), { manager: false });
+    await office.until('the card to say so', () => /hire a manager\s+off/.test(office.screen()));
+
+    // Down two and off, which is the git switch: the arrows move the cursor rather than
+    // walking the floor behind the card. One key per write, because a chunk of stdin is one
+    // keystroke to the office and `jj` is not a key.
+    // One at a time, with a wait between: two writes in the same tick arrive as one chunk
+    // of stdin, and a chunk is one keystroke to the office.
+    office.type('j');
+    await office.until('the first move', () => /▌ read how full each head is/.test(office.screen()));
+    office.type('j');
+    await office.until('the cursor', () => /▌ count what is uncommitted/.test(office.screen()));
+    office.type(' ');
+    await office.until('the second switch', () => office.settingsFile()?.git === false);
+    assert.deepEqual(office.settingsFile(), { manager: false, git: false });
+
+    // And back on, which takes it out of the file rather than writing `true`.
+    office.type(' ');
+    await office.until('the file to forget it', () => office.settingsFile()?.git === undefined);
+    assert.deepEqual(office.settingsFile(), { manager: false });
+  } finally {
+    await office.stop();
+  }
+});
+
+test('an office that was told once does not hire a manager again', async () => {
+  // The whole point of the file. Last time this pane was open somebody turned the manager
+  // off on the card; this time the card opens and nobody is hired, with no flag involved.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    args: ['--board'],
+    settings: { manager: false },
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the card', () => office.onScreen('nobody hired'));
+    await settle();
+    assert.deepEqual(office.sent('agent.start'), [], 'the saved setting did not stop the hire');
+    assert.deepEqual(office.sent('tab.create'), [], 'a tab was opened for a manager nobody wanted');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a switch says it is off because of a flag, and the flag does not rewrite the file', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0)],
+    args: ['--settings', '--no-git'],
+    settings: { manager: false },
+  });
+  try {
+    await office.ready('1 desk');
+    await office.until('the card', () => office.onScreen('count what is uncommitted'));
+    assert.ok(/count what is uncommitted\s+off\s+--no-git this run/.test(office.screen()), 'the card does not say the flag is why');
+    // The saved setting is still drawn as saved, with nothing said about a flag.
+    assert.ok(/hire a manager\s+off\s{2,}$/m.test(office.screen().split('\n').map((l) => l.replace(/\s+│.*$/, '')).join('\n')) || /hire a manager\s+off/.test(office.screen()));
+    assert.ok(!office.onScreen('--no-manager this run'), 'a flag nobody passed was blamed');
+    // And nothing was written, because a flag is about this run.
+    await settle();
+    assert.deepEqual(office.settingsFile(), { manager: false });
+  } finally {
+    await office.stop();
+  }
+});
+
+test('turning git off stops the office running git', async () => {
+  // The one setting whose effect is a subprocess, so this is the only place the claim can
+  // be checked: a real fake git, really spawned, and then really not spawned again.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    worktrees: WORKTREES,
+    git: ' M one.js\n M two.js\n?? three.js\n',
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.ready('1 desk');
+    await office.until('git to have run', () => office.gitCalls().length >= 1);
+    // Into the compact list, which is the one view that says the count in words a test can
+    // read: on the floor plan the same fact is a pile of paper on a desk.
+    office.type('z');
+    await office.until('the count to reach the list', () => office.at('+3').y >= 0);
+
+    office.type(',');
+    await office.until('the card', () => office.onScreen('count what is uncommitted'));
+    // One at a time, with a wait between: two writes in the same tick arrive as one chunk
+    // of stdin, and a chunk is one keystroke to the office.
+    office.type('j');
+    await office.until('the first move', () => /▌ read how full each head is/.test(office.screen()));
+    office.type('j');
+    await office.until('the cursor', () => /▌ count what is uncommitted/.test(office.screen()));
+    office.type(' ');
+    await office.until('the switch', () => office.settingsFile()?.git === false);
+
+    // Long enough for several passes of the thing that was running it.
+    const ran = office.gitCalls().length;
+    await settle();
+    await settle();
+    assert.equal(office.gitCalls().length, ran, 'git was run after somebody said not to');
+
+    // And the count is off the floor. It was true when it was read and nobody is reading
+    // it again, so leaving it up is an office drawing a number it has stopped maintaining,
+    // which is the one thing it cannot do.
+    office.type('\x1b');
+    await office.until('the card to close', () => office.at('kept in').y < 0);
+    await office.until('the count to leave the floor', () => office.at('+3').y < 0);
+  } finally {
+    await office.stop();
+  }
+});
+
+test('turning the head readings off stops the reads and takes the gauges down', async () => {
+  // The companion to the git test, and the same argument: the switch is the one that
+  // decides whether this pane looks at the screen of a desk nobody has their hand up at,
+  // so it has to stop the reads, and the readings it already has have to come off the
+  // floor rather than age in silence.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0)],
+    // A status bar, which is the only line this is ever read off: a bare percentage
+    // anywhere else is test coverage or a download. See "How full their head is".
+    screenText: 'claude · context: 73% · main',
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.ready('1 desk');
+    office.type('z');
+    await office.until('the gauge to reach the list', () => office.at('73%').y >= 0);
+
+    office.type(',');
+    await office.until('the card', () => office.onScreen('read how full each head is'));
+    office.type('j');
+    await office.until('the cursor', () => /▌ read how full each head is/.test(office.screen()));
+    office.type(' ');
+    await office.until('the switch', () => office.settingsFile()?.context === false);
+
+    const read = office.sent('agent.read').length;
+    office.type('\x1b');
+    await office.until('the card to close', () => office.at('kept in').y < 0);
+    await office.until('the gauge to leave the list', () => office.at('73%').y < 0);
+    await settle();
+    await settle();
+    assert.equal(office.sent('agent.read').length, read, 'a desk was read after somebody said not to');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a key meant for a switch cannot answer somebody else prompt', async () => {
+  // The card takes the keyboard exclusively, which matters more here than in the hire menu:
+  // a `y` falling through would approve a shell command at a desk nobody is looking at.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0)],
+    screenText: 'Allow this command? (y/n)',
+  });
+  try {
+    await office.ready('1 desk');
+    office.type(',');
+    await office.until('the card', () => office.onScreen('hire a manager'));
+    office.type('yYnsaA+Mmfz/rb');
+    await settle();
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'a keystroke aimed at the card reached an agent');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'a keystroke aimed at the card prompted an agent');
+    assert.deepEqual(office.sent('agent.start'), [], 'a keystroke aimed at the card hired somebody');
+    // And it is still the card, because nothing in there closed it either.
+    assert.ok(office.onScreen('hire a manager'));
+    // A second comma is the way out, which is the one key that is allowed to do something.
+    office.type(',');
+    const before = office.screen().length;
+    await office.until('the card to close', () => !office.screen().slice(before).includes('set the window title'));
+  } finally {
+    await office.stop();
+  }
+});
+
+test('turning the window title off hands the window back', async () => {
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], args: ['--settings'] });
+  try {
+    await office.ready('1 desk');
+    await office.until('the title', () => office.sent('client.window_title.set').length >= 1);
+    assert.deepEqual(office.sent('client.window_title.clear'), [], 'the window was handed back before anybody asked');
+
+    // Down to the last switch and off.
+    for (const label of ['read how full each head is', 'count what is uncommitted', 'say when somebody needs you', 'draw the pixel charts', 'set the window title']) {
+      office.type('j');
+      await office.until(`the cursor on ${label}`, () => office.screen().includes(`▌ ${label}`));
+    }
+    office.type(' ');
+    // The flip is already believed by the time the clear is sent, which is the whole reason
+    // `clearTitle` takes a force: without it the last title the office set would sit on
+    // somebody's window for the rest of the session.
+    await office.until('the window to be handed back', () => office.sent('client.window_title.clear').length >= 1);
+
+    const set = office.sent('client.window_title.set').length;
+    await settle();
+    assert.equal(office.sent('client.window_title.set').length, set, 'the title was set after somebody said not to');
+    assert.deepEqual(office.settingsFile(), { title: false });
+  } finally {
+    await office.stop();
+  }
+});
+
+test('turning the manager off lets the one you have go, and leaves their pane alone', async () => {
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    args: ['--board'],
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the hire', () => office.sent('agent.start').length >= 1);
+    office.type(',');
+    await office.until('the card', () => office.onScreen('hire a manager'));
+    office.type(' ');
+    await office.until('the file', () => office.settingsFile()?.manager === false);
+
+    // Exactly what `X` does, for the same reason: the cost of a manager is the asking, and
+    // the pane belongs to whoever is going to close it.
+    assert.ok(office.onScreen('not the manager any more'), 'the office did not say the manager was let go');
+    assert.deepEqual(office.sent('pane.close'), [], 'the office closed somebody pane');
+    const started = office.sent('agent.start').length;
+    await settle();
+    assert.equal(office.sent('agent.start').length, started, 'another manager was hired after somebody said no');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a switch can be clicked, and clicking one does not walk you off your desk', async () => {
+  // The only mouse test in this file, and it is here rather than in switches.test.mjs
+  // because what it is about is the wiring: `renderFrame` can be asked what the hitboxes
+  // are, and whether a press on one of them reaches `flipSetting` is a question only a
+  // running office can answer.
+  const office = await openOffice({ agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'idle', 1)], args: ['--settings'] });
+  try {
+    await office.ready('2 desks');
+    await office.until('the card', () => office.at('count what is uncommitted').y >= 0);
+
+    // On the label itself, which is inside the row's hitbox and nowhere near the word that
+    // says which way the switch is. The whole row is the target, and that is the point.
+    const spot = office.at('count what is uncommitted');
+    office.click(spot.x, spot.y);
+    await office.until('the switch to have flipped', () => office.settingsFile()?.git === false);
+    assert.deepEqual(office.settingsFile(), { git: false }, 'a click flipped something it was not aimed at');
+
+    // And the floor behind the card is where it was. A switch is not a desk: selecting one
+    // would leave the office pointed at a seat that does not exist, so the next `enter`
+    // would open nothing at all.
+    office.type('\x1b');
+    await office.until('the card to close', () => office.at('count what is uncommitted').y < 0);
+    office.type('\r');
+    await office.until(
+      'the desk to open',
+      () => office.asked.some((a) => a.method === 'agent.read' && a.params?.source === 'recent_unwrapped'),
+    );
+    const read = office.asked.find((a) => a.method === 'agent.read' && a.params?.source === 'recent_unwrapped');
+    assert.equal(read.params.target, 'w1:p1', 'the office opened a desk nobody had selected');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('turning the manager back on lets the next card open hire one', async () => {
+  // The other half of the switch. Off is a manager let go; on is not a hire, because the
+  // card being open is the manager's card being shut and there is nothing on screen to
+  // hire into. What it does is give the run its one attempt back, and the proof is that
+  // opening the manager's card afterwards starts somebody.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'idle', 0), desk('w1:p2', 'working', 1)],
+    manifests: ['claude'],
+    args: ['--board'],
+    settings: { manager: false },
+    cols: 140,
+    rows: 46,
+  });
+  try {
+    await office.until('the card', () => office.onScreen('nobody hired'));
+    await settle();
+    assert.deepEqual(office.sent('agent.start'), [], 'the saved setting did not stop the hire');
+
+    office.type(',');
+    await office.until('the switches', () => office.onScreen('hire a manager'));
+    office.type(' ');
+    await office.until('the file to forget it', () => office.settingsFile()?.manager === undefined);
+    // Not yet. Nothing is hired from the card itself.
+    await settle();
+    assert.deepEqual(office.sent('agent.start'), [], 'the card hired somebody with its own panel on screen');
+
+    // Back to the floor, then open the manager's card, which is the whole gate. Clicked
+    // rather than walked to, because one press is one event and cannot be coalesced with
+    // the keystroke before it the way two writes to stdin can.
+    office.type('\x1b');
+    await office.until('the floor', () => office.at('kept in').y < 0);
+    const manager = office.at('THE MANAGER');
+    assert.ok(manager.y >= 0, 'the manager desk is not on the floor');
+    office.click(manager.x, manager.y);
+    await office.until('the hire', () => office.sent('agent.start').length >= 1);
+  } finally {
+    await office.stop();
+  }
+});
+
+test('an office told not to touch the window title never sets one', async () => {
+  // Not the same claim as the one above it. That test is about a flip taking the title
+  // back; this is about the gate on the way out, and without it an office started with
+  // the switch off would still stamp its count on somebody's window.
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], settings: { title: false } });
+  try {
+    await office.ready('1 desk');
+    await settle();
+    assert.deepEqual(office.sent('client.window_title.set'), [], 'the title was set by an office told not to');
+    // And nothing to hand back either, because nothing was ever taken.
+    assert.deepEqual(office.sent('client.window_title.clear'), []);
   } finally {
     await office.stop();
   }

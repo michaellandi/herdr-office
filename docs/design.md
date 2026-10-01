@@ -176,7 +176,8 @@ Three things keep it civil:
   duration is a floor rather than a fact, and a nudge quoting it would be a lie. It
   becomes real the moment they change state.
 
-`--quiet` turns off the first toast and every nudge after it.
+The third switch down the settings card turns off the first toast and every nudge
+after it, and so does `--quiet` for one run.
 
 ## On the window itself
 
@@ -192,7 +193,8 @@ changes, and **it is handed back with `client.window_title.clear` on the way out
 including on ctrl-c and on a crash. A stale "2 waiting on you" outliving the
 process that wrote it would be worse than no title at all. If herdr reports there
 is no foreground window to title, nothing is remembered as set, so it goes out
-again when a window comes back. `--no-title` switches the whole thing off.
+again when a window comes back. The last switch on the settings card turns the whole
+thing off, and so does `--no-title`.
 
 ## Pixels, in two places
 
@@ -235,8 +237,8 @@ rectangles it is willing to lose and graphics may not touch anything else. A
 picture whose numbers moved but whose pixels would not is never sent, because the
 floor repaints three times a second and the charts do not. Three failures in a row
 switch the whole thing off for the rest of the run, and quitting takes the pixels
-down with it. `--no-graphics` is for taste, not for safety: some people want a
-terminal to be only text.
+down with it. The fifth switch on the settings card is for taste rather than for
+safety, and so is `--no-graphics`: some people want a terminal to be only text.
 
 ## Finding one desk in twenty
 
@@ -726,7 +728,8 @@ most of, which is the one you are logged into and have already paid for, ties br
 sorted manifest list so the same floor picks the same manager twice.
 
 `M` stays, for the two cases the automatic path cannot serve: wanting a specific kind, and
-wanting the manager in a worktree. `--no-manager` turns the automatic path off entirely.
+wanting the manager in a worktree. The first switch on the settings card turns the automatic path off entirely, and so
+does `--no-manager`. Turning it off with somebody already hired lets them go.
 
 One hire per run, win or lose, and that is one flag rather than a check on whether anybody
 is currently hired, because three different things all mean do not hire again. A hire that
@@ -932,8 +935,10 @@ and `src/dirt.mjs` exists to hold both:
   private as its contents and this pane gets screen-shared, so the office draws how
   many and the way to see which is the tool that was already going to tell you.
 
-`--no-git` turns it off entirely: no subprocess, no pile, no row, everything else
-unchanged. A checkout that will not answer, is not a repository, or is too slow gets
+The third switch on the settings card turns it off entirely, and so does `--no-git`:
+no subprocess, no pile, no row, everything else unchanged. Turning it off while the
+office is running also forgets the counts, because a number nobody is refreshing is
+worse than no number. A checkout that will not answer, is not a repository, or is too slow gets
 nothing rather than a guess, and that silence is remembered as an answer so the same
 directory is not re-asked every couple of seconds for the rest of the afternoon.
 
@@ -1005,7 +1010,8 @@ hold both:
   similarity index, and a gauge that read any of those would be a desk reporting somebody
   else's number as the truth about an agent.
 
-`--no-context` turns it off entirely: no read, no colour, no chip, no row. It is the one
+The second switch on the settings card turns it off entirely, and so does
+`--no-context`: no read, no colour, no chip, no row. It is the one
 feature that looks at every desk rather than only the ones with a hand up, which is
 exactly why it has an opt-out. An open card still quotes the screen back, because that is
 a read you asked for by opening it.
@@ -1238,6 +1244,138 @@ between arming and granting. The card and the footer both quote that wording, so
 sentence you are agreeing to is the agent's own. It is the one answer in the office
 with no button, for the same reason the assign field has none.
 
+## Deciding what the office does
+
+Six things the office does are opt-out, and until the settings card existed the only
+way to opt out of any of them was a command line flag. For this program that is the
+wrong shape, and not by a little. The office runs as a herdr plugin pane: it is
+started by a manifest somebody wrote once and opened afterwards by clicking a thing.
+There is no command line in front of you at the moment you decide you would rather it
+did not hire a manager. `--no-manager` was a preference expressible only in the one
+place you were not standing, and the way to express it was to find an installed
+plugin's manifest and edit it.
+
+So `,` opens a card with all six on it, and what you set there is kept in
+`~/.config/herdr-office/settings.json`.
+
+```
+╭─ settings · space toggles one ─────────────────────────────────╮
+│ ▌ hire a manager               on                              │
+│   read how full each head is   on                              │
+│   count what is uncommitted    off  --no-git this run          │
+│   say when somebody needs you  on                              │
+│   draw the pixel charts        on                              │
+│   set the window title         on                              │
+├─ hire a manager ───────────────────────────────────────────────┤
+│   Opening the manager's card starts an agent and asks it to    │
+│   read the floor. That spends tokens, every twenty seconds at  │
+│   most, and only while the card is open. Off, the card draws   │
+│   the accounts itself and M still hires one by hand.           │
+│   kept in ~/.config/herdr-office/settings.json                 │
+╰────────────────────────────────────────────────────────────────╯
+```
+
+`j` and `k` pick one, space or enter flips it, `esc` or `,` again closes the card, and
+a click anywhere along a row flips that row. The whole row is the target rather than
+the word, because a two-cell hitbox beside its own label is a hitbox people miss.
+
+### Six switches rather than one
+
+The request that produced this card was about the manager, which is the one of the six
+that spends money and therefore the one worth a settings surface on its own. It was
+still built for all six, because a card listing one preference while five others stay
+flag-only is a worse object than either a card with six or no card at all: it teaches
+you that this is where preferences live and then is wrong about five of them.
+
+They are ordered by what they cost you. The manager first, because it is the only one
+that spends tokens. Then the two reads, which are what the office puts on the wire and
+into your repositories. Then the three that are taste.
+
+Each one's help text is a sentence about the cost, not about the feature. "Draws the
+pixel charts" is a label; a reader looking at the label does not need it said again
+underneath. What you came to this card to find out is what the thing is doing to your
+machine while it is on, so that is what the sentence says. Only the selected switch
+has its sentence drawn, named by a rule above it, because six true paragraphs at once
+is a wall nobody reads and the card would stop being a card.
+
+The card asks for fourteen rows rather than the eight every other panel gets, which is
+the only geometry in the office written for one surface. Eight rows is six switches and
+two borders and nothing else, so at the ordinary pane size the help text had nowhere to
+go and simply was not drawn: a card explaining nothing, which is the one thing this card
+must not be. Fourteen is six switches, a rule, four lines of sentence and the line
+saying where this is kept. A pane shorter than that gets what fits, switches first,
+because a switch with no explanation is still a switch and an explanation with no
+switch is nothing at all. Below twelve rows the bottom switches are genuinely gone, and
+a row the card could not draw pushes no hitbox, because a click flipping an invisible
+switch over whatever was actually at those coordinates is worse than a switch you
+cannot reach.
+
+### Three rules, and one of them is the only reason this is a module
+
+`src/settings.mjs` is a hundred lines of model under a page of comment, which for a
+flat map of six booleans wants justifying. Two of the three rules are invisible until
+something asserts them, and both would have been quietly got wrong by a `JSON.parse`
+at the top of `office.mjs`.
+
+- **A flag only ever turns something off.** All six are `--no-` or `--quiet`; there is
+  no flag that turns anything on. That is not a naming accident, it is what makes the
+  precedence a single downward move, and it is asserted. A flag and the file can
+  therefore never disagree about anything except whether this particular run is
+  quieter than usual.
+- **The file is the default and a flag is this run.** Saved settings decide what the
+  office is. A flag overrides one of them until you quit and never touches the file, so
+  a `--no-manager` pane is a quiet pane rather than a pane that rewrote your
+  preferences on the way past. Flipping a switch on the card wins over a flag
+  immediately, because a keystroke aimed at a switch you are looking at is the most
+  deliberate thing anybody has said about that switch.
+- **Only what differs from the default is written.** A file that records all six pins
+  all six forever, and then an office that learns a better default can never give it
+  to anybody who once opened this card. What lands on disk is the list of places you
+  disagreed. An empty object is still written rather than the file being deleted,
+  because "I have been here and I agree with all of it" and "I have never opened this
+  card" are the same settings and a different fact.
+
+The second rule is also why `settle` returns where every answer came from and not just
+what it is. A switch reading `off` when you know you saved it `on` is the office
+looking broken, and the true explanation is one word long, so the card says
+`--no-git this run` on that row and nothing at all on a row where the file and the
+card agree. Nothing explains a default, because a default is the card agreeing with
+itself and there is no surprise to account for.
+
+### A flip is the office changing, not the office restarting
+
+Every switch takes effect on the keystroke, which is six separate pieces of wiring
+rather than one, and each is the thing that would otherwise be wrong until you quit:
+
+- **Manager off** lets go of whoever is hired, with a notice saying their pane is
+  still open, because the office starting an agent is a thing it may do and the office
+  closing somebody's pane is not. **Manager on** clears the one-hire-per-run flag and
+  hires immediately if the card is open, since that card open is the whole gate.
+- **Title off** has to clear the title it already set, and the flip is believed by the
+  time the clear runs, so that one call is forced past the check it would otherwise
+  fail.
+- **Graphics off** takes the live layers down and drops the renderer. The text
+  renderer repaints every row it had given away, which it was already able to do
+  because an image can fail at any time.
+- **Git off and context off** forget their caches. A count nobody is refreshing is a
+  number on the floor getting older in silence, which is worse than no number: the two
+  `forget` methods on the roster exist for this and nothing else.
+- **Notify off** needs no wiring at all, because nothing is cached and the next hand
+  simply does not send.
+
+The file is written inside the keystroke, and a write that fails puts one line on the
+card in the colour of a thing that needs a person. It does not stop the flip: the
+office has already changed, and the only thing lost is that it will not still be
+changed tomorrow. That is the same bargain the punchclock makes in `src/state.mjs`,
+for the same reason, which is that this is a convenience on top of a working office
+and does not get to break one.
+
+Unlike the punchclock, this file is unversioned. The shape is a flat map of booleans
+and there is no incompatible change available to it: a key that goes away stops being
+read, a key that arrives has a default, and a value that is not a boolean is not a
+value. A version number would only buy the ability to throw somebody's preferences
+away.
+
 ## Why does it think that
 
 The office asserts a state for every desk, and a state can be wrong. A desk reading
@@ -1320,8 +1458,14 @@ rule that fired survives the clip; which file the rules came from is what goes.
   `git --no-optional-locks -c core.fsmonitor=false status --porcelain=v1` per checkout,
   at most every 15s and at most two checkouts per pass, only in directories
   `worktree.list` has already called checkouts, bounded at 1.5s and a megabyte, and
-  off entirely under `--no-git`. Counts come back; paths never do. See "How much they
-  have changed" for why each of those flags is there.
+  off entirely under the third settings switch or `--no-git`. Counts come back; paths
+  never do. See "How much they have changed" for why each of those flags is there.
+- Preferences are not in the API either: six booleans in
+  `~/.config/herdr-office/settings.json`, written on the keystroke that flipped one,
+  through a temporary name and a rename so quitting mid-write cannot leave half a file.
+  `HERDR_OFFICE_CONFIG` points the whole path somewhere else and `XDG_CONFIG_HOME`
+  moves the directory. Only the switches you turned off are in there. See "Deciding
+  what the office does".
 - The window title is `client.window_title.set`, sent only when the string changes,
   and `client.window_title.clear` on the way out with a 500ms budget: an office that
   would not quit because a title would not clear is worse than a stale title. Note
@@ -1332,7 +1476,8 @@ rule that fired survives the clip; which file the rules came from is what goes.
   most every 6s. A quiet office is three calls every two seconds no matter how many
   agents you are running.
 - The context gauge is the same call on desks that are not stuck, at most every 10s and
-  at most four desks per pass, stalest first, and off entirely under `--no-context`. The
+  at most four desks per pass, stalest first, and off entirely under the second settings
+  switch or `--no-context`. The
   two share one read: a desk with its hand up is already being looked at, and the
   four-desk budget counts only the desks that would not have been read anyway. Two fields
   come back off that screen and nothing else does. See "How full their head is".
@@ -1390,6 +1535,16 @@ measured it. The assertion worth keeping is that a request reaches the server ex
 once: a read that is sent twice is waste, but `agent.send_keys` sent twice is two
 keystrokes typed at somebody's agent.
 
+`test/settings.test.mjs` and `test/switches.test.mjs` split the settings card the way
+the feature splits: the first is the argument about what the office believes, which is
+the precedence and what lands on disk, and the second is the argument about what you
+can see and click. The two in the second that are load bearing are that all six
+switches are on screen at every size the office supports, because a card that silently
+drops the one you came for is worse than no card, and that every row is a target along
+its whole width. That second one found a real bug: a card too short to draw six rows
+was still pushing six hitboxes, so a click in a short pane would flip an invisible
+switch over whatever was actually at those coordinates.
+
 `test/office.test.mjs` runs the office itself. It spawns `office.mjs` as a child
 process pointed at a fake herdr, types keys on its stdin and reads frames off its
 stdout, which works because the office only asks for raw mode when stdin is a tty and
@@ -1399,7 +1554,9 @@ the one place a bug could sit with everything else green, and did. It is also ho
 write paths get exercised at all: a fake server can be sent `agent.prompt` and
 `agent.send_keys` without a real agent receiving anything, so the tests can assert the
 thing that actually matters, which is that a standup reaches each person exactly once
-and `y` is one keystroke.
+and `y` is one keystroke. It is also where the settings file is held to being a file:
+a flip is on disk before the next keystroke arrives, a saved switch stops the hire with
+no `agent.start` at all, and a key meant for a switch cannot answer somebody's prompt.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch

@@ -429,6 +429,29 @@ sentence about a real problem, and a better one than an empty chair, because it 
 the question a reader actually has, which is not "what is wrong" but "is this thing
 running".
 
+That answer then got the same complaint one layer in. The monitor said `all quiet` over a
+floor of three agents mid-task, and the reply to "is this thing running" came back as a
+claim that nothing was. Both halves were doing what they were told: a notice is a pattern
+*across* desks, and ordinary progress is not a pattern, so the list was empty and the
+monitor read an empty list as an empty floor. Which is the original bug with the
+conclusion inverted, and worse than it, because an invisible desk is at least not saying
+anything untrue.
+
+The fix is that the desk is given the floor as well as the notices, and says what the
+floor is doing when it has nothing to flag: `1 waiting` over `2 working`, in that order,
+because of the two numbers only one of them is a request. Waiting counts for the same
+reason the status line now names it. One hand up is not a pattern either, so a single desk
+stuck on a question produced no notice at all and the sentence under a calm manager read
+"nothing needs you right now" while somebody waited on an answer. `all quiet` survives for
+the floor it was always true of, where every desk is idle, finished or unreadable, and
+`nobody in` for no desks at all.
+
+Both are worded exactly as [the window title](#on-the-window-itself) says them, and the counts
+come from the same filtered floor the notices do, minus the hired manager if there is one.
+Those two constraints are the point rather than tidiness: these surfaces are read within a
+second of each other, and an office with two opinions about how many people are working is
+harder to trust than one with a single wrong one.
+
 It costs a desk. Floor one holds one fewer person and everybody after them moves along
 one, which is why the desk stands down in three cases where the cost is not worth paying:
 under a filter, because its notices are about the whole office and a filtered view is

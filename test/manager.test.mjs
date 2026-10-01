@@ -16,6 +16,7 @@ import { renderFrame, MANAGER_ID as RE_EXPORTED, HIRE_ID } from '../src/render.m
 import { width } from '../src/text.mjs';
 import { SIZES, FRAMES, officeRoster, viewOf, stripAnsi, isManagerRow } from './fixtures.mjs';
 import { STATUS, fg } from '../src/theme.mjs';
+import { windowTitle } from '../src/title.mjs';
 
 // Notices as src/notices.mjs builds them, shaped by hand so nothing here depends on
 // which desks the roster fixture happens to put where.
@@ -40,7 +41,10 @@ test('a quiet floor still has a manager sitting at a desk', () => {
   // The whole point. The first version of this only spoke when it had news, and the
   // person who asked for it ran the office, saw nothing, and reasonably concluded it
   // was broken. Correct and invisible is indistinguishable from absent.
-  const m = manager({ notices: [] });
+  //
+  // A floor of desks that have all finished or never started, which is the only floor
+  // `all quiet` was ever true of.
+  const m = manager({ notices: [], people: officeRoster(['idle', 'done', 'unknown']).people });
   assert.equal(m.name, 'THE MANAGER');
   assert.equal(m.role, 'chief of staff');
   assert.equal(m.pose, 'watching');
@@ -48,6 +52,59 @@ test('a quiet floor still has a manager sitting at a desk', () => {
   assert.equal(m.count, 0);
   assert.equal(m.line, 'nothing needs you right now');
   assert.match(m.screen[0], /all quiet/);
+});
+
+test('a desk with no notices says what the floor is doing rather than that it is quiet', () => {
+  // The bug, in the words it was reported in: "chief of staff just says all quiet despite
+  // work going on". Ordinary progress is not a notice, because a notice is a pattern
+  // across desks, so three agents mid-task produced an empty list and the monitor read
+  // the empty list as an empty floor.
+  const m = manager({ notices: [], people: officeRoster(['working', 'working', 'working']).people });
+  assert.match(m.screen[0], /3 working/);
+  assert.equal(m.screen[1].trim(), '', 'nothing is waiting, so the second row has nothing to say');
+  // Still nothing it needs you for, which was never the untrue part.
+  assert.equal(m.line, 'nothing needs you right now');
+  assert.equal(m.chip, 'WATCHING', 'the manager is not the one working');
+});
+
+test('hands up are counted above the work, because only one of the two is a request', () => {
+  const m = manager({ notices: [], people: officeRoster(['working', 'blocked', 'working', 'idle']).people });
+  assert.match(m.screen[0], /1 waiting/);
+  assert.match(m.screen[1], /2 working/);
+  // One hand up on its own is not a pattern across desks, so there is no notice here and
+  // this line used to say nothing needed you while somebody waited on an answer.
+  assert.equal(m.line, '1 desk is waiting on you');
+  assert.equal(manager({ notices: [], people: officeRoster(['blocked', 'blocked']).people }).line, '2 desks are waiting on you');
+});
+
+test('an empty office says so, in the words the window title uses', () => {
+  // Both surfaces are read within a second of each other, and the same floor described
+  // two different ways is worse than either description.
+  const m = manager({ notices: [], people: [] });
+  assert.match(m.screen[0], /nobody in/);
+  assert.equal(m.screen[1].trim(), '');
+});
+
+test('a notice outranks the headcount, whatever the floor is doing', () => {
+  // The monitor has two rows and a notice needs both of them. What the floor is doing is
+  // the thing to say when there is nothing better; a notice is something better.
+  const busy = officeRoster(['working', 'working', 'blocked']).people;
+  const m = manager({ notices: [FULL], people: busy, width: 60 });
+  assert.match(m.screen[0], /1 desk/);
+  assert.match(m.screen[1], /full head/);
+  assert.equal(m.line, FULL.text);
+});
+
+test('the counts on the glass are the same counts the rest of the office is using', () => {
+  // Written against the window title on purpose. These two read the same floor out of the
+  // same roster, and the office having two opinions about how many people are working is
+  // the failure this desk was reported for in the first place.
+  const list = officeRoster(['working', 'blocked', 'working', 'idle', 'done']).people;
+  const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
+  for (const p of list) counts[p.status] += 1;
+  const screen = manager({ notices: [], people: list }).screen.map((r) => r.trim());
+  const title = windowTitle(counts);
+  for (const row of screen.filter(Boolean)) assert.ok(title.includes(row), `the title does not say "${row}": ${title}`);
 });
 
 test('one desk to say something about is said in the singular', () => {
@@ -195,7 +252,13 @@ test('a quiet desk is still obviously a desk with somebody at it', () => {
   // manager must not be mistakable for the empty chair beside it.
   const quiet = plain(floor({ notices: [] }));
   assert.ok(quiet.some((l) => l.includes('WATCHING')), 'the quiet desk said nothing at all');
-  assert.ok(quiet.some((l) => l.includes('nothing needs you right now')));
+  // Three of the fixture's seven desks have a hand up, so what this desk has to say about
+  // a floor with no notices on it is that three people are waiting: the roster is quiet in
+  // the sense that nothing has gone wrong across desks, which is not the same as nobody
+  // needing anything.
+  assert.ok(quiet.some((l) => l.includes('3 desks are waiting on you')), 'the desk did not say who is waiting');
+  assert.ok(plain(renderFrame(viewOf({ people: officeRoster(['working']).people, cols: 140, rows: 46, notices: [] })))
+    .some((l) => l.includes('nothing needs you right now')), 'a floor with no hands up says so');
 });
 
 test('news reaches the desk as well as the footer', () => {

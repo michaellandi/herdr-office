@@ -56,15 +56,42 @@ function centre(text) {
   return ' '.repeat(left) + s + ' '.repeat(pad - left);
 }
 
+// What the floor is doing, in the two numbers worth the glass. Idle, finished and
+// unreadable desks are counted only into the total, because they are what nothing
+// happening looks like, and the total is only here to tell an empty office from a quiet one.
+function floorOf(people) {
+  const list = Array.isArray(people) ? people.filter(Boolean) : [];
+  const n = (status) => list.filter((p) => p.status === status).length;
+  return { blocked: n('blocked'), working: n('working'), total: list.length };
+}
+
 // The headline, as the two rows of the monitor. The count first, because the count is
 // the part you read from across the room, and what it is about second.
 //
 // Desks rather than notices, for the reason written on `deskCount`. Twelve cells fits
 // `3 desks` and would not fit `3 desks, 1 thing`, and of the two the count of people is
 // the one worth the glass.
-function screenOf(list) {
-  if (!list.length) return [centre('all quiet'), centre('')];
-  return [centre(plural(deskCount(list), 'desk')), centre(LABEL[list[0].kind] || '')];
+//
+// With no notices, what the floor is doing, which is the bug this second half fixes: the
+// monitor said `all quiet` over three desks mid-task, because a notice is a pattern across
+// desks and ordinary progress is not one. The desk was reporting its own silence as the
+// floor's, and a manager that says nothing is happening while something is reads as broken
+// twice over, once for the claim and once for the desk that made it.
+//
+// Waiting above working, on separate rows, for the reason the window title puts it first:
+// of the two numbers, that is the only one that is a request. `all quiet` survives for the
+// floor it was always true of, where every desk is idle, finished or unreadable, and
+// `nobody in` for no desks at all, both worded as src/title.mjs says them, because these
+// two surfaces are read within a second of each other and disagreeing about the same floor
+// in different words is worse than either wording.
+function screenOf(list, floor) {
+  if (list.length) return [centre(plural(deskCount(list), 'desk')), centre(LABEL[list[0].kind] || '')];
+  if (!floor.total) return [centre('nobody in'), centre('')];
+  const rows = [];
+  if (floor.blocked) rows.push(`${floor.blocked} waiting`);
+  if (floor.working) rows.push(`${floor.working} working`);
+  if (!rows.length) return [centre('all quiet'), centre('')];
+  return [centre(rows[0]), centre(rows[1] || '')];
 }
 
 // Whether the manager is animated, and how it holds itself. Two states rather than
@@ -90,12 +117,20 @@ const poseOf = (list) => (list.length ? 'news' : 'watching');
 // asking for it at the pane's full width and then cutting the row to fit produced exactly
 // the half-quote this function exists to refuse. It asks twice instead: once for the
 // fields, once for the sentence, with the room it actually has.
-export function managerLine(notices, room) {
-  return lineOf(Array.isArray(notices) ? notices.filter((n) => n && n.text) : [], room);
+export function managerLine(notices, room, people = []) {
+  return lineOf(Array.isArray(notices) ? notices.filter((n) => n && n.text) : [], room, floorOf(people));
 }
 
-function lineOf(list, room) {
-  if (!list.length) return 'nothing needs you right now';
+function lineOf(list, room, floor = { blocked: 0, working: 0, total: 0 }) {
+  // No notice does not mean nothing is wanted. Every notice is a pattern across desks, and
+  // one hand up is not a pattern, so a floor with a single desk waiting on an answer
+  // produces none of them and this line used to say nothing needed you with somebody
+  // waiting. The count rather than the question: what they asked is already drawn in full
+  // in their own bubble, and there are twenty-seven cells here.
+  if (!list.length) {
+    if (!floor.blocked) return 'nothing needs you right now';
+    return truncate(`${plural(floor.blocked, 'desk')} ${floor.blocked === 1 ? 'is' : 'are'} waiting on you`, room);
+  }
   const n = list[0];
   const whole = n.why ? `${n.text}, ${n.why}` : n.text;
   // Measured in cells rather than code units. Screen text reaches this line through
@@ -113,8 +148,13 @@ const chipOf = (list) => (list.length ? plural(deskCount(list), 'DESK').toUpperC
 //
 // `width` is how much room the status line has, which the renderer knows and this
 // module does not. Defaulted so a caller that only wants the words can leave it out.
-export function manager({ notices = [], width = 27 } = {}) {
+// `people` is the floor the office is talking about rather than every desk it draws: the
+// filtered roster, minus the hired manager if there is one, which is the same list the
+// notices were computed from. The manager counting itself as a working desk would be the
+// same class of untruth this function was fixed for.
+export function manager({ notices = [], people = [], width = 27 } = {}) {
   const list = Array.isArray(notices) ? notices.filter((n) => n && n.text) : [];
+  const floor = floorOf(people);
   return {
     id: MANAGER_ID,
     name: 'THE MANAGER',
@@ -123,8 +163,8 @@ export function manager({ notices = [], width = 27 } = {}) {
     role: 'chief of staff',
     pose: poseOf(list),
     chip: chipOf(list),
-    screen: screenOf(list),
-    line: lineOf(list, width),
+    screen: screenOf(list, floor),
+    line: lineOf(list, width, floor),
     // How many, so the card and the header can count without re-deriving it. Both
     // numbers, because they answer different questions and the card asks both: `count`
     // is how many sentences `m` steps through, `desks` is how many people are waiting.

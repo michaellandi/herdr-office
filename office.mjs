@@ -365,8 +365,14 @@ function view() {
   // that reached into the layout would have needed every one of those to learn
   // about it.
   const people = filterPeople(roster.people, filter);
+  // The desks the office is talking ABOUT, as against the desks it draws. One list, built
+  // once, because the notices and the manager's monitor have to agree: the monitor used to
+  // be handed nothing at all and could only report the notices, which is why it said the
+  // floor was quiet whenever there was no pattern worth flagging on it.
+  const floor = people.filter(notChief);
   return {
     people,
+    floor,
     // Room colours come from the WHOLE roster rather than the filtered floor, so a
     // filter narrows who is on screen without repainting the walls behind them.
     rooms: assignRooms(roster.people),
@@ -384,7 +390,7 @@ function view() {
     // minutes it would be a stall notice, and a stall notice about the manager goes into the
     // manager's next digest. See rule 4 above `tickChief`. It is still drawn as a desk,
     // because it is one; it is only kept out of what the office says about the floor.
-    notices: notices({ people: people.filter(notChief) }),
+    notices: notices({ people: floor }),
     noticeAt,
     board,
     // The card gets the office's values rather than a copy of its own, and `source` with

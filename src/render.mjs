@@ -1133,7 +1133,7 @@ function noMatchFloor(view, floorRows) {
 // pane title goes. No duration, no agent name, no tab, no branch, no chips, no buttons.
 // Every one of those is a fact about a pane, and there is no pane here.
 function managerRow(view, cols, selected) {
-  const m = manager({ notices: view.notices, width: cols });
+  const m = manager({ notices: view.notices, people: view.floor, width: cols });
   const who = identity(m.id);
   const own = m.count ? P.accent : P.dim;
   const b = cells();
@@ -1154,7 +1154,7 @@ function managerRow(view, cols, selected) {
   // `m.line` was built believing it had the whole pane, so cutting it here would print
   // half a quote of somebody's screen: the one thing that rule is there to prevent.
   const tail = Math.max(0, cols - b.w - 2);
-  b.add(truncate(managerLine(view.notices, tail), tail), { fg: m.count ? P.soft : P.faint });
+  b.add(truncate(managerLine(view.notices, tail, view.floor), tail), { fg: m.count ? P.soft : P.faint });
   return b.fit(cols);
 }
 
@@ -1912,7 +1912,7 @@ function chiefSays(chief, room, rows) {
 
 function managerPanel(view, panelRows) {
   const { size } = view;
-  const m = manager({ notices: view.notices, width: size.cols });
+  const m = manager({ notices: view.notices, people: view.floor, width: size.cols });
   const PW = Math.min(size.cols, Math.max(24, size.cols - 4));
   const TEXT = PW - 4;
   const left = Math.max(0, Math.floor((size.cols - PW) / 2));
@@ -2447,7 +2447,7 @@ export function renderFrame(view) {
           // starts an agent; clicking this one selects a desk and nothing else, which is
           // the whole of what it can do.
           hitboxes.push({ id: MANAGER_ID, x, y, w: TILE_W, h: TILE_H });
-          return managerTile(manager({ notices: view.notices, width: INNER }), {
+          return managerTile(manager({ notices: view.notices, people: view.floor, width: INNER }), {
             selected: view.selectedId === MANAGER_ID,
             frame: view.frame,
           });

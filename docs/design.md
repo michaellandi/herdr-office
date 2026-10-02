@@ -128,6 +128,21 @@ clean monitor. Sidecars are caught by age as well as by name: a process older
 than everything on the pane's own terminal came up with the machine rather than
 with the work, so it is furniture no matter what it is called.
 
+A list row has a column for the same question and a different answer: the pane title,
+which is the agent describing its own job in a few words and is better than anything the
+office could infer. Some agents set no title at all, which is normal for one that paints
+its whole window rather than writing a transcript, and that column used to fall all the
+way through to the pane id. A row reading `w1:p6` tells you where a thing is and nothing
+about what it is doing, which on the one screen meant to answer "what is everyone up to"
+is the same failure as saying the floor is quiet while it is working. So the last line
+the desk was heard saying stands in, off the screen the office already reads.
+
+That only works if the quote is worth printing, which is why the chrome filter matters
+more than it looks: a full-screen agent repaints a spend counter, a clock and a row of
+slash-command hints every frame, and any of those getting through puts a credit balance
+in the column that is supposed to say what the work is. Filtering is by shape rather than
+by product, so an agent nobody here has run gets a clean row too.
+
 ## News from a desk
 
 When something notable comes out of an agent's terminal, a small slab appears over
@@ -682,10 +697,10 @@ looks like a room that has finished moving.
 
 Agents do not agree on what an approval prompt looks like, so the keys are read off
 the agent's own screen rather than guessed: a literal `(y/n)` prompt gets a letter, a
-numbered menu gets `1` (the plain yes, never the "and stop asking me" variant), and
-anything unrecognised falls back to enter and esc. The panel spells out what it is
-about to send, so a bad read is something you can see before you press the key rather
-than after.
+numbered menu gets `1` (the plain yes, never the "and stop asking me" variant), a menu
+with no numbers on it gets a walk (below), and anything unrecognised falls back to
+enter and esc. The panel spells out what it is about to send, so a bad read is
+something you can see before you press the key rather than after.
 
 Opening a desk splits the room instead of taking it over: the panel takes the bottom
 half and the floor keeps the top, so you can read one agent while watching the rest.
@@ -701,6 +716,46 @@ mouse, and on a row that is asking you something they take the column the branch
 would have had. On a pane too narrow for them nothing is drawn and nothing is
 clickable there: `y` and `n` still work, and a hitbox with no button under it would
 be an approval sent from a blank patch of screen.
+
+### A menu with no keys on it
+
+Agents that draw their whole window rather than a transcript tend to ask like this:
+
+```
+  ❯ Allow
+    Always allow
+    Deny
+    Always deny
+  ────────────────────────────
+  esc to close · ↑↓ to navigate · ↵ to select
+```
+
+There is no letter and no digit. The only way to answer is to move the cursor onto the
+row you want, so an answer is a walk: so many downs or ups, then enter. Until the
+office could read this shape, `n` sent esc, which that menu's own footer calls close
+and which cancels the question rather than denying it, and `Y` refused while "always
+allow" was on the screen.
+
+Two things about the shape make it harder than the other three. The first is that it is
+invisible to the rest of the pipeline: the office cleans a screen before reading it,
+which strips arrows and dingbats and trims each line, and here the cursor glyph and the
+indentation are the entire signal. So this one read is given the raw screen, and that is
+the only reason `approvalChoice` takes a second argument.
+
+The second is that the keys go stale. A digit means the same thing a minute later; a
+walk is counted from where the cursor was when the screen was last read, and the cursor
+belongs to the agent and to anyone sitting at that pane. So the walk is worked out again
+from a read taken at the moment of sending, and it goes out only if the rows are still
+the rows that were on offer. The labels are the promise; the cursor is only the
+mechanics. A screen that will not answer counts as a screen that changed, because from
+here they are the same thing: we no longer know what these keys would do.
+
+A menu that has digits on it as well as a cursor, which is most of them, is still
+answered with the digit. The digit says which row it means without depending on where
+the cursor was a moment ago, and that is worth more than consistency. A menu with no
+digits whose rows cannot be read as a yes and a no is left to the enter-and-esc
+fallback: a walk onto a row we have only half identified is how a standing permission
+gets granted by accident.
 
 ### When yes and no are not the answer
 
@@ -731,7 +786,10 @@ off the menu rather than assumed to be `2`: on a menu that put "no, and tell me 
 do differently" at 2, a hardcoded digit would deny the command under a key labelled
 "always allow". Both the digit and the option's own wording are checked again at the
 moment you confirm, since the screen belongs to the agent and can change in the seconds
-between arming and granting. The card and the footer both quote that wording, so the
+between arming and granting. On a menu with no digits it is the wording that is checked
+and the walk that is recounted, for the reason above: a cursor that moved inside the
+same menu is not a menu that changed, and insisting the keystrokes match would refuse
+every grant on a screen somebody had touched. The card and the footer both quote that wording, so the
 sentence you are agreeing to is the agent's own. It is the one answer in the office
 with no button, for the same reason the assign field has none.
 

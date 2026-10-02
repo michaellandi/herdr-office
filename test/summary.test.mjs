@@ -4,9 +4,31 @@
 // shapes the agents named in docs/design.md actually draw.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';
+import { cleanOutput, findAsk, bubbleText, approvalChoice, cursorMenu, alwaysOption, summarize, describeDetection, lastSaid } from '../src/summary.mjs';
 
 const screen = (s) => cleanOutput(s.trimEnd());
+
+// Both halves of a read, which is what the office hands approvalChoice: the cleaned
+// lines everything else works from, and the raw screen, because a cursor menu is drawn
+// in the indentation and the cursor glyph that cleaning takes out.
+const both = (s) => [cleanOutput(s.trimEnd()), s.trimEnd()];
+
+// A menu with no numbers on it, of the kind a full-screen agent TUI draws: a cursor on
+// the row that enter would take, the rest of the rows lined up under it, then a rule and
+// a footer saying which keys move. Written out here rather than captured, so the fixture
+// is about the shape and not about anybody's terminal.
+const CURSOR_MENU = `
+  Tool: write_file requires approval
+
+  write_file  src/app.js
+
+  ❯ Allow
+    Always allow
+    Deny
+    Always deny
+  ${'─'.repeat(28)}
+  esc to close · ↑↓ to navigate ↵ to select · Tab to edit
+`;
 
 test('a literal y/n prompt is answered with letters', () => {
   const s = screen(`
@@ -112,6 +134,73 @@ Which file should I edit?
   assert.deepEqual(approvalChoice(s), { shape: 'menu?', approve: ['enter'], deny: ['esc'], always: null });
 });
 
+test('a menu with no numbers on it is answered by walking the cursor', () => {
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.equal(choice.shape, 'cursor');
+  // The cursor is already on Allow, so yes is just enter. No is two rows down, and
+  // esc on this menu is what the footer calls close: it cancels, which is not a deny.
+  assert.deepEqual(choice.approve, ['enter']);
+  assert.deepEqual(choice.deny, ['down', 'down', 'enter']);
+});
+
+test('the walk is counted from wherever the cursor is actually sitting', () => {
+  // The whole hazard of this shape. The same menu, one row further down, and every
+  // answer on it is a different number of keystrokes.
+  const moved = CURSOR_MENU.replace('  ❯ Allow', '    Allow').replace('    Deny', '  ❯ Deny');
+  const choice = approvalChoice(...both(moved));
+  assert.deepEqual(choice.approve, ['up', 'up', 'enter']);
+  assert.deepEqual(choice.deny, ['enter']);
+});
+
+test('a cursor menu stops at the rule, so the footer is not an option', () => {
+  const menu = cursorMenu(CURSOR_MENU.trimEnd());
+  assert.deepEqual(menu.options.map((o) => o.label), ['Allow', 'Always allow', 'Deny', 'Always deny']);
+  assert.equal(menu.cursor, 0);
+});
+
+test('"always allow" on a cursor menu is offered separately and never as the yes', () => {
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.deepEqual(choice.approve, ['enter'], 'approve must be the plain allow');
+  assert.deepEqual(choice.always, { keys: ['down', 'enter'], label: 'Always allow' });
+});
+
+test('"always deny" is not mistaken for a standing permission', () => {
+  // It is on the same menu, one row below the real one, and it is a deny. Arming it
+  // under a key labelled "always allow" would refuse the thing the user just allowed.
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.notEqual(choice.always.label, 'Always deny');
+  assert.deepEqual(choice.deny, ['down', 'down', 'enter'], 'deny must be the plain one too');
+});
+
+test('a numbered menu that also draws a cursor is still answered with the digit', () => {
+  // Most menus are both. The digit says which row it means without depending on where
+  // the cursor was when the screen was last read, so it wins.
+  const s = `
+Allow npm install?
+❯ 1. Yes
+  2. No
+`;
+  assert.deepEqual(approvalChoice(...both(s)), { shape: 'menu', approve: ['1'], deny: ['esc'], always: null });
+});
+
+test('a cursor menu with no yes and no no in it is left to the fallback', () => {
+  // A walk onto a row we have only half identified is how a standing permission gets
+  // granted by accident, so an unreadable menu gets enter and esc and no claim.
+  const s = `
+Which file should I edit?
+  ❯ src/render.mjs
+    src/office.mjs
+`;
+  assert.equal(approvalChoice(...both(s)).shape, 'unknown');
+});
+
+test('a cursor menu cannot be seen in the cleaned lines alone', () => {
+  // Not a quirk to work around: it is why approvalChoice takes the raw screen as well,
+  // and if this ever starts passing the second argument has stopped being necessary.
+  assert.equal(approvalChoice(screen(CURSOR_MENU)).shape, 'unknown');
+  assert.equal(cursorMenu(screen(CURSOR_MENU).join('\n')), null);
+});
+
 test('an unrecognised screen falls back to enter and esc, and says so', () => {
   const s = screen(`
 Thinking very hard about your request
@@ -214,6 +303,68 @@ test('the said lines are labelled once and line up under it', () => {
     out.map((l) => l.replace('last said:', '').trim()),
     said.slice(-3),
   );
+});
+
+test('lastSaid is the one line of it that fits in somebody else\'s sentence', () => {
+  // The same reading the card shows, cut to one line, because a stall notice has room
+  // for a clause and not for a paragraph. The last of the three rather than the first:
+  // the tail of the output is where an agent says why it gave up.
+  const said = [
+    'I have finished refactoring the cache warming path and split it in two.',
+    'Two of the integration tests were relying on the old timing, so I updated them.',
+    'I cannot apply the patch because the file has changed underneath me.',
+  ];
+  assert.ok(lastSaid(said).startsWith('I cannot apply the patch'));
+  // And it is the same line the card would put last, not a separately chosen one. A
+  // notice that quoted a different line from the card under it would read as the office
+  // disagreeing with itself about what it had just read.
+  const card = summarize({ status: 'idle' }, said);
+  assert.ok(card.at(-1).trim().startsWith(lastSaid(said).replace(/…$/, '').trim().slice(0, 20)));
+});
+
+test('a quote off a screen cannot be made any length the screen likes', () => {
+  // This string arrives from a stranger\'s terminal and ends up in a line the office
+  // otherwise writes itself, so the cap is here rather than at the edge. Without it a
+  // notice is whatever shape an agent felt like printing.
+  const long = `the build failed and here is why ${'x'.repeat(400)}`;
+  assert.equal(lastSaid([long]).length, 44);
+  assert.equal(lastSaid([long], 12).length, 12);
+  assert.ok(lastSaid([long]).endsWith('…'), 'cut without saying it was cut');
+});
+
+test('a screen with nothing quotable on it says nothing rather than something', () => {
+  // An empty answer is an answer, and the surfaces above treat it as one: no quote means
+  // a stall notice states the fact and stops, rather than printing `said ""`.
+  assert.equal(lastSaid([]), '');
+  assert.equal(lastSaid(null), '');
+  assert.equal(lastSaid(undefined), '');
+  assert.equal(lastSaid(['ok', 'y/n', '$ ls']), '', 'chrome and shell noise is not a quote');
+});
+
+test('a full-screen agent\'s footers are chrome, not the last thing it said', () => {
+  // The list falls back to this line when an agent sets no pane title, so a footer
+  // getting through here puts a spend counter in the column that is meant to say what
+  // the desk is doing. Each of these is a shape a TUI paints every frame.
+  const chrome = [
+    'Credits: turn 1.51 • session 5.90 | Time: 1m 16s',
+    '/sessions to resume · /copy to clipboard',
+    'To edit cloud configs: https://example.com/agents',
+  ];
+  for (const line of chrome) assert.equal(lastSaid([line]), '', `quoted as a status update: ${line}`);
+  // And the thing they are drawn around still is one.
+  const real = 'I rewrote the parser and the whole suite is passing again';
+  assert.equal(lastSaid([...chrome, real], 200), real);
+});
+
+test('a quote is stripped of everything an agent can draw', () => {
+  // Straight into a status line that shares a row with key hints, so an escape sequence
+  // or a stray control character in it would move the cursor rather than say anything.
+  // sanitize() is applied on the way out even though cleanOutput() already ran, because
+  // this function is called on whatever the caller has, not only on cleaned screens.
+  const dirty = `\u001b[31mthe tests failed\u001b[0m and \u0007the fixture \u001b[2Jchanged`;
+  const quote = lastSaid([dirty], 200);
+  assert.doesNotMatch(quote, /\u001b|\u0007/);
+  assert.match(quote, /the tests failed/);
 });
 
 test('summarize says something even about an empty screen', () => {

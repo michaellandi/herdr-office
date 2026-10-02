@@ -36,6 +36,19 @@ export const EVENT_MS = 12000;
 
 const eventOf = (entry, now) => (entry && now - entry.at < EVENT_MS ? { label: entry.label, kind: entry.kind } : null);
 
+// The same entry with no expiry on it, and with its age, which is a different question
+// from the one above. Over somebody's head, news older than twelve seconds is clutter.
+// In a summary of a desk that has been stopped for half an hour, "tests failed 24m ago"
+// is the single most useful sentence the office can write, and it is unreachable if the
+// entry is thrown away the moment it stops being drawn. So the entry now outlives its
+// slab, `expireEvents` fades it instead of deleting it, and the pane going away is what
+// clears it.
+//
+// Safe to keep for the same reason it was safe to draw: `label` is one of the seven fixed
+// strings in src/events.mjs and never a line off a terminal, so a stale one is stale
+// office vocabulary rather than somebody's stale output.
+const lastEventOf = (entry, now) => (entry ? { label: entry.label, kind: entry.kind, ageMs: Math.max(0, now - entry.at) } : null);
+
 const UNKNOWN = 9999;
 const pad = (n) => String(Math.max(0, Math.min(UNKNOWN, Math.round(n)))).padStart(4, '0');
 
@@ -94,6 +107,11 @@ export class Roster {
     // for a first run, which is most of them. See `restoreStates`.
     this.reopen = null;
     this.asks = new Map(); // pane_id -> { text, at }, only while blocked
+    // pane_id -> { text, at }: the last thing this agent was seen saying, off the same
+    // screen read the context gauge comes from. Kept for every desk rather than only
+    // blocked ones, because the desk that needs explaining is the one that stopped and
+    // an idle agent's monitor says ALL DONE and nothing about why.
+    this.said = new Map();
     this.commands = new Map(); // pane_id -> { label, at }, what the pane is running
     this.events = new Map(); // pane_id -> { label, kind, at }, news, and short-lived
     // Keyed by working directory rather than by pane, because that is the question
@@ -187,22 +205,36 @@ export class Roster {
   // fixed strings, never anything the agent printed.
   setEvent(id, label, kind) {
     if (!label) return;
-    this.events.set(id, { label, kind: kind || 'good', at: this.clock() });
+    const now = this.clock();
+    this.events.set(id, { label, kind: kind || 'good', at: now });
     const person = this.find(id);
-    if (person) person.event = { label, kind: kind || 'good' };
+    if (person) {
+      person.event = { label, kind: kind || 'good' };
+      // Set here as well as in `update`, so news that arrives between two polls is in a
+      // briefing drawn before the next one. The age on it goes stale by up to one poll,
+      // exactly as `statusMs` does and for the same reason: both are a subtraction done
+      // when the floor was last read, and nothing here has a clock it is allowed to
+      // re-read mid-frame. A second of drift is invisible in "tests failed 24m ago".
+      person.lastEvent = lastEventOf(this.events.get(id), now);
+    }
   }
 
-  // Drops anything that has gone stale, and reports whether the floor changed, so
-  // the caller only repaints when there is a reason to.
+  // Takes the news off the wall once it is stale, and reports whether the floor changed,
+  // so the caller only repaints when there is a reason to.
+  //
+  // The entry itself stays, faded: what expires is the slab over the desk, not the fact
+  // that the tests failed. `faded` is what keeps this honest about having changed
+  // something, because without the deletion there is nothing else to tell a first call
+  // past the deadline from the twenty after it, and a `true` on every pass would repaint
+  // the office twice a second forever.
   expireEvents(now = this.clock()) {
     let changed = false;
-    for (const [id, entry] of [...this.events]) {
-      if (now - entry.at < EVENT_MS) continue;
-      this.events.delete(id);
-      const person = this.find(id);
-      if (person) person.event = null;
+    for (const entry of this.events.values()) {
+      if (entry.faded || now - entry.at < EVENT_MS) continue;
+      entry.faded = true;
       changed = true;
     }
+    if (changed) for (const person of this.people) person.event = eventOf(this.events.get(person.id), now);
     return changed;
   }
 
@@ -276,6 +308,24 @@ export class Roster {
     return this.heads.get(id)?.gauge || null;
   }
 
+  // Both of these exist for one caller, which is somebody turning off the thing that
+  // filled them (see the settings card). A count that was true when it was read and is
+  // not being refreshed is worse than no count at all: the office's whole claim is that
+  // what it draws is what it measured, and a stale number nobody is watching breaks it.
+  //
+  // The cache is emptied rather than every entry being set to null, because null is an
+  // answer here and an answer rate-limits the retry. Switching the reads back on should
+  // read on the next pass, not in whatever is left of a cache timer.
+  forgetDirt() {
+    this.dirt.clear();
+    for (const person of this.people) person.dirt = null;
+  }
+
+  forgetHeads() {
+    this.heads.clear();
+    for (const person of this.people) person.head = null;
+  }
+
   commandAge(id) {
     const entry = this.commands.get(id);
     return entry ? this.clock() - entry.at : Infinity;
@@ -284,6 +334,17 @@ export class Roster {
   askAge(id) {
     const entry = this.asks.get(id);
     return entry ? this.clock() - entry.at : Infinity;
+  }
+
+  // The last thing an agent was seen saying. Stored even when it is empty, the way a
+  // head reading is: a screen with nothing quotable on it is an answer, and recording it
+  // stops the desk carrying a sentence it read twenty minutes and three tasks ago.
+  setSaid(id, text) {
+    if (!id) return;
+    const clean = sanitize(String(text || ''));
+    this.said.set(id, { text: clean, at: this.clock() });
+    const person = this.find(id);
+    if (person) person.said = clean;
   }
 
   // Returns the people who just started asking for help, so the caller can
@@ -318,6 +379,12 @@ export class Roster {
         // A desk that has stopped working is no longer running anything, and a
         // stale "npm test" on an idle monitor would be a lie the office told.
         if (status !== 'working') this.commands.delete(id);
+        // A quote belongs to the turn it was read in. Starting a new one makes it the
+        // last thing the agent said *before this task*, which is not what any sentence
+        // built on it claims. Belt and braces rather than a live bug: the screens are
+        // re-read every few seconds and nothing uses this until a desk has been still
+        // for a quarter of an hour, so a stale one has no window to be read in.
+        if (changed) this.said.delete(id);
 
         return {
           id,
@@ -333,8 +400,12 @@ export class Roster {
           tabId: a.tab_id || '',
           tabName: this.tabNames.get(a.tab_id) || '',
           ask: this.asks.get(id)?.text || '',
+          said: this.said.get(id)?.text || '',
           command: this.commands.get(id)?.label || null,
           event: eventOf(this.events.get(id), now),
+          // What last happened here, however long ago, for a summary of a desk rather
+          // than a slab over it. See `lastEventOf`.
+          lastEvent: lastEventOf(this.events.get(id), now),
           choice: this.asks.get(id)?.choice || null,
           focused: Boolean(a.focused),
           cwd: a.cwd || '',
@@ -367,6 +438,11 @@ export class Roster {
     // that is still true. A context window does not work like that, and a stale one left
     // behind under a reused pane id would be somebody else's number entirely.
     for (const id of [...this.heads.keys()]) if (!seen.has(id)) this.heads.delete(id);
+    // News used to clear itself twelve seconds after it arrived, so nothing ever had to
+    // sweep it. Now that it outlives its slab, the desk going away is the only thing that
+    // ends it, and a pane id herdr reuses would otherwise inherit the last agent's
+    // failing test run as its own history.
+    for (const id of [...this.events.keys()]) if (!seen.has(id)) this.events.delete(id);
     return newlyBlocked.filter((id) => seen.has(id));
   }
 

@@ -79,8 +79,15 @@ export function center(str, max) {
   return ' '.repeat(left) + clipped + ' '.repeat(slack - left);
 }
 
+// Nothing rather than a number, for anything that is not one. `ms == null` alone let NaN
+// through, and NaN is what the callers here produce rather than an exotic input: every one
+// of them subtracts a timestamp off a person, so a desk with no `since` on it prints
+// `NaNhNaNm` in the eight cells where the duration goes. The roster always sets one, so
+// this is a guard on the contract rather than a live bug, and the same reasoning as the
+// frame index in src/sprites.mjs: a missing field should cost the office a fact, not draw
+// rubbish in a column somebody is reading down.
 export function formatDuration(ms) {
-  if (ms == null) return '';
+  if (!Number.isFinite(ms)) return '';
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);

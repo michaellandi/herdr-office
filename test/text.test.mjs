@@ -70,6 +70,13 @@ test('formatDuration', () => {
   assert.equal(formatDuration(3_599_000), '59m59s');
   assert.equal(formatDuration(3_600_000), '1h00m');
   assert.equal(formatDuration(7_260_000), '2h01m');
+  // Anything that is not a number is nothing, not a number made of the letters N, a and
+  // N. Every caller subtracts a timestamp off a person, so a desk missing `since` hands
+  // this NaN, which the old `== null` test let straight through into the eight cells under
+  // a tile where the duration goes.
+  for (const bad of [NaN, undefined, 'a while', {}, Infinity, -Infinity]) {
+    assert.equal(formatDuration(bad), '', `${String(bad)} drew something`);
+  }
 });
 
 test('stripAnsi leaves the text alone', () => {

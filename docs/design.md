@@ -128,6 +128,21 @@ clean monitor. Sidecars are caught by age as well as by name: a process older
 than everything on the pane's own terminal came up with the machine rather than
 with the work, so it is furniture no matter what it is called.
 
+A list row has a column for the same question and a different answer: the pane title,
+which is the agent describing its own job in a few words and is better than anything the
+office could infer. Some agents set no title at all, which is normal for one that paints
+its whole window rather than writing a transcript, and that column used to fall all the
+way through to the pane id. A row reading `w1:p6` tells you where a thing is and nothing
+about what it is doing, which on the one screen meant to answer "what is everyone up to"
+is the same failure as saying the floor is quiet while it is working. So the last line
+the desk was heard saying stands in, off the screen the office already reads.
+
+That only works if the quote is worth printing, which is why the chrome filter matters
+more than it looks: a full-screen agent repaints a spend counter, a clock and a row of
+slash-command hints every frame, and any of those getting through puts a credit balance
+in the column that is supposed to say what the work is. Filtering is by shape rather than
+by product, so an agent nobody here has run gets a clean row too.
+
 ## News from a desk
 
 When something notable comes out of an agent's terminal, a small slab appears over
@@ -176,7 +191,8 @@ Three things keep it civil:
   duration is a floor rather than a fact, and a nudge quoting it would be a lie. It
   becomes real the moment they change state.
 
-`--quiet` turns off the first toast and every nudge after it.
+The third switch down the settings card turns off the first toast and every nudge
+after it, and so does `--quiet` for one run.
 
 ## On the window itself
 
@@ -192,7 +208,8 @@ changes, and **it is handed back with `client.window_title.clear` on the way out
 including on ctrl-c and on a crash. A stale "2 waiting on you" outliving the
 process that wrote it would be worse than no title at all. If herdr reports there
 is no foreground window to title, nothing is remembered as set, so it goes out
-again when a window comes back. `--no-title` switches the whole thing off.
+again when a window comes back. The last switch on the settings card turns the whole
+thing off, and so does `--no-title`.
 
 ## Pixels, in two places
 
@@ -235,8 +252,8 @@ rectangles it is willing to lose and graphics may not touch anything else. A
 picture whose numbers moved but whose pixels would not is never sent, because the
 floor repaints three times a second and the charts do not. Three failures in a row
 switch the whole thing off for the rest of the run, and quitting takes the pixels
-down with it. `--no-graphics` is for taste, not for safety: some people want a
-terminal to be only text.
+down with it. The fifth switch on the settings card is for taste rather than for
+safety, and so is `--no-graphics`: some people want a terminal to be only text.
 
 ## Finding one desk in twenty
 
@@ -299,6 +316,561 @@ Three things it deliberately does not do, which is most of the feature:
 It also leaves you alone while a panel has the keyboard (assigning, hiring, a drag
 in the air, the filter field), and it respects a filter: it will not walk you to a
 desk the filter is hiding.
+
+## The office manager
+
+Everything else the office draws is a fact about one desk. The interesting things
+about a floor are mostly not: two agents in the same checkout, two hands up on the
+identical question, a context window about to be emptied mid-task. The office already
+knew every one of those and had never said any of them, and the reason was structural
+rather than an oversight. A fact about a pair of desks has no field on anybody's card,
+so it had nowhere to go.
+
+`src/notices.mjs` is where they go. It takes the roster the office has just built and
+returns sentences, ranked. `src/manager.mjs` decides how a desk says one of them, and
+`src/briefing.mjs` turns them back into an account of each desk they are about. The footer
+draws the most urgent, a desk on the floor plan draws the same one under a monitor counting
+the desks that need somebody, a card briefs every one of those desks in turn ([what
+happened at each desk](#what-happened-at-each-desk)), and `m` walks you to the desk each
+one is about.
+
+Four notices, and the order between them is an argument about what can still be saved:
+
+| Notice | The claim |
+|---|---|
+| two desks in one checkout, both moving | work that already exists can be destroyed. Also the cheapest to be sure of: the same cwd is the same checkout, so there is no inference in it |
+| a head over 90% and still working | reasoning that exists in exactly one place is about to be compacted away |
+| two raised hands asking the same thing | somebody is waiting, and one keystroke could unblock them twice over |
+| idle a quarter of an hour with uncommitted files | already happened, and it will keep |
+
+### It reports, and that is a design constraint rather than a first version
+
+The obvious next step from here is a coordinator that acts: notices a collision and
+moves somebody, notices a stall and prods it. That version is not this one, and the
+first one deliberately cannot become it by accident. `src/notices.mjs`, `src/manager.mjs`,
+`src/briefing.mjs` and `src/chief.mjs` have no socket, no clock, no writes and no state
+between calls. A thing that cannot do anything is much easier to believe, and the argument
+for shipping a manager at all is that the part of it that decides what is true is provably
+incapable of managing.
+
+That claim is about those four modules and not about the whole system, and the difference
+matters now that a manager can be [hired](#hiring-somebody-to-read-the-floor-for-you). A
+hired manager is a real agent session with the same tool access as every desk on the floor,
+so the office cannot promise anything about what it does in its own worktree. What it can
+promise is narrower and is the half that was ever load-bearing: the reply is not parsed,
+matched, dispatched or forwarded, so the worst a wrong answer does is read wrong on a card.
+The card says so in as many words, and says something different depending on whether
+anybody is hired, because a standing promise that has quietly stopped being true is worse
+than no promise.
+
+The same constraint shapes the wording. A notice states a fact and does not give an
+instruction: "Ada and Bo are both in herdr-office" is the whole of what the office
+knows, where "Ada and Bo are about to clobber each other" is a guess about two agents'
+intentions, and two agents deliberately sharing a checkout is a thing people do on
+purpose. The reader knows which it is. The office does not, and a warning that is wrong
+a third of the time gets ignored the other two thirds.
+
+### The footer, rather than a row of its own
+
+The notice shares the message slot, and loses to anything already in it. A message is
+the answer to a key you pressed a second ago and it lasts four seconds; a notice was
+true before you touched anything and will still be true afterwards. So a keystroke's
+receipt is never buried under a standing fact, and the fact comes back on its own once
+the receipt has been read.
+
+A row of its own was the first idea and it was worse in four places at once: the frame
+budgets rows through `CHROME_ROWS`, the graphics strip is pinned at `y:1`, `tile()` is
+the most grid-sensitive function in the renderer, and the footer is the one row where a
+single extra cell wraps the whole screen. The message slot already had the right
+properties: right-aligned, painted amber, room reserved before the key hints fill the
+row, and it already carried the office's own words rather than anybody's screen text.
+
+### Three things that had to be got right to keep it quiet
+
+A notice that fires when it should not is worse than a missing feature, because the
+entire value of the line is that a sentence on it means something is true.
+
+- **A desk with no working directory is not in a collision with every other one.** A
+  server that reports no cwd hands every desk the empty string, and grouping on that
+  announces a twelve-way collision in a directory it cannot name. Which is what most
+  of a floor looks like when `worktree.list` is unavailable.
+- **An empty ask is "not read yet", not "asking nothing".** Grouping on it would pair
+  every freshly blocked desk with every other one. Two asks count as the same question
+  when they differ only in case, spacing or a trailing full stop, because they come off
+  two different screens and a prompt rendered two cells narrower is the same prompt.
+- **Neither half of a stall means anything alone.** An idle agent has usually just
+  finished, and uncommitted files are what a working agent looks like from outside.
+- **Several desks parked in one checkout are one stall, not one each.** Found on a real
+  floor rather than reasoned about: six agents living in one repository, four of them
+  idle, ten uncommitted files. Reported per desk that was four lines each claiming ten
+  uncommitted files, which reads as forty, and it was permanent, because `dirt` is keyed
+  by directory and several agents sharing a checkout is the ordinary case rather than the
+  exception. Four reports of one fact is the noise this whole section is about. The group
+  line drops the duration the single line carries, since the threshold already claims it
+  has been a while and each desk's real clock is on the card `m` walks you to.
+
+One rule is relaxed on purpose. A `statusMs` the office is only guessing at is barred
+from the escalation ladder but allowed here, because an assumed duration is a *lower*
+bound: a desk that crosses fifteen minutes on a guess has genuinely been idle at least
+that long. The guess can make this notice late. It cannot make it wrong.
+
+A working directory is an absolute path under somebody's home, and this pane gets
+screen-shared, so only the last segment is ever drawn. It is also the one string in a
+notice that arrives unsanitized, since the roster only cleans titles, so it is cleaned
+and truncated here rather than trusted.
+
+### Why `m` goes to the notice before it goes past it
+
+The key is a cursor into a list that is rebuilt from scratch every frame, and there is
+nothing stable in it to hold on to: two desks sharing a checkout stop sharing it the
+moment one of them finishes, and that notice does not become a different notice, it
+stops existing. So the office keeps an index and the renderer clamps it.
+
+Pressing `m` takes you to the notice already on the footer, and only advances once you
+are standing there. Advancing first was the obvious implementation and it means the
+notice on screen when you reached for the key is the one notice the key never shows
+you.
+
+### A desk, because correct and invisible reads as broken
+
+The first version of this only spoke on the footer, and only when it had something to
+say. On a floor where nothing was wrong it drew nothing at all, which is the correct
+behaviour and was indistinguishable, to the person who had asked for it, from a feature
+that had never been built. The report was accurate and the product was broken.
+
+So the manager sits at a desk, drawn like everybody else, calm when there is nothing to
+report. `WATCHING` and "nothing needs you right now" is a worse use of a tile than a
+sentence about a real problem, and a better one than an empty chair, because it answers
+the question a reader actually has, which is not "what is wrong" but "is this thing
+running".
+
+That answer then got the same complaint one layer in. The monitor said `all quiet` over a
+floor of three agents mid-task, and the reply to "is this thing running" came back as a
+claim that nothing was. Both halves were doing what they were told: a notice is a pattern
+*across* desks, and ordinary progress is not a pattern, so the list was empty and the
+monitor read an empty list as an empty floor. Which is the original bug with the
+conclusion inverted, and worse than it, because an invisible desk is at least not saying
+anything untrue.
+
+The fix is that the desk is given the floor as well as the notices, and says what the
+floor is doing when it has nothing to flag: `1 waiting` over `2 working`, in that order,
+because of the two numbers only one of them is a request. Waiting counts for the same
+reason the status line now names it. One hand up is not a pattern either, so a single desk
+stuck on a question produced no notice at all and the sentence under a calm manager read
+"nothing needs you right now" while somebody waited on an answer. `all quiet` survives for
+the floor it was always true of, where every desk is idle, finished or unreadable, and
+`nobody in` for no desks at all.
+
+Both are worded exactly as [the window title](#on-the-window-itself) says them, and the counts
+come from the same filtered floor the notices do, minus the hired manager if there is one.
+Those two constraints are the point rather than tidiness: these surfaces are read within a
+second of each other, and an office with two opinions about how many people are working is
+harder to trust than one with a single wrong one.
+
+It costs a desk. Floor one holds one fewer person and everybody after them moves along
+one, which is why the desk stands down in three cases where the cost is not worth paying:
+under a filter, because its notices are about the whole office and a filtered view is
+not the whole office; in the cubicle, where taking the only desk would mean a floor to
+itself; and on an empty floor, where the screen already has exactly one useful thing to
+say and it is how to hire somebody.
+
+Nothing behind it. The id is `+manager`, which no real pane can collide with because
+herdr pane ids are `workspace:pane`, and `src/manager.mjs` is a pure function from a list
+of sentences to strings with no callable on the object it returns. The desk is drawn in
+the middle of the grid and still cannot reach an agent: `y`, `n`, `s` and `f` all
+refuse there and say which desk this is rather than swallowing the key. `a` refuses too
+until somebody is hired, and then means "ask it something" rather than "give it a job",
+which is the one key on this desk that changed meaning. Fixing that
+turned up the same bug one keystroke smaller at the empty desk, where those keys had been
+returning silently.
+
+### Why a desk stopped
+
+"Dev stopped 16m02s ago with 7 files uncommitted" says a desk has a problem and nothing
+whatever about what it is, so the only use for it was to go and read the pane, which is
+what you were doing before the office had a manager. The answer was already on the wire:
+the office reads every desk's visible screen on a rotation for the context gauge, and
+threw the text away for everybody who was not blocked.
+
+Two answers, in the order of how much the office owns them. A conflicted tree is the
+office's own fact, read out of git by the same pass that counted the files, and it is the
+most common reason an agent gives up mid-task. Failing that, the last line that desk was
+seen saying, quoted and attributed. Never rewritten into a cause: `said "3 tests failed"`
+is a fact about a screen, where "it stopped because the tests failed" is a guess about an
+agent's reasoning, and the first rule of this whole feature is that the office does not
+make those.
+
+Quoting screen text here is a deliberate exception to the rule that keeps it off the
+same-ask line. There, the question is already drawn in full in both bubbles, so repeating
+it spends the one row on nothing. Here there is no bubble at all: an idle desk's monitor
+says `ALL DONE`, which is the office agreeing it has stopped and saying nothing about
+why. The sentence is the only place the answer can go.
+
+The reason rides alongside the sentence rather than inside it, as its own field on the
+notice, because the surfaces that draw it have four different amounts of room and a
+reason appended to the text would be the first thing truncated away, which would mean the
+new information is exactly the information nobody sees. Each surface spends its own room:
+
+| Where | What it does with a reason |
+|---|---|
+| the card | no longer prints the notice's reason at all, because the card stopped being a list of notices. It draws a desk's own words as the last clause of that desk's account, so the reason is per desk rather than per notice. See [what happened at each desk](#what-happened-at-each-desk) |
+| the compact list row | appends it, with the whole pane width to spend |
+| the footer | appends it when the whole of it fits in the message slot |
+| the tile's status bar | 27 cells, so it keeps the fact and drops the reason. The chip already counts and the monitor already says what kind, so on a tile the fact is stated three times over while the reason needs a full sentence or none |
+
+Printed whole or not at all, everywhere. Half a quote is the office putting somebody
+else's words in its mouth and cutting them off mid-sentence, which is worse than the line
+it replaced. The bug that rule exists to catch was found by a test sweeping every pane
+size: the compact row asked for its sentence at the pane's full width and then cut the
+row down to fit, which is precisely the failure being forbidden, so the row now asks for
+the sentence at the width it is about to be drawn in.
+
+The quote is capped at 36 cells, which is a number chosen against a pane rather than
+rounded. At 44 a stall line plus `said "..."` came to 106 cells, and since every surface
+prints a reason whole or not at all, that meant an ordinary 110 column pane showed the
+reason nowhere but the card. The cap decides how wide a pane has to be before the feature
+exists at all.
+
+A quote belongs to the turn it was read in, so a change of state drops it. Carrying it
+across makes it the last thing the agent said *before this task*, which is not what any
+sentence built on it claims. A screen with nothing quotable on it is recorded as an
+answer rather than skipped, the same way a null context reading is, because the only
+other thing that ever overwrites a quote is another quote, and a desk would otherwise
+keep citing a sentence it read twenty minutes and three tasks ago.
+
+### What happened at each desk
+
+The reason above fixed the wrong half of the problem, and the complaint that said so is
+worth quoting because it is the whole brief for what replaced it: the point of a chief of
+staff is to get the details without visiting each agent, and what the office actually gave
+was one ambiguous line about one agent while three were stuck.
+
+It was worse than that on inspection. Three desks stopped in one checkout produced one
+notice, a chip saying `1 THING`, a tile line truncated to `Ada, Bo and Cass stopped i…`,
+and Bo's and Cass's own words read off their screens and thrown away. Every fact needed to
+explain all three was already in the roster.
+
+The cause was a grouping that is right about one thing and wrong about another. Several
+desks parked in one checkout are one notice, because four reports of one directory's file
+count read as four times the work, and that is genuinely the directory's single fact. The
+reasons are not: each agent's last words belong to that agent. So the count and the
+sentence were grouped together when only the count should have been.
+
+What the card draws when nobody is summarising for it is one short account per desk, with the
+notice it came from as the account's first line:
+
+```
+├─ what happened at each desk ──────────────────────────────────────────────┤
+│   Ada · stopped 30m00s ago                                                │
+│      was doing "apply the security patch" · on a-manager-who-notices …    │
+│      tests failed 24m20s ago · 7 uncommitted · said "I cannot apply the…" │
+│   Bo · stopped 40m00s ago                                                 │
+│      was doing "rewrite the auth guard" · merge conflict 5m20s ago        │
+│      7 uncommitted · 3 conflicted · said "Should I delete the old migra…" │
+├─ what to do about it ─────────────────────────────────────────────────────┤
+│   m walks to the desk each one is about                                   │
+```
+
+Nothing here is written by a model. It is a digest of structured facts the office already
+holds, assembled in a fixed order, which is what makes it free and what keeps it inside
+the first rule of the feature. `was doing X · tests failed 24m ago · 7 uncommitted · said
+Y` is four things that are true; "gave up because the tests failed" would be a guess about
+an agent's reasoning. The order of the clauses is the nearest thing to a narrative and it
+is only an order. Whoever reads it draws the conclusion, which is the right way round,
+because they know things about this work that the office does not. A summary in the sense
+of prose written about the desk would need the manager to be a real hired agent with real
+tokens, which is a different and much larger question.
+
+It is also a question that has since been answered, which moved these accounts. They are no
+longer the card's normal content: a manager is hired when the card opens, and its points are
+what the card draws. The accounts are what it falls back to when there is no summary, and
+they are one keystroke away the rest of the time. Nothing in this section changed except when
+it is reached, and the reason it is worth keeping is in [Hiring somebody to read the floor for
+you](#hiring-somebody-to-read-the-floor-for-you): fourteen accounts under a summary of
+fourteen accounts is the complaint at the top of this chapter with a paragraph in front of
+it, but a card with neither is worse than either.
+
+Five decisions inside it, each of which was a bug first:
+
+- **The chip counts desks, not notices.** `deskCount` is a set of every id every notice
+  mentions, so three agents stuck in one checkout is `3 DESKS`. One is the number of
+  sentences the office has to say and three is the number of people who need somebody, and
+  nobody has ever wanted the first number. A set rather than a list because a desk can be
+  in two notices at once, and `2 DESKS` for one person is the same lie the other way.
+- **A desk appears once and says both its reasons.** The commonest pair on a real floor is
+  a full head in a shared checkout. The more urgent notice is the headline and the other
+  joins the front of the account, rather than two blocks under one name repeating the same
+  four facts.
+- **There are no numbers on the list.** Numbers were the only handle the notice list had,
+  and a desk has a name. Once desks rather than notices are the unit, a number beside a
+  desk can only be the index of the notice it was filed under, which skips whenever two
+  notices are about one desk, and a list jumping from 2 to 4 is a reader hunting for the
+  missing one.
+- **News outlives the slab it was drawn on.** `tests failed 24m ago` over a desk stopped
+  for half an hour is most of the answer, and it used to be deleted twelve seconds after
+  it arrived because the only surface that drew it was the slab over the desk. The roster
+  now fades the entry instead of dropping it and reports whether anything changed, so a
+  card can ask what last happened here without repainting the office twice a second. The
+  pane going away is what clears it, otherwise a reused pane id would inherit the previous
+  agent's failing test run as its own history.
+- **The accounts outrank the hint.** The rows held back for `what to do about it` were two
+  rows of chrome naming a key that is in the README, on the footer, and that you pressed
+  to get here. On a 110 column pane they are a whole desk's account. Only the closing
+  border is reserved now, the hint draws whenever the desks leave room for it, and the
+  rule and the line under it are drawn together or not at all, since a section heading
+  with nothing beneath it reads as the office having lost the answer.
+
+Clipping is where a card like this usually goes wrong, so the order it gives things up in
+is deliberate. A desk's facts are atomic and its headline is not: a desk showing a name
+and a headline is the old card, which was worth something, whereas a desk showing two of
+its four facts is the office looking like it does not know the other two. When one row is
+needed for `and 2 more desks` it comes off the last desk shown rather than by planning the
+list again one row shorter, because re-planning made every desk give up its detail to pay
+for the overflow line, turning three accounts and a name into four names.
+
+The quote cap here is 44 rather than the 36 a notice gets, and the difference is about room
+and not about caution: a notice shares one status line with a whole sentence, while a
+clause here gets a panel row to itself. 44 is what a screen is already quoted at on the
+detail card, so a desk's own words are the same length wherever you read them.
+
+One consequence worth stating rather than discovering: the panel still takes half the room
+below the header, the same as every other card. At 140x46 that is three full accounts. At
+110x30 it is one account in full and the other desks named, because collapsing the whole
+floor to a list whenever this card opens would be a bigger surprise than clipping detail on
+a short pane.
+
+### Hiring somebody to read the floor for you
+
+Fourteen accounts is still fourteen accounts. The card fixed the thing it was written to
+fix, which was one ambiguous line about one agent while three were stuck, and it fixed it
+by printing everything the office knew. On a busy floor that is a wall of true sentences
+and the question underneath it never changed: what is happening, and who needs me first.
+
+Nothing in the office can answer that. Every module above takes a roster and returns
+strings, and "which of these four things matters most" is a judgement, not a count. The
+office already has a floor full of things that make judgements, so opening the card hires
+one.
+
+What it gets is a digest, not a floor. `src/chief.mjs` builds the whole conversation and is
+pure: `report()` gives every desk an account, `digest()` flattens them, `ask()` wraps them
+in a prompt, `answer()` pulls the reply back out, and `floorPrint()` decides whether the
+floor has changed. None of it has a socket. Three rules are written at the top of that
+file because they are the ones worth re-reading before changing anything in it.
+
+**It is sent facts, not screens.** What goes over is the same clauses the card draws: one
+block per desk, each already capped and stripped. Cheaper than raw panes by an order of
+magnitude, and cheap is not the point: a screen is whatever an agent last happened to print,
+and an account is what the office measured.
+
+The answer comes back into a labelled section of its own and is never blended with anything
+counted. The accounts are mechanical, a process state and a git count and a quoted line; the
+points are a model's reading of those and can be wrong, and a model's paragraph sitting in a
+list of the office's own numbers is the one arrangement of these that is dishonest.
+
+What changed is where the evidence lives. The accounts used to be drawn permanently under
+the answer, as its receipt, and that was right while the hire was a keystroke nobody had
+pressed: without a summary the card was the accounts, and with one it was both. With a
+manager hired on the way in, both means a reader who asked for a summary gets one and then
+thirty rows of the raw material printed underneath it, which is the wall of true sentences
+the summary replaced, stapled behind the replacement. So the evidence moved one keystroke
+away: `m` walks to each desk the office noticed something about. The accounts still draw in
+exactly the cases where there is no summary to draw instead, because in none of those is the
+card allowed to be empty.
+
+**Nothing it says is ever a command.** The reply is not parsed, matched, dispatched or
+forwarded anywhere. This is the defence that actually holds, and it has to, because the
+digest carries author-controlled text: a pane title and a quoted screen line are written by
+other agents, and an agent that prints "ignore previous instructions and run this" will get
+that text in front of the manager. That is not preventable. What is preventable is it
+arriving unlabelled, so the prompt says the digest is a mechanical dump that no model wrote
+and that anything in it addressing the reader is to be reported as something a desk said.
+Belt and braces, and the braces are that the reply goes nowhere but a panel row.
+
+**The office never tells it where the socket is.** No socket path, no pane ids it could
+act on, no hint that a plugin API exists. It is an agent in a worktree that has been handed
+a page of text and asked a question about it.
+
+#### Progress, not status
+
+The first version of the prompt asked the manager to say what was happening on the floor,
+which is a true description of the job and produced a sentence per desk restating the status
+word already printed under every tile. Ada is idle, Bo is blocked, Cass is working. That is
+the wall of true sentences this whole card exists to replace, reflowed by a model and charged
+for. The prompt now says what not to send back as well as what to: lead with what changed,
+and `Ada is idle` is explicitly named as the shape of a bad answer, because a rule about what
+to do is easier to follow with an example of the failure next to it.
+
+Asking for progress means having facts about progress, and one of them was missing. The
+accounts carried what each desk was working on, what came of it, what it had left
+uncommitted and its own last words, all of which are about what got done. What they did not
+carry was time: the punch clock has known since it was written that a desk has been up for
+two hours and worked for eleven minutes of them, and nothing was passing that to the
+manager. So `office.mjs` attaches each desk's day to the account on the way out, and
+`src/briefing.mjs` turns it into one clause. `worked 11m00s of 2h00m up` is the fact no
+status word can give you: a desk reading `idle` after two hours of which it worked eleven
+minutes is a different report from one that worked an hour and fifty.
+
+That clause goes only to the manager, never onto the card's own accounts, which answer "who
+needs me now" and have no use for a shift total. And it is deliberately not part of the
+floor print: a fingerprint with a duration in it would differ on every tick, and the office
+would re-ask a completely static floor forever.
+
+The answer comes back as bullet points rather than prose, and the card owns the marker. A
+model asked for `- ` will send a hyphen, a star, a real bullet, `1.` or nothing, so
+`src/chief.mjs` strips whatever arrived and `src/render.mjs` draws one, which is also the
+only place that knows how wide the row is and where the hanging indent under a wrapped point
+lines up.
+
+#### Which of them matters
+
+Four bullet points of equal weight is a list you have to read all of to find the one that
+wanted you, which is a smaller version of the problem the card was built to solve. So the
+manager is asked to put `!` at the front of any point that needs a person now, most urgent
+first, and to leave it off the rest.
+
+The mark is stripped in `src/chief.mjs` exactly as the bullet is, for the same reason: the
+card decides what a marked point looks like and all the office keeps is which ones. It is
+read *after* the bullet strip, because `- ! Ada is blocked` is what a model asked for both
+will write, and a point is not less urgent for arriving with its glyph still attached.
+
+Then the office rations it, because a mark on everything is a mark on nothing. At most two
+survive, kept in the order they arrived since the prompt asks for most urgent first, and a
+list where *every* point is marked has all its marks removed: two amber rows out of two is
+the same information as none out of two, said less legibly, and the reader's eye has nowhere
+to be drawn to.
+
+Drawn, it is `! ` in the raised-hand amber, bold. Two cells like the ordinary bullet, so a
+marked point and a plain one start in the same column and the list still reads as a list, and
+in that colour because the office already spends it on exactly one idea: this one wants you.
+A different glyph as well as a different colour, so the mark survives a screenshot and a
+colourblind reader. The text itself stays `P.soft` either way, since `P.ink` on this card is
+reserved for things the office measured and nothing here was measured.
+
+#### Only while you are looking at it
+
+A summary that is recomputed every two seconds forever is a background process spending
+tokens on a floor nobody is watching, and that alone would make the feature not worth
+having. So the gate is the card: nobody is hired and nothing is asked unless the card is
+open. Close it and the manager goes idle. The card is also asked about the moment it opens
+rather than on the next poll, because two seconds of a card that says nothing reads as a key
+that did not work.
+
+That gate is also why the hire itself stopped being a keystroke. The first version had `M`,
+which was caution rather than design: starting an agent without being asked to felt like
+something the office should not do. But the gate it was guarding is the card, and somebody
+opening a card whose entire job is to hold a summary is somebody asking for the summary. A
+key between them and it is a question with one answer, and the second half of that answer,
+which kind, is a choice that does not matter for a job that is reading a page of text and
+writing a short list. So it is made from the floor: whichever kind you already have the
+most of, which is the one you are logged into and have already paid for, ties broken by the
+sorted manifest list so the same floor picks the same manager twice.
+
+`M` stays, for the two cases the automatic path cannot serve: wanting a specific kind, and
+wanting the manager in a worktree. The first switch on the settings card turns the automatic path off entirely, and so
+does `--no-manager`. Turning it off with somebody already hired lets them go.
+
+One hire per run, win or lose, and that is one flag rather than a check on whether anybody
+is currently hired, because three different things all mean do not hire again. A hire that
+failed must not be retried on every card open, or looking at the card twice starts two
+panes. A manager fired with `X` is the clearest possible statement that you do not want one.
+A manager whose tab you closed is the same statement, made less deliberately. Restarting the
+office is how you change your mind, which is a cheap enough way to say it.
+
+Three more brakes on top of that:
+
+- **Never faster than twenty seconds**, whatever the poll does.
+- **Never twice about a floor that has not changed.** `floorPrint()` is the fingerprint,
+  and what it deliberately leaves out is the whole cost control. Durations are excluded:
+  a fingerprint over the rendered accounts differs every second, because `idle for 30m00s`
+  becomes `30m01s`, and the office would re-ask forever. A context percentage is excluded
+  for the same reason and replaced by its bucket. The clock only enters where crossing a
+  line is itself the news, which it does twice: a stall becoming a notice changes which
+  desks have a `kind`, and a head going from hot to brimming changes the bucket. Notice
+  *wording* is excluded too and only the kind is kept, since a sentence that renames the
+  same fact is not new information.
+
+  That was the first attempt and it was not enough, because the print also carried four
+  fields that are downstream of a screen that is scrolling. `said` is the last line off the
+  visible pane and changes on every line an agent prints. `dirt` is a git count and ticks as
+  files are written. `title` and `command` advance as the work moves through its steps. None
+  of those is a clock and all four move every few seconds on a desk that is working, so a
+  floor of busy agents produced a new print on nearly every pass and the manager was re-asked
+  about a floor whose situation had not moved. That is the cost of the feature with none of
+  the benefit.
+
+  So the print is narrowed by status rather than by field. A desk that is **working** is
+  fingerprinted on the fact that it is working and on nothing it happens to be printing while
+  it does: its identity, its status, which checkout and branch it is in, whether it is inside
+  a notice, whether an event has landed on it, and which band its context window is in. Those
+  are the transitions. A desk that has **stopped** keeps the lot, because on a desk nobody is
+  driving, what it was doing when it stopped and what it left uncommitted and the last thing
+  it said are not noise, they are the entire report. `command` is dropped outright rather than
+  narrowed, since the roster only ever sets one on a desk that is working.
+
+  The rule underneath both halves: fingerprint the situation, not the output. Everything
+  volatile here is volatile *because the desk is working*, and a desk that is working is the
+  one thing on this floor nobody needs telling about twice.
+- **Skipped rather than queued** while the manager is mid-turn. A queue here would mean a
+  manager permanently one floor behind, answering about a floor that has moved on.
+
+The ask is fire-and-forget. `agent.prompt` takes an optional `wait` and the office has
+never set it, so this needed no new primitive: the prompt goes out on its own connection
+and the reply is collected by polling the manager's pane like any other desk.
+
+#### Finding the answer on a screen full of prompt
+
+The reply comes back by reading the manager's pane, which contains the echoed prompt above
+it, and both copies contain the markers. So the manager is asked to wrap its whole reply
+between two lines carrying a random three-byte nonce, and the office takes the *last*
+opening marker before looking for a close. A fixed marker would match the prompt's own copy
+and the office would read its own question back as an answer.
+
+The nonce does a second job that matters more. `[[END office]]` is a thing an agent could
+plausibly print while describing this very feature, and a desk's screen text is quoted into
+the digest, which is drawn on the manager's own pane. A fixed marker pair would let a desk
+hand the office a block of text that reads as a summary of the floor. A per-ask nonce turns
+that from something that happens by accident into something that has to be guessed right
+first time. It is in both markers, not just the closer, because the manager echoes the real
+pair and a forger only has to supply the other end.
+
+The pane is read as `recent_unwrapped` at 200 lines rather than `visible`. On a short pane
+the opening marker scrolls off while the closing one is still on screen, and an answer whose
+front is missing is not an answer. A reply with no close marker yet is a manager still
+typing, so the office waits; past two minutes it writes the ask off and says so on the card,
+because a card that looks identical whether the answer is coming or gone is the failure that
+made the first footer-only manager feel broken.
+
+#### It is not on its own floor
+
+One predicate, `notChief`, and four places that go through it: the digest, the notices in
+the view, the `A` broadcast, and by extension the desk `m` walks to. Without the notices
+exclusion a manager sitting idle crosses the stall threshold in fifteen minutes, becomes a
+notice, and then reads about itself in its own next digest, which is both funny and a bug.
+
+Where it sits is the other half of that. This is the one agent on the floor that is handed
+text written by other agents, so if a prompt injection ever does land, what it can reach
+matters. `M` defaults into a worktree for that reason and `t` still switches it back: a
+throwaway branch is a much smaller answer than the checkout everybody else is working in.
+
+Hiring under the hood goes further and uses neither. A manager never reads code, so the
+smallest thing that will hold one is an empty directory, and it gets one fixed path under
+the system temp directory. That is a smaller blast radius than the worktree it replaced,
+because a worktree is a real checkout with real history and this is a directory with nothing
+in it at all. It is also the tidier answer to a hire that now happens on every office run
+that opens the card: a fresh worktree each time would leave a pile of `office/` branches to
+clean up, which is a different flavour of the annoyance this was meant to remove. The office
+never writes there, and never sends `trust_repository`, either here or from `M`.
+
+The cost of that choice is honest and is written down in the README: an agent CLI that
+refuses to take a prompt outside a trusted repository will sit in that directory saying
+nothing, and the card will say it is waiting. `M` and a worktree is the way out.
+
+What it costs to give up is the last piece. `X` forgets the manager and touches nothing
+else: the pane, the tab and the worktree are left exactly as they are, still running, for
+somebody to look at or close by hand. The office started an agent, so it says where it is
+and stops there. Closing panes on somebody's behalf is a different feature with a different
+argument behind it.
+
 
 ## How close you want to stand
 
@@ -401,8 +973,10 @@ and `src/dirt.mjs` exists to hold both:
   private as its contents and this pane gets screen-shared, so the office draws how
   many and the way to see which is the tool that was already going to tell you.
 
-`--no-git` turns it off entirely: no subprocess, no pile, no row, everything else
-unchanged. A checkout that will not answer, is not a repository, or is too slow gets
+The third switch on the settings card turns it off entirely, and so does `--no-git`:
+no subprocess, no pile, no row, everything else unchanged. Turning it off while the
+office is running also forgets the counts, because a number nobody is refreshing is
+worse than no number. A checkout that will not answer, is not a repository, or is too slow gets
 nothing rather than a guess, and that silence is remembered as an answer so the same
 directory is not re-asked every couple of seconds for the rest of the afternoon.
 
@@ -474,7 +1048,8 @@ hold both:
   similarity index, and a gauge that read any of those would be a desk reporting somebody
   else's number as the truth about an agent.
 
-`--no-context` turns it off entirely: no read, no colour, no chip, no row. It is the one
+The second switch on the settings card turns it off entirely, and so does
+`--no-context`: no read, no colour, no chip, no row. It is the one
 feature that looks at every desk rather than only the ones with a hand up, which is
 exactly why it has an opt-out. An open card still quotes the screen back, because that is
 a read you asked for by opening it.
@@ -654,10 +1229,10 @@ looks like a room that has finished moving.
 
 Agents do not agree on what an approval prompt looks like, so the keys are read off
 the agent's own screen rather than guessed: a literal `(y/n)` prompt gets a letter, a
-numbered menu gets `1` (the plain yes, never the "and stop asking me" variant), and
-anything unrecognised falls back to enter and esc. The panel spells out what it is
-about to send, so a bad read is something you can see before you press the key rather
-than after.
+numbered menu gets `1` (the plain yes, never the "and stop asking me" variant), a menu
+with no numbers on it gets a walk (below), and anything unrecognised falls back to
+enter and esc. The panel spells out what it is about to send, so a bad read is
+something you can see before you press the key rather than after.
 
 Opening a desk splits the room instead of taking it over: the panel takes the bottom
 half and the floor keeps the top, so you can read one agent while watching the rest.
@@ -673,6 +1248,46 @@ mouse, and on a row that is asking you something they take the column the branch
 would have had. On a pane too narrow for them nothing is drawn and nothing is
 clickable there: `y` and `n` still work, and a hitbox with no button under it would
 be an approval sent from a blank patch of screen.
+
+### A menu with no keys on it
+
+Agents that draw their whole window rather than a transcript tend to ask like this:
+
+```
+  ❯ Allow
+    Always allow
+    Deny
+    Always deny
+  ────────────────────────────
+  esc to close · ↑↓ to navigate · ↵ to select
+```
+
+There is no letter and no digit. The only way to answer is to move the cursor onto the
+row you want, so an answer is a walk: so many downs or ups, then enter. Until the
+office could read this shape, `n` sent esc, which that menu's own footer calls close
+and which cancels the question rather than denying it, and `Y` refused while "always
+allow" was on the screen.
+
+Two things about the shape make it harder than the other three. The first is that it is
+invisible to the rest of the pipeline: the office cleans a screen before reading it,
+which strips arrows and dingbats and trims each line, and here the cursor glyph and the
+indentation are the entire signal. So this one read is given the raw screen, and that is
+the only reason `approvalChoice` takes a second argument.
+
+The second is that the keys go stale. A digit means the same thing a minute later; a
+walk is counted from where the cursor was when the screen was last read, and the cursor
+belongs to the agent and to anyone sitting at that pane. So the walk is worked out again
+from a read taken at the moment of sending, and it goes out only if the rows are still
+the rows that were on offer. The labels are the promise; the cursor is only the
+mechanics. A screen that will not answer counts as a screen that changed, because from
+here they are the same thing: we no longer know what these keys would do.
+
+A menu that has digits on it as well as a cursor, which is most of them, is still
+answered with the digit. The digit says which row it means without depending on where
+the cursor was a moment ago, and that is worth more than consistency. A menu with no
+digits whose rows cannot be read as a yes and a no is left to the enter-and-esc
+fallback: a walk onto a row we have only half identified is how a standing permission
+gets granted by accident.
 
 ### When yes and no are not the answer
 
@@ -703,9 +1318,144 @@ off the menu rather than assumed to be `2`: on a menu that put "no, and tell me 
 do differently" at 2, a hardcoded digit would deny the command under a key labelled
 "always allow". Both the digit and the option's own wording are checked again at the
 moment you confirm, since the screen belongs to the agent and can change in the seconds
-between arming and granting. The card and the footer both quote that wording, so the
+between arming and granting. On a menu with no digits it is the wording that is checked
+and the walk that is recounted, for the reason above: a cursor that moved inside the
+same menu is not a menu that changed, and insisting the keystrokes match would refuse
+every grant on a screen somebody had touched. The card and the footer both quote that wording, so the
 sentence you are agreeing to is the agent's own. It is the one answer in the office
 with no button, for the same reason the assign field has none.
+
+## Deciding what the office does
+
+Six things the office does are opt-out, and until the settings card existed the only
+way to opt out of any of them was a command line flag. For this program that is the
+wrong shape, and not by a little. The office runs as a herdr plugin pane: it is
+started by a manifest somebody wrote once and opened afterwards by clicking a thing.
+There is no command line in front of you at the moment you decide you would rather it
+did not hire a manager. `--no-manager` was a preference expressible only in the one
+place you were not standing, and the way to express it was to find an installed
+plugin's manifest and edit it.
+
+So `,` opens a card with all six on it, and what you set there is kept in
+`~/.config/herdr-office/settings.json`.
+
+```
+╭─ settings · space toggles one ─────────────────────────────────╮
+│ ▌ hire a manager               on                              │
+│   read how full each head is   on                              │
+│   count what is uncommitted    off  --no-git this run          │
+│   say when somebody needs you  on                              │
+│   draw the pixel charts        on                              │
+│   set the window title         on                              │
+├─ hire a manager ───────────────────────────────────────────────┤
+│   Opening the manager's card starts an agent and asks it to    │
+│   read the floor. That spends tokens, every twenty seconds at  │
+│   most, and only while the card is open. Off, the card draws   │
+│   the accounts itself and M still hires one by hand.           │
+│   kept in ~/.config/herdr-office/settings.json                 │
+╰────────────────────────────────────────────────────────────────╯
+```
+
+`j` and `k` pick one, space or enter flips it, `esc` or `,` again closes the card, and
+a click anywhere along a row flips that row. The whole row is the target rather than
+the word, because a two-cell hitbox beside its own label is a hitbox people miss.
+
+### Six switches rather than one
+
+The request that produced this card was about the manager, which is the one of the six
+that spends money and therefore the one worth a settings surface on its own. It was
+still built for all six, because a card listing one preference while five others stay
+flag-only is a worse object than either a card with six or no card at all: it teaches
+you that this is where preferences live and then is wrong about five of them.
+
+They are ordered by what they cost you. The manager first, because it is the only one
+that spends tokens. Then the two reads, which are what the office puts on the wire and
+into your repositories. Then the three that are taste.
+
+Each one's help text is a sentence about the cost, not about the feature. "Draws the
+pixel charts" is a label; a reader looking at the label does not need it said again
+underneath. What you came to this card to find out is what the thing is doing to your
+machine while it is on, so that is what the sentence says. Only the selected switch
+has its sentence drawn, named by a rule above it, because six true paragraphs at once
+is a wall nobody reads and the card would stop being a card.
+
+The card asks for fourteen rows rather than the eight every other panel gets, which is
+the only geometry in the office written for one surface. Eight rows is six switches and
+two borders and nothing else, so at the ordinary pane size the help text had nowhere to
+go and simply was not drawn: a card explaining nothing, which is the one thing this card
+must not be. Fourteen is six switches, a rule, four lines of sentence and the line
+saying where this is kept. A pane shorter than that gets what fits, switches first,
+because a switch with no explanation is still a switch and an explanation with no
+switch is nothing at all. Below twelve rows the bottom switches are genuinely gone, and
+a row the card could not draw pushes no hitbox, because a click flipping an invisible
+switch over whatever was actually at those coordinates is worse than a switch you
+cannot reach.
+
+### Three rules, and one of them is the only reason this is a module
+
+`src/settings.mjs` is a hundred lines of model under a page of comment, which for a
+flat map of six booleans wants justifying. Two of the three rules are invisible until
+something asserts them, and both would have been quietly got wrong by a `JSON.parse`
+at the top of `office.mjs`.
+
+- **A flag only ever turns something off.** All six are `--no-` or `--quiet`; there is
+  no flag that turns anything on. That is not a naming accident, it is what makes the
+  precedence a single downward move, and it is asserted. A flag and the file can
+  therefore never disagree about anything except whether this particular run is
+  quieter than usual.
+- **The file is the default and a flag is this run.** Saved settings decide what the
+  office is. A flag overrides one of them until you quit and never touches the file, so
+  a `--no-manager` pane is a quiet pane rather than a pane that rewrote your
+  preferences on the way past. Flipping a switch on the card wins over a flag
+  immediately, because a keystroke aimed at a switch you are looking at is the most
+  deliberate thing anybody has said about that switch.
+- **Only what differs from the default is written.** A file that records all six pins
+  all six forever, and then an office that learns a better default can never give it
+  to anybody who once opened this card. What lands on disk is the list of places you
+  disagreed. An empty object is still written rather than the file being deleted,
+  because "I have been here and I agree with all of it" and "I have never opened this
+  card" are the same settings and a different fact.
+
+The second rule is also why `settle` returns where every answer came from and not just
+what it is. A switch reading `off` when you know you saved it `on` is the office
+looking broken, and the true explanation is one word long, so the card says
+`--no-git this run` on that row and nothing at all on a row where the file and the
+card agree. Nothing explains a default, because a default is the card agreeing with
+itself and there is no surprise to account for.
+
+### A flip is the office changing, not the office restarting
+
+Every switch takes effect on the keystroke, which is six separate pieces of wiring
+rather than one, and each is the thing that would otherwise be wrong until you quit:
+
+- **Manager off** lets go of whoever is hired, with a notice saying their pane is
+  still open, because the office starting an agent is a thing it may do and the office
+  closing somebody's pane is not. **Manager on** clears the one-hire-per-run flag and
+  hires immediately if the card is open, since that card open is the whole gate.
+- **Title off** has to clear the title it already set, and the flip is believed by the
+  time the clear runs, so that one call is forced past the check it would otherwise
+  fail.
+- **Graphics off** takes the live layers down and drops the renderer. The text
+  renderer repaints every row it had given away, which it was already able to do
+  because an image can fail at any time.
+- **Git off and context off** forget their caches. A count nobody is refreshing is a
+  number on the floor getting older in silence, which is worse than no number: the two
+  `forget` methods on the roster exist for this and nothing else.
+- **Notify off** needs no wiring at all, because nothing is cached and the next hand
+  simply does not send.
+
+The file is written inside the keystroke, and a write that fails puts one line on the
+card in the colour of a thing that needs a person. It does not stop the flip: the
+office has already changed, and the only thing lost is that it will not still be
+changed tomorrow. That is the same bargain the punchclock makes in `src/state.mjs`,
+for the same reason, which is that this is a convenience on top of a working office
+and does not get to break one.
+
+Unlike the punchclock, this file is unversioned. The shape is a flat map of booleans
+and there is no incompatible change available to it: a key that goes away stops being
+read, a key that arrives has a default, and a value that is not a boolean is not a
+value. A version number would only buy the ability to throw somebody's preferences
+away.
 
 ## Why does it think that
 
@@ -789,8 +1539,14 @@ rule that fired survives the clip; which file the rules came from is what goes.
   `git --no-optional-locks -c core.fsmonitor=false status --porcelain=v1` per checkout,
   at most every 15s and at most two checkouts per pass, only in directories
   `worktree.list` has already called checkouts, bounded at 1.5s and a megabyte, and
-  off entirely under `--no-git`. Counts come back; paths never do. See "How much they
-  have changed" for why each of those flags is there.
+  off entirely under the third settings switch or `--no-git`. Counts come back; paths
+  never do. See "How much they have changed" for why each of those flags is there.
+- Preferences are not in the API either: six booleans in
+  `~/.config/herdr-office/settings.json`, written on the keystroke that flipped one,
+  through a temporary name and a rename so quitting mid-write cannot leave half a file.
+  `HERDR_OFFICE_CONFIG` points the whole path somewhere else and `XDG_CONFIG_HOME`
+  moves the directory. Only the switches you turned off are in there. See "Deciding
+  what the office does".
 - The window title is `client.window_title.set`, sent only when the string changes,
   and `client.window_title.clear` on the way out with a 500ms budget: an office that
   would not quit because a title would not clear is worse than a stale title. Note
@@ -801,7 +1557,8 @@ rule that fired survives the clip; which file the rules came from is what goes.
   most every 6s. A quiet office is three calls every two seconds no matter how many
   agents you are running.
 - The context gauge is the same call on desks that are not stuck, at most every 10s and
-  at most four desks per pass, stalest first, and off entirely under `--no-context`. The
+  at most four desks per pass, stalest first, and off entirely under the second settings
+  switch or `--no-context`. The
   two share one read: a desk with its hand up is already being looked at, and the
   four-desk budget counts only the desks that would not have been read anyway. Two fields
   come back off that screen and nothing else does. See "How full their head is".
@@ -859,6 +1616,16 @@ measured it. The assertion worth keeping is that a request reaches the server ex
 once: a read that is sent twice is waste, but `agent.send_keys` sent twice is two
 keystrokes typed at somebody's agent.
 
+`test/settings.test.mjs` and `test/switches.test.mjs` split the settings card the way
+the feature splits: the first is the argument about what the office believes, which is
+the precedence and what lands on disk, and the second is the argument about what you
+can see and click. The two in the second that are load bearing are that all six
+switches are on screen at every size the office supports, because a card that silently
+drops the one you came for is worse than no card, and that every row is a target along
+its whole width. That second one found a real bug: a card too short to draw six rows
+was still pushing six hitboxes, so a click in a short pane would flip an invisible
+switch over whatever was actually at those coordinates.
+
 `test/office.test.mjs` runs the office itself. It spawns `office.mjs` as a child
 process pointed at a fake herdr, types keys on its stdin and reads frames off its
 stdout, which works because the office only asks for raw mode when stdin is a tty and
@@ -868,7 +1635,9 @@ the one place a bug could sit with everything else green, and did. It is also ho
 write paths get exercised at all: a fake server can be sent `agent.prompt` and
 `agent.send_keys` without a real agent receiving anything, so the tests can assert the
 thing that actually matters, which is that a standup reaches each person exactly once
-and `y` is one keystroke.
+and `y` is one keystroke. It is also where the settings file is held to being a file:
+a flip is on disk before the next keystroke arrives, a saved switch stops the hire with
+no `agent.start` at all, and a key meant for a switch cannot answer somebody's prompt.
 
 CI runs the suite plus a couple of live `--once` renders on macOS and Linux across
 Node 18, 20 and 22. The Herdr marketplace indexes whatever is on the default branch

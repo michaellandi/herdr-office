@@ -6,6 +6,7 @@
 import { Roster } from '../src/roster.mjs';
 import { stripAnsi } from '../src/text.mjs';
 import { assignRooms } from '../src/rooms.mjs';
+import { notices as noticesOf } from '../src/notices.mjs';
 import { describeDetection, summarize } from '../src/summary.mjs';
 
 export { stripAnsi };
@@ -371,7 +372,20 @@ export const FILTERS = [
   ['a filter with spaces', { filter: 'log parser', filtering: false }],
 ];
 
-export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null }) {
+// Finding a person's row in the compact list.
+//
+// Not `lines.find((l) => l.includes(name))`, which is what this was and what broke: the
+// manager's row carries a sentence naming desks, so a search for "Ada" finds the manager
+// saying Ada and Bo share a checkout before it finds Ada's own row. The chip is the tell,
+// because it is the one thing a person's row can never say: the five agent statuses are
+// WORKING, NEEDS YOU, IDLE, DONE and UNSURE.
+// The manager's chip counts desks, not notices, so `4 DESKS` is what marks its row. The
+// old `\d+ THINGS?` is kept because it is a cheap way for this helper to survive the chip
+// being argued about again, and nothing else in the office draws either phrase in capitals.
+export const isManagerRow = (line) => /WATCHING|\d+ (?:DESKS?|THINGS?)\b/.test(line);
+export const personRow = (lines, name) => lines.find((l) => l.includes(name) && !isManagerRow(l)) || '';
+
+export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedId, message = '', drag = null, busy = new Set(), hire = null, compose = null, filter = '', filtering = false, following = false, zoom = 'auto', total = null, rooms = null, stats = null, shift = null, trust = null, notices = null, floor = null, noticeAt = 0, board = false, chief = null, settings = null }) {
   const counts = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
   for (const p of people) counts[p.status] = (counts[p.status] ?? 0) + 1;
   return {
@@ -402,5 +416,26 @@ export function viewOf({ people, cols, rows, frame = 0, detail = null, selectedI
     stats,
     shift,
     trust,
+    // Derived from these people by default, for the same reason the rooms are: this is
+    // what office.mjs passes, so a test that does not mention notices still renders the
+    // frame the real office would draw for the roster it was handed. Several fixtures
+    // put desks in a shared checkout, so this is not always the empty list, which is
+    // the point: the footer has to hold a real one at every size.
+    notices: notices || noticesOf({ people }),
+    // The desks the office talks about. Every one of these people by default: the real
+    // office subtracts the hired manager here, and no fixture has one of those unless it
+    // says so.
+    floor: floor || people,
+    noticeAt,
+    // The settings card, when it is open, exactly as office.mjs hands it over: the index
+    // under the cursor plus the office's own values and where each one came from. Null by
+    // default, which is every frame drawn before this existed.
+    settings,
+    // Whether the manager's card is open. False by default, which is every frame drawn
+    // before this existed.
+    board,
+    // Whether anybody is hired as manager, and what they last said. Nobody, by default,
+    // which is the office as it ships and the frame every test written before this drew.
+    chief: chief || { hired: false, hiring: false, name: null, asking: false, answer: null, question: '', ageMs: null, error: null },
   };
 }

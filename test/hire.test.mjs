@@ -3,7 +3,7 @@
 // what survives sanitizing is worth being explicit about.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { typeBranch, typeChunk, sanitizeBranch, defaultBranch, nextIndex } from '../src/hire.mjs';
+import { typeBranch, typeChunk, sanitizeBranch, defaultBranch, nextIndex, managerKind } from '../src/hire.mjs';
 
 test('typing a branch name keeps what a branch name can hold', () => {
   const typed = (keys, start = '') => [...keys].reduce((acc, k) => typeBranch(acc, k), start);
@@ -101,4 +101,59 @@ test('the menu cursor stays inside the cells that are drawn', () => {
   assert.equal(nextIndex(9, 1, 0, 4, 3), 2);
   assert.equal(nextIndex(0, 1, 0, 4, 0), 0);
   assert.equal(nextIndex(0, 0, 1, 0, 10), 1); // no columns known yet: one at a time
+});
+
+/* ------------------------------------------ hiring a manager without being asked */
+
+const desk = (kind) => ({ id: `w1:${kind}`, name: kind, kind });
+const KINDS = ['amp', 'claude', 'codex', 'gemini'];
+
+test('the manager is whichever kind the floor is already mostly made of', () => {
+  // The whole reason the picker can be skipped. A manager reads a digest and writes three
+  // sentences, so the choice does not matter except in the one way it does: the kind you
+  // already have six of is the kind you are logged into and have paid for.
+  assert.equal(managerKind([desk('codex'), desk('codex'), desk('claude')], KINDS), 'codex');
+  assert.equal(managerKind([desk('gemini')], KINDS), 'gemini');
+});
+
+test('a tie picks the same one every time, because a default that wanders is not one', () => {
+  // `agentKinds` hands this list back sorted, so first-listed is alphabetical and stable. Two
+  // opens of the same floor have to hire the same kind or the feature looks like it is
+  // choosing for itself.
+  const floor = [desk('codex'), desk('gemini')];
+  assert.equal(managerKind(floor, KINDS), managerKind(floor, KINDS));
+  assert.equal(managerKind(floor, KINDS), 'codex');
+  assert.equal(managerKind([...floor].reverse(), KINDS), 'codex', 'and the order the desks came in is not the tiebreak');
+});
+
+test('a kind this machine cannot start is not hired however much of the floor it is', () => {
+  // The floor is whatever herdr reports, and `kinds` is what herdr says it can start, which
+  // is the shorter list. Hiring off the first list would be an `agent.start` that fails for a
+  // reason nobody could see on the card.
+  assert.equal(managerKind([desk('droid'), desk('droid'), desk('claude')], KINDS), 'claude');
+  assert.equal(managerKind([desk('droid'), desk('droid')], KINDS), 'amp', 'and a floor of nothing offerable falls back');
+});
+
+test('an empty floor still gets a manager, and a machine with no agents does not', () => {
+  assert.equal(managerKind([], KINDS), 'amp');
+  assert.equal(managerKind(null, KINDS), 'amp');
+  // Nothing to start means nothing to hire, and the caller has to be able to tell: a string
+  // here would become an `agent.start` for an agent that does not exist.
+  assert.equal(managerKind([desk('claude')], []), null);
+  assert.equal(managerKind([desk('claude')], null), null);
+});
+
+test('junk on the floor is not a candidate', () => {
+  assert.equal(managerKind([null, undefined, {}, { name: 'no kind' }, desk('gemini')], KINDS), 'gemini');
+  assert.equal(managerKind([null, {}], KINDS), 'amp');
+});
+
+test('junk in the manifest list is not a candidate either', () => {
+  // The fallback is the head of the list, so a blank at the front of it is the one place an
+  // empty kind can reach `agent.start`. Asserted off an empty floor for exactly that reason:
+  // with a desk to count, the tally picks a real kind and the blank is never looked at.
+  assert.equal(managerKind([], [null, 'claude']), 'claude');
+  assert.equal(managerKind([], ['', 'claude']), 'claude');
+  assert.equal(managerKind([desk('claude')], [null, '', 'claude']), 'claude');
+  assert.equal(managerKind([], [null, '']), null, 'a list of nothing is a machine that can start nothing');
 });

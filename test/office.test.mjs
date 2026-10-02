@@ -68,7 +68,10 @@ async function openOffice({ agents, cols = 110, rows = 32, args = [], screenText
       },
       'tab.list': { tabs: [{ tab_id: 'w1:t1', label: 'work', number: 1 }] },
       'agent.list': { agents },
-      'agent.read': { read: { text: screenText } },
+      // A function when a test needs the screen to change under the office, which is
+      // the one thing a fixed string cannot do and is exactly the hazard a cursor menu
+      // has: its keys are a walk from where the cursor was when we last looked.
+      'agent.read': { read: { text: typeof screenText === 'function' ? screenText() : screenText } },
       // Off by default: without it every desk has a cwd and no repository, which is
       // what most of these tests want. With it, the office knows the directory is a
       // checkout, which is the gate on running git in it at all.
@@ -453,6 +456,62 @@ test('a standing permission takes two keys, and the first one sends nothing', as
     // differently", so a hardcoded digit would deny the command under a key the
     // footer calls "always allow".
     assert.deepEqual(keys[0].params.keys, ['3'], 'the digit was not the one on the menu');
+  } finally {
+    await office.stop();
+  }
+});
+
+// A menu with no numbers on it, the shape a full-screen agent TUI draws: a cursor on the
+// row enter would take, siblings lined up under it, a rule and a footer saying which keys
+// move. Hand-written, so it is about the shape rather than about anybody's terminal.
+const cursorMenuAt = (row) =>
+  ['  Tool: write_file requires approval', '', '  write_file  src/app.js', '']
+    .concat(['Allow', 'Always allow', 'Deny', 'Always deny'].map((label, i) => (i === row ? `  ❯ ${label}` : `    ${label}`)))
+    .concat([`  ${'─'.repeat(28)}`, '  esc to close · ↑↓ to navigate · ↵ to select · Tab to edit'])
+    .join('\n');
+
+test('a cursor menu is answered by walking the cursor, not by guessing a letter', async () => {
+  // The whole reason n stopped working against a full-screen agent: there is no letter
+  // and no digit on this menu, and esc is what its own footer calls close, so the office
+  // used to cancel the prompt under a key labelled deny.
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], screenText: cursorMenuAt(0) });
+  try {
+    await office.ready('NEEDS YOU');
+    office.type('n');
+    await office.until('the keystroke', () => office.sent('agent.send_keys').length >= 1);
+    await settle();
+
+    const keys = office.sent('agent.send_keys');
+    assert.equal(keys.length, 1, `sent ${keys.length} keystrokes, which is ${keys.length} answers to a prompt`);
+    assert.deepEqual(keys[0].params.keys, ['down', 'down', 'enter'], 'deny was not the walk onto Deny');
+    // Past Always allow and stopping on Deny. Landing one row short is a standing grant.
+    assert.notDeepEqual(keys[0].params.keys, ['down', 'enter']);
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a cursor that moved since the last read is recounted, not replayed', async () => {
+  // These keys are a walk from where the cursor was sitting when the screen was read,
+  // and that was a poll ago on a screen the office does not own. So the walk is worked
+  // out again off a read taken at the moment of sending.
+  let row = 0;
+  const office = await openOffice({ agents: [desk('w1:p1', 'blocked', 0)], screenText: () => cursorMenuAt(row) });
+  try {
+    await office.ready('NEEDS YOU');
+    const readsAtKeypress = office.sent('agent.read').length;
+    row = 2; // somebody at the pane pressed down twice
+    office.type('y');
+    await office.until('the keystroke', () => office.sent('agent.send_keys').length >= 1);
+    await settle();
+
+    const keys = office.sent('agent.send_keys');
+    assert.deepEqual(keys[0].params.keys, ['up', 'up', 'enter'], 'the walk was replayed from a stale cursor');
+    // And it was a fresh read it was counted from: there is one between the keypress and
+    // the keys going out, rather than the office trusting the one it already had.
+    const sendAt = office.asked.findIndex((a) => a.method === 'agent.send_keys');
+    const readsBeforeSend = office.asked.slice(0, sendAt).filter((a) => a.method === 'agent.read').length;
+    assert.ok(readsBeforeSend > readsAtKeypress, 'nothing was re-read before the keys went out');
   } finally {
     await office.stop();
   }

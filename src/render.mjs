@@ -1225,7 +1225,15 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // it takes the wall on a desk: for the next few seconds it is the most
     // informative thing about this row, and it puts itself away again afterwards.
     const news = person.status !== 'blocked' && person.event?.label ? person.event : null;
-    const tail = person.status === 'blocked' ? person.ask || 'needs your OK' : news ? news.label : person.title || person.id;
+    // The last thing it was heard saying, when there is no pane title to use. Some agents
+    // set no title at all, and this column used to fall all the way through to the pane id,
+    // which is a row that tells you where a thing is and nothing about what it is doing.
+    const tail =
+      person.status === 'blocked'
+        ? person.ask || 'needs your OK'
+        : news
+          ? news.label
+          : person.title || person.said || person.id;
     // The tab name says which job this is, so it beats the agent's brand name to
     // the remaining space even though it is drawn after it. Both tests reserve a
     // fixed 16 cells for the tail rather than measuring this row's, so every row

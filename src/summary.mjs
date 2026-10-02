@@ -1,7 +1,7 @@
 // Turning a terminal scrape into "what are you up to?".
 // Agent CLIs draw boxes, spinners and rules; none of that is a status update,
 // so it gets filtered out before we guess at a gist.
-import { sanitize, truncate } from './text.mjs';
+import { sanitize, stripAnsi, truncate } from './text.mjs';
 
 const CHROME_ONLY = /^[\s─━│┃╭╮╯╰┌┐└┘═║╔╗╚╝▀▄█░▒▓▪▫•·◦∙◐◑◒◓✳✶✻*_=~+\-.]+$/u;
 const GUTTER = /^\s*[│┃|>»⏵]\s?/u;
@@ -43,6 +43,20 @@ const UI_NOISE = [
   /\bcontext:\s*\d+%/i,
   /\bauto-compact\b/i,
   /^tip:/i,
+  // A spend-and-clock footer. Not caught by the pipe rule above: this one uses a
+  // single pipe, and one pipe is also how a sentence quotes a shell pipeline.
+  /\bcredits:\s/i,
+  // Slash-command hints, loose on a line rather than in a box: "/sessions to resume",
+  // "/copy to clipboard". Anchored on the slash so a sentence that happens to contain
+  // "to resume" is left alone.
+  /(?:^|\s)\/[a-z][a-z-]*\s+to\s+[a-z]/i,
+  // "To edit cloud configs: https://..." and its relatives. These are instructions to
+  // the person, printed by the CLI at startup, and an agent does not open a line with
+  // them when it is telling you what it did.
+  /^to (?:manage|edit|install|configure|add|remove|change|set)\b/i,
+  // "Using the default agent. Change with /agent" and its relatives: a startup banner
+  // telling you which slash command changes a setting, which no agent says about its work.
+  /\b(?:change|switch) (?:it |that |them )?with \/[a-z]/i,
 ];
 
 // Shell commands and flag soup are what the agent ran, not what it said.
@@ -129,8 +143,108 @@ export function alwaysOption(lines) {
   return null;
 }
 
-export function approvalChoice(lines) {
+// A menu with no numbers on it, answered by moving a cursor onto the row you want:
+//
+//     ❯ Allow
+//       Always allow
+//       Deny
+//       Always deny
+//
+// There is no key that picks a row directly, so an answer is a walk: so many downs or
+// ups from wherever the cursor is sitting now, then enter. That makes these keys
+// perishable in a way a digit never was, and the walk is recomputed off a fresh read
+// immediately before anything is sent (see respond() in office.mjs). The rows are the
+// promise; the cursor is only the mechanics.
+//
+// Read off raw lines rather than cleaned ones, because cleanOutput runs sanitize, which
+// drops the cursor glyph along with the rest of the arrows and dingbats and trims away
+// the indentation. Here those two things are the entire signal: the glyph says where the
+// cursor is and the indent says which rows are the same menu.
+//
+// Only these glyphs, deliberately. `>` and `›` are prompt gutters in half the agent
+// CLIs there are, and a menu is not a thing to be wrong about.
+const CURSOR_ROW = /^(\s*[❯►▸▶→]\s+)(\S.*?)\s*$/u;
+const PLAIN_ROW = /^(\s*)(\S.*?)\s*$/u;
+
+// Short enough to be a button. A wrapped sentence that happens to sit under a cursor
+// is not an option, and a menu whose rows are paragraphs is one we should not answer.
+const OPTION_MAX = 48;
+
+const OPT_YES = /^(?:yes|allow|approve|accept|proceed|continue|ok)\b/i;
+const OPT_NO = /^(?:no|deny|reject|decline|cancel|abort|skip)\b/i;
+const OPT_ALWAYS = /\b(?:always|don'?t ask again|do not ask again|stop asking)\b/i;
+const OPT_HAS_YES = /\b(?:yes|allow|approve|accept|proceed|continue|ok)\b/i;
+
+// The rows of the menu the cursor is in, and which of them it is on. Nothing is
+// interpreted here; this is geometry, and the labels are handed back verbatim.
+export function cursorMenu(text) {
+  const raw = stripAnsi(String(text || '')).split('\n').slice(-40);
+  for (let i = raw.length - 1; i >= 0; i -= 1) {
+    const m = CURSOR_ROW.exec(raw[i]);
+    if (!m || m[2].length > OPTION_MAX) continue;
+    const col = m[1].length;
+    // Siblings are the rows whose label starts in the same column, running without a
+    // gap in both directions. A rule, a blank line or anything indented differently
+    // ends the menu, which is what ends it on the screen too.
+    const options = [{ label: m[2] }];
+    let cursor = 0;
+    const take = (from, step, push) => {
+      for (let j = from; j >= 0 && j < raw.length; j += step) {
+        const row = PLAIN_ROW.exec(raw[j]);
+        if (!row || row[1].length !== col || row[2].length > OPTION_MAX) break;
+        if (CHROME_ONLY.test(row[2])) break;
+        push(row[2]);
+      }
+    };
+    take(i - 1, -1, (label) => {
+      options.unshift({ label });
+      cursor += 1;
+    });
+    take(i + 1, 1, (label) => options.push({ label }));
+    if (options.length < 2) continue;
+    // A numbered menu that happens to also draw a cursor, which is most of them. The
+    // digit is the better answer: it says which row it means without depending on
+    // where the cursor was a moment ago, and the code above already knows how to read it.
+    if (options.some((o) => /^\d+[.)]/.test(o.label))) return null;
+    return { options, cursor };
+  }
+  return null;
+}
+
+// Downs or ups, then enter. Zero of either is just enter, which is the one case where
+// these keys say the same thing as the unknown-shape fallback.
+const walk = (from, to) => [...Array(Math.abs(to - from)).fill(to > from ? 'down' : 'up'), 'enter'];
+
+function cursorChoice(text) {
+  const menu = cursorMenu(text);
+  if (!menu) return null;
+  const at = (pred) => menu.options.findIndex((o) => pred(o.label));
+  const yes = at((label) => OPT_YES.test(label) && !OPT_ALWAYS.test(label));
+  const no = at((label) => OPT_NO.test(label) && !OPT_ALWAYS.test(label));
+  // Both or neither. A walk onto a row we have only half identified is how you grant a
+  // standing permission by accident, so an unreadable menu is left to the fallback,
+  // which sends enter and esc and makes no claim about what they do.
+  if (yes < 0 || no < 0) return null;
+  const always = at((label) => OPT_ALWAYS.test(label) && OPT_HAS_YES.test(label));
+  return {
+    shape: 'cursor',
+    approve: walk(menu.cursor, yes),
+    deny: walk(menu.cursor, no),
+    always: always < 0 ? null : { keys: walk(menu.cursor, always), label: menu.options[always].label },
+    // Carried so the caller can check, at the moment of sending, that this is still the
+    // same menu. Only this shape has it, and only this shape needs it.
+    menu: menu.options.map((o) => o.label),
+  };
+}
+
+export function approvalChoice(lines, raw = '') {
   const tail = (lines || []).slice(-40);
+  // Before the text shapes, because this one is a widget that is on the screen right
+  // now, with labels we have read, where those are regexes against a transcript that
+  // may have scrolled. It holds itself to a high bar: no digits, and a yes and a no it
+  // can name. Anything less and it stands aside.
+  const cursor = cursorChoice(raw);
+  if (cursor) return cursor;
   // Offered alongside whatever shape the prompt turns out to be, because a menu
   // that has this option still has a plain yes at 1 and that is what `y` sends.
   const always = alwaysOption(tail);

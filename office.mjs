@@ -1805,13 +1805,6 @@ const anim = setInterval(() => {
   // minutes and a stale "tests passed" would sit there the whole time.
   roster.expireEvents();
   draw();
-  // Not for the cell size, which never changes, but for whether anybody is looking:
-  // that flips when somebody switches tab, and nothing else in the office would
-  // notice. It sits on the frame rather than the 2s poll because the delay this
-  // controls is one a person sits through, watching a whiteboard that has no chart on
-  // it yet. Throttles itself, swallows its own failures, and is never awaited, so a
-  // server without graphics costs one question once and then stops being asked.
-  graphics?.poll();
 }, ANIM_MS);
 
 const poll = setInterval(refresh, POLL_MS);
@@ -1878,10 +1871,12 @@ async function main() {
     // The office should not be the reason a terminal will not close.
     saveTimer.unref?.();
   }
-  // Asked once before the first frame, so the office either knows the cell size or
-  // knows it is a text-only terminal by the time it has anything to draw. A pane id
-  // is required and comes from the environment herdr started us in, so an office run
-  // by hand outside herdr is simply text, which is correct.
+  // Asked once before the first frame, so the office knows whether it is allowed to
+  // write image bytes by the time it has anything to draw. Once, and never again:
+  // the question is which herdr is on the other end of the socket, and that does not
+  // change while the office is running. A pane id is required and comes from the
+  // environment herdr started us in, so an office run by hand outside herdr is simply
+  // text, which is correct.
   if (GRAPHICS && api && OWN_PANE) {
     graphics = new Graphics(api, OWN_PANE);
     await graphics.probe();

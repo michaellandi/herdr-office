@@ -51,6 +51,11 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
 
+The pixel charts need herdr 0.9.2 or newer, which is the release where apps draw their
+own Kitty graphics and herdr renders them. On an older herdr the office is text, which
+is the whole product; set `HERDR_OFFICE_CELL=WxH` if your cell size is unusual and the
+charts look soft.
+
 Bind it to a key in `~/.config/herdr/config.toml`:
 
 ```toml

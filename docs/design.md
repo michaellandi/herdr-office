@@ -199,9 +199,18 @@ again when a window comes back. `--no-title` switches the whole thing off.
 A terminal cell holds a word, a colour and one of eight block glyphs. That is
 enough to say `worked 3h40m - waiting 12m30s`, and not enough to show you that the
 waiting was a fifth of the session without you doing the division. So where the
-office has a proportion to show, and only there, it draws one in pixels through
-`pane.graphics.set` and lets herdr worry about which escape sequence your terminal
-speaks.
+office has a proportion to show, and only there, it draws one in pixels: the office
+writes standard Kitty graphics to its own stdout and herdr renders them.
+
+That used to go over the socket, as `pane.graphics.set`, with herdr placing the image
+into a rectangle of cells on the office's behalf. herdr 0.9.2 deleted those methods
+and moved the contract to the terminal, where it belongs. It is the better
+arrangement for the same reason the old one was worth using: herdr still owns the
+awkward parts. It parses the images an app emits inside a pane, tracks the cells each
+placement covers, clips to the pane viewport and re-emits to the host terminal, so a
+chart that scrolls, or sits in a pane nobody is looking at, is herdr's problem rather
+than the office's. The office still never sniffs `$TERM` and never negotiates a
+protocol. It writes the one protocol herdr reads.
 
 Two layers, and neither may cover a word. An image occludes the cells underneath it
 instead of compositing with them, so a layer only ever lands on cells that were
@@ -228,15 +237,34 @@ say which one meant waiting. A chart that costs you the legend explaining it is 
 worse whiteboard. Hence the rule above, and hence the coarse cell bar underneath.
 
 It is opt-out rather than opt-in because there is nothing here for a default to
-break. The pane is asked once, with `pane.graphics.info`, whether it can draw at
-all; a terminal that says no is never asked again and the text renderer is already
-correct. An image occludes the cells under it, so the renderer volunteers the
+break. An image occludes the cells under it, so the renderer volunteers the
 rectangles it is willing to lose and graphics may not touch anything else. A
 picture whose numbers moved but whose pixels would not is never sent, because the
 floor repaints three times a second and the charts do not. Three failures in a row
 switch the whole thing off for the rest of the run, and quitting takes the pixels
 down with it. `--no-graphics` is for taste, not for safety: some people want a
 terminal to be only text.
+
+The one question asked before the first frame is which herdr is on the other end of
+the socket, and it is asked because stdout is also the floor. A herdr older than
+0.9.2 has no renderer for an image sequence, and it does not quietly ignore one: it
+passes pane output through, so a few kilobytes of base64 lands across somebody's
+desks as text. Garbage on the floor is worse than a plain floor, so the office writes
+no image bytes at all unless the version says yes. The version comes off
+`session.snapshot`, which the office already calls, rather than from a new method or
+from the protocol number sitting next to it. The protocol number looks like the
+tidier gate and is not one: a 0.9.0 server and a 0.9.3 server both report protocol
+22, across the release that removed the graphics methods. The version string is the
+only field that separates them, and it is honest about the case that actually bites,
+which is a herdr binary upgraded under a session still running the old server.
+
+What was lost with the socket method is the cell size. `pane.graphics.info` reported
+`cell_width_px` exactly, and nothing in the schema reports pixel metrics now, so the
+office assumes one and takes `HERDR_OFFICE_CELL=WxH` from anybody who wants it
+exact. Assuming is survivable for one reason worth being clear about: the placement
+is handed to herdr in cells, so the rectangle a chart lands on is right whatever the
+assumption says. All it decides is how many pixels get painted into that rectangle,
+which is sharpness, not position.
 
 ## Finding one desk in twenty
 

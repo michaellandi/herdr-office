@@ -346,7 +346,7 @@ test('a full-screen agent\'s footers are chrome, not the last thing it said', ()
   // getting through here puts a spend counter in the column that is meant to say what
   // the desk is doing. Each of these is a shape a TUI paints every frame.
   const chrome = [
-    'Credits: turn 1.51 • session 5.90 | Time: 1m 16s',
+    'Credits: turn 0.01 • session 0.02 | Time: 0m 03s',
     '/sessions to resume · /copy to clipboard',
     'To edit cloud configs: https://example.com/agents',
   ];

@@ -4,9 +4,31 @@
 // shapes the agents named in docs/design.md actually draw.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanOutput, findAsk, bubbleText, approvalChoice, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';
+import { cleanOutput, findAsk, bubbleText, approvalChoice, cursorMenu, alwaysOption, summarize, describeDetection } from '../src/summary.mjs';
 
 const screen = (s) => cleanOutput(s.trimEnd());
+
+// Both halves of a read, which is what the office hands approvalChoice: the cleaned
+// lines everything else works from, and the raw screen, because a cursor menu is drawn
+// in the indentation and the cursor glyph that cleaning takes out.
+const both = (s) => [cleanOutput(s.trimEnd()), s.trimEnd()];
+
+// A menu with no numbers on it, of the kind a full-screen agent TUI draws: a cursor on
+// the row that enter would take, the rest of the rows lined up under it, then a rule and
+// a footer saying which keys move. Written out here rather than captured, so the fixture
+// is about the shape and not about anybody's terminal.
+const CURSOR_MENU = `
+  Tool: write_file requires approval
+
+  write_file  src/app.js
+
+  ❯ Allow
+    Always allow
+    Deny
+    Always deny
+  ${'─'.repeat(28)}
+  esc to close · ↑↓ to navigate ↵ to select · Tab to edit
+`;
 
 test('a literal y/n prompt is answered with letters', () => {
   const s = screen(`
@@ -112,6 +134,73 @@ Which file should I edit?
   assert.deepEqual(approvalChoice(s), { shape: 'menu?', approve: ['enter'], deny: ['esc'], always: null });
 });
 
+test('a menu with no numbers on it is answered by walking the cursor', () => {
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.equal(choice.shape, 'cursor');
+  // The cursor is already on Allow, so yes is just enter. No is two rows down, and
+  // esc on this menu is what the footer calls close: it cancels, which is not a deny.
+  assert.deepEqual(choice.approve, ['enter']);
+  assert.deepEqual(choice.deny, ['down', 'down', 'enter']);
+});
+
+test('the walk is counted from wherever the cursor is actually sitting', () => {
+  // The whole hazard of this shape. The same menu, one row further down, and every
+  // answer on it is a different number of keystrokes.
+  const moved = CURSOR_MENU.replace('  ❯ Allow', '    Allow').replace('    Deny', '  ❯ Deny');
+  const choice = approvalChoice(...both(moved));
+  assert.deepEqual(choice.approve, ['up', 'up', 'enter']);
+  assert.deepEqual(choice.deny, ['enter']);
+});
+
+test('a cursor menu stops at the rule, so the footer is not an option', () => {
+  const menu = cursorMenu(CURSOR_MENU.trimEnd());
+  assert.deepEqual(menu.options.map((o) => o.label), ['Allow', 'Always allow', 'Deny', 'Always deny']);
+  assert.equal(menu.cursor, 0);
+});
+
+test('"always allow" on a cursor menu is offered separately and never as the yes', () => {
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.deepEqual(choice.approve, ['enter'], 'approve must be the plain allow');
+  assert.deepEqual(choice.always, { keys: ['down', 'enter'], label: 'Always allow' });
+});
+
+test('"always deny" is not mistaken for a standing permission', () => {
+  // It is on the same menu, one row below the real one, and it is a deny. Arming it
+  // under a key labelled "always allow" would refuse the thing the user just allowed.
+  const choice = approvalChoice(...both(CURSOR_MENU));
+  assert.notEqual(choice.always.label, 'Always deny');
+  assert.deepEqual(choice.deny, ['down', 'down', 'enter'], 'deny must be the plain one too');
+});
+
+test('a numbered menu that also draws a cursor is still answered with the digit', () => {
+  // Most menus are both. The digit says which row it means without depending on where
+  // the cursor was when the screen was last read, so it wins.
+  const s = `
+Allow npm install?
+❯ 1. Yes
+  2. No
+`;
+  assert.deepEqual(approvalChoice(...both(s)), { shape: 'menu', approve: ['1'], deny: ['esc'], always: null });
+});
+
+test('a cursor menu with no yes and no no in it is left to the fallback', () => {
+  // A walk onto a row we have only half identified is how a standing permission gets
+  // granted by accident, so an unreadable menu gets enter and esc and no claim.
+  const s = `
+Which file should I edit?
+  ❯ src/render.mjs
+    src/office.mjs
+`;
+  assert.equal(approvalChoice(...both(s)).shape, 'unknown');
+});
+
+test('a cursor menu cannot be seen in the cleaned lines alone', () => {
+  // Not a quirk to work around: it is why approvalChoice takes the raw screen as well,
+  // and if this ever starts passing the second argument has stopped being necessary.
+  assert.equal(approvalChoice(screen(CURSOR_MENU)).shape, 'unknown');
+  assert.equal(cursorMenu(screen(CURSOR_MENU).join('\n')), null);
+});
+
 test('an unrecognised screen falls back to enter and esc, and says so', () => {
   const s = screen(`
 Thinking very hard about your request
@@ -215,6 +304,27 @@ test('the said lines are labelled once and line up under it', () => {
     said.slice(-3),
   );
 });
+
+test('a full-screen agent\'s footers are chrome, not something it said', () => {
+  // What a full-screen TUI paints every frame, and what the summary must never read as
+  // a status update. Each of these needed a rule of its own. The credits footer uses a
+  // single pipe, and one pipe is also how a sentence quotes a shell pipeline, so the
+  // existing pipe rule could not simply be widened to catch it.
+  const chrome = [
+    'Credits: turn 0.01 \u2022 session 0.02 | Time: 0m 03s',
+    '/sessions to resume \u00b7 /copy to clipboard',
+    'To edit cloud configs: https://example.com/agents',
+    'Using the default agent. Change with /agent',
+  ];
+  const real = 'I rewrote the parser and the whole suite is passing again';
+  const out = summarize({ status: 'working' }, [...chrome, real]);
+  for (const line of chrome) {
+    assert.ok(!out.some((l) => l.includes(line)), `quoted as if an agent had said it: ${line}`);
+  }
+  // And the thing they are drawn around still gets through.
+  assert.ok(out.some((l) => l.includes(real)), 'the real sentence was filtered out too');
+});
+
 
 test('summarize says something even about an empty screen', () => {
   assert.deepEqual(summarize(null, []), ['nothing to report']);

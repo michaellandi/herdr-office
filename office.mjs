@@ -515,7 +515,9 @@ async function refreshScreens() {
       }
       if (asking.has(person.id) && text != null) {
         const lines = cleanOutput(text);
-        roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines));
+        // Raw as well as cleaned: a cursor menu is read off the indentation and the
+        // cursor glyph, and cleanOutput takes both of those out.
+        roster.setAsk(person.id, bubbleText(lines), approvalChoice(lines, text));
       }
       if (HEAD) readHead(person, text);
     }),
@@ -819,19 +821,26 @@ function scheduleRefresh() {
 // closes the connection after every answer, whatever was asked. The try/catch
 // stays because a read can still fail for ordinary reasons and scrollback is
 // genuinely optional.
+//
+// Both the cleaned lines and the raw text come back. Everything on the card reads the
+// cleaned ones; approvalChoice also wants the raw screen, because a cursor menu lives in
+// the indentation and the cursor glyph that cleaning removes. The raw text is always the
+// visible screen even when the lines came from scrollback: a menu you can answer is on
+// the screen by definition.
 async function readDesk(id, person) {
   const visible = await api.request('agent.read', { target: id, source: 'visible' });
-  const screen = cleanOutput(visible?.read?.text ?? '');
+  const raw = visible?.read?.text ?? '';
+  const screen = cleanOutput(raw);
   if (person && (person.status === 'idle' || person.status === 'done')) {
     try {
       const history = await api.request('agent.read', { target: id, source: 'recent_unwrapped', lines: 80 });
       const lines = cleanOutput(history?.read?.text ?? '');
-      if (lines.length > screen.length) return lines;
+      if (lines.length > screen.length) return { lines, raw };
     } catch {
       // Fall through to the screen snapshot; scrollback is optional.
     }
   }
-  return screen;
+  return { lines: screen, raw };
 }
 
 // agent.explain returns a huge rule-evaluation dump, tens of kilobytes for one
@@ -903,7 +912,8 @@ async function loadDetail(id, { force = false } = {}) {
     return;
   }
   try {
-    const [output, detection] = await Promise.all([readDesk(id, person), explainDesk(id)]);
+    const [screen, detection] = await Promise.all([readDesk(id, person), explainDesk(id)]);
+    const output = screen.lines;
     detail = {
       id,
       loading: false,
@@ -911,7 +921,7 @@ async function loadDetail(id, { force = false } = {}) {
       output,
       summary: summarize(person, output),
       detection,
-      choice: approvalChoice(output),
+      choice: approvalChoice(output, screen.raw),
     };
   } catch (err) {
     detail = {
@@ -1008,6 +1018,26 @@ function choiceFor(person) {
   return (detail?.id === person.id ? detail.choice : null) || person.choice;
 }
 
+// The same question asked again, a moment before the keys go out.
+//
+// Only cursor menus need this, and they need it because their keys are a walk from
+// where the cursor was sitting when the screen was last read, which may have been
+// seconds ago and is not a thing the office controls. So the walk is recomputed off a
+// read taken now, and it is sent only if the rows are still the rows that were on
+// offer: the labels are the promise, the cursor position is only the mechanics.
+//
+// Null means do not send. That covers both a menu that has changed and a screen that
+// would not answer, which are the same thing from here: we no longer know what these
+// keys would do.
+async function freshChoice(person, stale) {
+  if (!stale?.menu) return stale;
+  const res = await api.request('agent.read', { target: person.id, source: 'visible' });
+  const text = res?.read?.text ?? '';
+  const now = approvalChoice(cleanOutput(text), text);
+  if (!now?.menu || now.menu.join('\n') !== stale.menu.join('\n')) return null;
+  return now;
+}
+
 function armTrust() {
   const person = roster.find(selectedId);
   if (!person) return;
@@ -1015,7 +1045,10 @@ function armTrust() {
   const choice = choiceFor(person);
   if (!choice) return refuse(`still reading ${person.name}'s screen, try again in a second`);
   if (!choice.always) return refuse(`${person.name}'s prompt does not offer a "don't ask again"`);
-  trust = { id: person.id, name: person.name, keys: choice.always.keys, label: choice.always.label };
+  // The menu comes with it when there is one. For a digit the keys are the whole promise
+  // and are checked as they are; for a walk they are recomputed at the last moment, and
+  // the rows are what gets checked instead.
+  trust = { id: person.id, name: person.name, keys: choice.always.keys, label: choice.always.label, menu: choice.menu || null };
   // The card comes open with it, so the menu this digit is aimed at is on the
   // screen before the confirm rather than being taken on trust.
   if (detail?.id !== person.id) loadDetail(person.id, { force: true });
@@ -1033,19 +1066,31 @@ async function confirmTrust() {
     trust = null;
     return refuse(`${armed.name} is not waiting on you any more`);
   }
-  const now = choiceFor(person)?.always;
-  if (!now || now.label !== armed.label || now.keys.join() !== armed.keys.join()) {
+  let live = choiceFor(person);
+  if (armed.menu && !DEMO) {
+    try {
+      live = await freshChoice(person, armed);
+    } catch {
+      live = null;
+    }
+  }
+  const now = live?.always;
+  // A cursor that has moved is allowed, because freshChoice has already established
+  // that it moved inside the same menu and has recounted the steps. A digit that has
+  // moved is not: there is nothing to recount, so the digit must still be the digit.
+  if (!now || now.label !== armed.label || (!armed.menu && now.keys.join() !== armed.keys.join())) {
     trust = null;
     return refuse(`${armed.name}'s prompt changed, so nothing was sent`);
   }
+  const keys = armed.menu ? now.keys : armed.keys;
   trust = null;
   if (DEMO) {
-    note(`demo mode: would send ${armed.keys.join(' ')} to ${armed.name}`);
+    note(`demo mode: would send ${keys.join(' ')} to ${armed.name}`);
     draw();
     return;
   }
   try {
-    await api.request('agent.send_keys', { target: armed.id, keys: armed.keys });
+    await api.request('agent.send_keys', { target: armed.id, keys });
     clocks.answer();
     note(`granted: ${truncateNote(armed.label)}`);
     setTimeout(() => refresh(), 400);
@@ -1069,11 +1114,20 @@ async function respond(kind) {
     note(`still reading ${person.name}'s screen, try again in a second`);
     return;
   }
-  const keys = kind === 'approve' ? choice.approve : choice.deny;
   if (DEMO) {
-    note(`demo mode: would send ${keys.join(' ')} to ${person.name}`);
+    note(`demo mode: would send ${(kind === 'approve' ? choice.approve : choice.deny).join(' ')} to ${person.name}`);
     return;
   }
+  let live = choice;
+  if (choice.menu) {
+    try {
+      live = await freshChoice(person, choice);
+    } catch {
+      live = null;
+    }
+    if (!live) return refuse(`could not confirm ${person.name}'s prompt, so nothing was sent`);
+  }
+  const keys = kind === 'approve' ? live.approve : live.deny;
   try {
     await api.request('agent.send_keys', { target: person.id, keys });
     // Counted only once the keys are actually away, so the whiteboard's tally is

@@ -50,6 +50,7 @@ No dependencies and no build step: it is plain Node (18+) talking to the Herdr s
 | `node office.mjs --no-context` | Never read anybody's screen for a context gauge, so no desk shows how full it is |
 | `node office.mjs --follow` | Start in shepherd mode, standing at whoever needs you |
 | `node office.mjs --zoom=list` | Open as the compact list (or `--zoom=cubicle` for one desk) |
+| `node office.mjs --manager=<pane id>` | Make that pane the office manager without renaming its tab |
 
 The pixel charts need herdr 0.9.2 or newer, which is the release where apps draw their
 own Kitty graphics and herdr renders them. On an older herdr the office is text, which
@@ -80,6 +81,8 @@ would rather not.
 | `w` / `t` / `e` (hiring) | into a new worktree / back to a plain tab / name the branch |
 | `a` | give the selected person a job |
 | `A` | standup: give the same job to everybody who is free |
+| `M` | hire an office manager: opens a tab called `office-manager` and starts an agent in it |
+| `B` | brief the manager: confirm, and the office's prioritized summary is sent to that agent |
 | `^w` / `^u` (typing) | delete the last word / clear the field |
 | `y` / click `[y]` | approve what they are stuck on |
 | `n` / click `[n]` | deny it |
@@ -121,6 +124,24 @@ it was entered, so the first sighting of an agent starts the clock. Reopening th
 does not restart it, though. Each desk's clock is kept for the day and picked up again
 wherever herdr can show the desk has not changed state in between, and one that did
 change while the pane was shut goes back to `~` ([the day book](docs/design.md#the-day-book)).
+
+## The office manager
+
+One desk can be the **office manager**: a real agent in a real pane, whose job is the
+rest of the floor. Any agent in a tab called `office-manager` is the manager (`M` hires
+one, or rename a tab, or pass `--manager=<pane id>`). There is only ever one, and it is
+**always the first card**, wherever its pane actually sits.
+
+Where a desk has a person and a monitor, the manager's card has a clipboard: a
+headline count, then everybody else in the order they need you. Raised hands first
+(longest wait on top), then active work (merge conflicts and nearly-full context
+windows ahead of the rest), then finished work, then idle. `m` sends that same list to
+the agent as a prompt after an enter to confirm, so you can ask it what to look at
+first. Open its desk to read the answer. The brief never includes the text off
+anybody's screen: it says a desk is waiting on an approval, but not what the approval
+is. The manager is left out of standups.
+
+`node office.mjs --demo` has one, seated last in the first room and drawn first.
 
 ## What a desk tells you
 
@@ -168,7 +189,7 @@ is built around:
   context parser emits a number and a model name and nothing else, and git returns
   counts rather than paths. This pane gets screen-shared, so a truncated secret is
   treated as a secret and dropped rather than trimmed.
-- **`y`, `n`, `s`, `Y`, `a` and `A` send real input to real agents.** They are the only
+- **`y`, `n`, `s`, `Y`, `a`, `A` and `m` send real input to real agents.** They are the only
   things here that cannot be taken back, and they are the most guarded part of the
   plugin. `--demo` prints what it would have sent instead.
 - **Every line is exactly as wide as the pane.** One cell too many wraps and shoves the

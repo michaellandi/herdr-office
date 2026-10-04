@@ -118,9 +118,12 @@ const REACHABLE = new Set(['idle', 'done', 'unknown']);
 
 export function broadcastTargets(people) {
   const list = Array.isArray(people) ? people : [];
-  const to = list.filter((p) => REACHABLE.has(p?.status));
+  // The manager is not on the floor for jobs: a standup is work for the people
+  // doing the work, and the manager gets its own brief with `B`.
+  const to = list.filter((p) => REACHABLE.has(p?.status) && !p?.manager);
   const skipped = { blocked: 0, working: 0 };
   for (const p of list) {
+    if (p?.manager) continue;
     if (p?.status === 'blocked') skipped.blocked += 1;
     else if (p?.status === 'working') skipped.working += 1;
   }

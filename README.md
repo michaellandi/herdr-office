@@ -143,6 +143,11 @@ is. The manager is left out of standups.
 
 `node office.mjs --demo` has one, seated last in the first room and drawn first.
 
+`node --test test/manager.test.mjs` runs the manager's tests on their own (the whole
+suite is under [Hacking on it](#hacking-on-it)). The GIF at the top predates the
+manager and has not been re-recorded, because `vhs` and `ffmpeg` were not available
+where this was built, so run `--demo` to see the manager's card.
+
 ## What a desk tells you
 
 One line each, with the reasoning behind it in

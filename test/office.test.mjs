@@ -687,3 +687,37 @@ test('an office opening for the second time today picks the clocks back up', asy
     await office.stop();
   }
 });
+
+test('m briefs the manager once, after an enter, and esc sends nothing', async () => {
+  // Pinned by id, since this fake herdr has one tab and it is not called office-manager.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'idle', 2)],
+    args: ['--manager=w1:p3'],
+    screenText: 'Do you want me to apply the patch? (y/n)',
+  });
+  try {
+    await office.ready('Manager');
+    office.type('m');
+    await office.until('the confirm', () => office.onScreen('enter sends the whole office brief'));
+    office.type('\x1b');
+    await settle();
+    assert.deepEqual(office.sent('agent.prompt'), [], 'esc on a brief sent it anyway');
+
+    office.type('m');
+    await office.until('the confirm again', () => office.onScreen('brief · Manager'));
+    office.type('\r');
+    await office.until('the brief', () => office.sent('agent.prompt').length >= 1);
+    await settle();
+    const prompts = office.sent('agent.prompt');
+    assert.equal(prompts.length, 1, 'the brief went more than once');
+    assert.equal(prompts[0].params.target, 'w1:p3', 'the brief went to somebody other than the manager');
+    const text = prompts[0].params.text;
+    assert.ok(text.includes('office manager') && text.includes('1 needs you'), text);
+    // One line on the wire, and nothing read off the stuck desk's screen.
+    assert.ok(!text.includes('\n'), 'the brief went out as more than one line');
+    assert.ok(!text.includes('apply the patch'), 'an ask went into the brief');
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'a brief typed keys at somebody');
+  } finally {
+    await office.stop();
+  }
+});

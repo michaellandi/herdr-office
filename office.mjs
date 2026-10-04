@@ -12,6 +12,7 @@
 //   node office.mjs --no-graphics  text only, no pixel charts
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
+//   node office.mjs --manager=<pane id>  make that pane the office manager
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster } from './src/roster.mjs';
@@ -36,6 +37,7 @@ import { readDirt } from './src/dirt.mjs';
 import { parseGauge, compactionNews } from './src/head.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
+import { MANAGER_TAB, officeBrief, briefingPrompt } from './src/manager.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
@@ -75,6 +77,9 @@ const FOLLOW = argv.has('--follow');
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
 // action's arguments should not leave somebody with a blank pane and no explanation.
 const ZOOM_ARG = ([...argv].find((a) => a.startsWith('--zoom=')) || '').slice(7);
+// --manager names the manager's pane outright, for an agent whose tab is called
+// something else and should stay that way. Without it, the `office-manager` tab is.
+const MANAGER_ARG = ([...argv].find((a) => a.startsWith('--manager=')) || '').slice(10);
 // Which pane the office itself is in, when herdr started it. Used for one thing:
 // knowing whether you are looking at the floor right now, so a nudge about a hand
 // you can already see is never sent.
@@ -171,6 +176,7 @@ const GLOBAL_EVENTS = [
 ];
 
 const roster = new Roster();
+roster.managerPin = MANAGER_ARG;
 // Where the office's time went. Fed from the same status changes the roster is
 // already tracking, so it costs nothing on the wire.
 const clocks = new Clocks();
@@ -337,6 +343,9 @@ function view() {
     // Room colours come from the WHOLE roster rather than the filtered floor, so a
     // filter narrows who is on screen without repainting the walls behind them.
     rooms: assignRooms(roster.people),
+    // The manager's clipboard reads the WHOLE roster too: a filter is about what you
+    // are looking at, and the manager's job is everything you are not.
+    brief: officeBrief(roster.people),
     // Plain numbers, read once per frame, so the renderer stays a pure function of
     // its view rather than holding a clock it can ask questions of.
     shift: detail ? clocks.desk(detail.id) : null,
@@ -1226,13 +1235,15 @@ async function agentKinds() {
     .sort();
 }
 
-async function openHire() {
+async function openHire({ manager = false } = {}) {
   if (hire) return;
-  selectedId = HIRE_ID;
+  // One manager, because the manager is the first card and two first cards is none.
+  if (manager && roster.manager()) return refuse(`${roster.manager().name} is already running the office: m briefs them`);
+  if (!manager) selectedId = HIRE_ID;
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
-  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
+  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false, manager };
   prevLines = [];
   draw();
   try {
@@ -1270,7 +1281,7 @@ function moveHire(dx, dy) {
 // away, because a worktree with no branch is not a thing you can create, and a
 // name nobody has to type is a name nobody has to think about.
 function setWorktree(on) {
-  if (!hire || hire.pending) return;
+  if (!hire || hire.pending || hire.manager) return;
   if (on === hire.worktree) return;
   const branch = hire.named ? hire.branch : defaultBranch(hire.kinds[hire.index]);
   hire = { ...hire, worktree: on, branch, editing: false };
@@ -1293,14 +1304,17 @@ function editBranch(on) {
 // polling and animating while somebody is being shown to their desk.
 async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
-  const wantsWorktree = hire.worktree;
+  const wantsWorktree = hire.worktree && !hire.manager;
+  // A manager is an ordinary agent in an ordinary tab; the tab's name is the whole of
+  // what makes it the manager, so it is set here and nowhere else.
+  const label = hire.manager ? MANAGER_TAB : kind;
   // Sanitized once, here, at the last possible moment: what goes on the wire is a
   // name git will accept, and the field keeps whatever was typed into it.
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
   if (DEMO) {
     note(wantsWorktree
       ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
-      : `demo mode: would open a tab and start ${kind} in it`);
+      : `demo mode: would open a tab called ${label} and start ${kind} in it`);
     return;
   }
   hire = { ...hire, pending: kind, error: null, editing: false };
@@ -1321,13 +1335,14 @@ async function startHire(kind) {
     // surfaces as an error here instead of being waved through.
     const made = wantsWorktree
       ? await side.request('worktree.create', { cwd, branch, label: branch, focus: false }, 30000)
-      : await side.request('tab.create', { cwd, label: kind, focus: false });
+      : await side.request('tab.create', { cwd, label, focus: false });
     const paneId = made?.root_pane?.pane_id;
     if (!paneId) throw new Error(`herdr made ${wantsWorktree ? 'a worktree' : 'a tab'} with no pane in it`);
     await side.request('agent.start', { name: kind, kind, pane_id: paneId, timeout_ms: HIRE_TIMEOUT_MS }, HIRE_TIMEOUT_MS + 5000);
+    const managing = hire?.manager;
     hire = null;
     selectedId = paneId;
-    note(wantsWorktree ? `${kind} is on ${branch} now` : `${kind} is at a desk now`);
+    note(managing ? `${kind} is running the office now: m briefs them` : wantsWorktree ? `${kind} is on ${branch} now` : `${kind} is at a desk now`);
     prevLines = [];
     await refresh();
   } catch (err) {
@@ -1409,6 +1424,39 @@ function openCompose(scope) {
   draw();
 }
 
+// Briefing the manager: the office's own reading of the room, handed to the agent
+// whose job it is to read it. Built by src/manager.mjs from the same list the
+// clipboard draws, so the card and the agent cannot disagree about who comes first.
+//
+// It goes through the assign field rather than around it, straight to the confirm
+// step, because it is still a prompt typed into a real agent: nothing goes until an
+// enter pressed with the brief and its recipient on the screen.
+function openBrief() {
+  if (compose) return;
+  const boss = roster.manager();
+  if (!boss) return refuse(`no manager yet: M hires one, or name a tab ${MANAGER_TAB}`);
+  if (boss.status === 'blocked') return refuse(`${boss.name} has a hand up: answer that first`);
+  // One line on the wire. Some agents submit on a newline, and a brief that went in
+  // as six half-prompts would be worse than none.
+  const text = briefingPrompt(roster.people, { managerId: boss.id }).replace(/\s*\n\s*/g, ' ').trim();
+  hire = null;
+  detail = null;
+  compose = {
+    scope: 'brief',
+    id: boss.id,
+    name: boss.name,
+    ask: null,
+    text,
+    to: [boss],
+    skipped: { blocked: 0, working: 0 },
+    confirm: true,
+    sending: false,
+    error: null,
+  };
+  prevLines = [];
+  draw();
+}
+
 function closeCompose() {
   if (!compose) return;
   compose = null;
@@ -1425,7 +1473,9 @@ function closeCompose() {
 // rejected promise.
 async function sendCompose() {
   if (!compose || compose.sending) return;
-  const text = cleanPrompt(compose.text);
+  // A brief is the office's own text, longer than anything typed into the field is
+  // allowed to be, and already sanitized line by line by the roster it came from.
+  const text = compose.scope === 'brief' ? compose.text : cleanPrompt(compose.text);
   if (!text) {
     // A blank prompt is a keystroke sent to an agent for no reason.
     compose = { ...compose, error: 'nothing typed yet' };
@@ -1441,13 +1491,16 @@ async function sendCompose() {
     return;
   }
   if (DEMO) {
-    note(`demo mode: would send "${truncateNote(text)}" to ${to.map((p) => p.name).join(', ')}`);
+    note(compose.scope === 'brief'
+      ? `demo mode: would brief ${to[0].name} on ${roster.people.length - 1} desks`
+      : `demo mode: would send "${truncateNote(text)}" to ${to.map((p) => p.name).join(', ')}`);
     compose = null;
     prevLines = [];
     draw();
     return;
   }
   const replying = compose.scope === 'reply';
+  const briefing = compose.scope === 'brief';
   compose = { ...compose, sending: true, confirm: false, error: null };
   prevLines = [];
   draw();
@@ -1476,6 +1529,7 @@ async function sendCompose() {
   compose = null;
   if (!sent) note(replying ? `could not answer that: ${failed.join(', ')}` : `could not assign that: ${failed.join(', ')}`);
   else if (failed.length) note(`sent to ${sent} of ${to.length}; not ${failed.join(', ')}`);
+  else if (briefing) note(`${to[0].name} has the brief`);
   else if (replying) {
     note(`answered ${to[0].name}`);
     clocks.answer();
@@ -1583,7 +1637,8 @@ function onInput(chunk) {
     if (trust) return cancelTrust();
     // Backing out of a confirm goes back to the text rather than throwing it away,
     // because "wait, who does this reach" should not cost you the paragraph.
-    if (compose?.confirm) {
+    // A brief was never typed, so there is no text to go back to: esc drops it.
+    if (compose?.confirm && compose.scope !== 'brief') {
       compose = { ...compose, confirm: false };
       prevLines = [];
       draw();
@@ -1697,6 +1752,8 @@ function onInput(chunk) {
   if (str === '+') return openHire();
   if (str === 'a') return openCompose('one');
   if (str === 'A') return openCompose('all');
+  if (str === 'm') return openBrief();
+  if (str === 'M') return openHire({ manager: true });
   if (str === '\x1b[A' || str === 'k') move(0, -1);
   else if (str === '\x1b[B' || str === 'j') move(0, 1);
   else if (str === '\x1b[D' || str === 'h') move(-1, 0);
@@ -1734,6 +1791,9 @@ function onInput(chunk) {
 
 let demoTick = 0;
 const DEMO_TABS = ['socket-client', 'login-flow', 'flaky-tests', 'deps', 'office-plugin', 'triage', 'null-hunt'];
+// The manager sits in the last pane of the first room on purpose, so the demo shows
+// it being brought to the front of the floor rather than happening to start there.
+const DEMO_MANAGER = { pane_id: 'w1:p9', agent: 'claude', tab: `w1:t${DEMO_TABS.length + 1}` };
 // Three workspaces, because one was hiding the thing rooms exist to show. Real
 // sessions spread across a few, and a demo floor where every desk is in the same
 // one could never have caught a wall painted the wrong colour.
@@ -1755,8 +1815,24 @@ function demoAgents() {
     ['w3:p1', 'gemini', 'triage the bug queue'],
     ['w3:p2', 'kiro', 'chase a null pointer'],
   ];
-  roster.setTabs(desks.map(([pane_id], i) => ({ tab_id: `${pane_id.split(':')[0]}:t${i + 1}`, label: DEMO_TABS[i], number: i + 1 })));
-  return desks.map(([pane_id, agent, title], i) => ({
+  roster.setTabs([
+    ...desks.map(([pane_id], i) => ({ tab_id: `${pane_id.split(':')[0]}:t${i + 1}`, label: DEMO_TABS[i], number: i + 1 })),
+    { tab_id: DEMO_MANAGER.tab, label: MANAGER_TAB, number: desks.length + 1 },
+  ]);
+  const manager = {
+    pane_id: DEMO_MANAGER.pane_id,
+    agent: DEMO_MANAGER.agent,
+    // Reading the room, which is a manager's steady state. It does not rotate with
+    // the others: a demo manager that kept raising its hand would hide the clipboard.
+    agent_status: 'working',
+    workspace_id: 'w1',
+    tab_id: DEMO_MANAGER.tab,
+    cwd: '/Users/you/Desktop/projects/herdr-office',
+    terminal_title_stripped: 'running the office',
+    focused: false,
+    state_change_seq: 1,
+  };
+  return [...desks.map(([pane_id, agent, title], i) => ({
     pane_id,
     agent,
     // Room, repo and checkout agree with each other, because a demo where the card
@@ -1783,7 +1859,7 @@ function demoAgents() {
     terminal_title_stripped: title,
     focused: i === 0,
     state_change_seq: 1,
-  }));
+  })), manager];
 }
 
 // The parts of a desk that come from a follow-up call rather than agent.list: the
@@ -1834,7 +1910,9 @@ const DEMO_HEADS = [
 const DEMO_OUTPUT = ['42 passed, 0 failed', '1 failed, 41 passed', 'CONFLICT (content): merge conflict in src/render.mjs', '3 files changed, 41 insertions(+)'];
 
 function demoExtras() {
-  roster.people.forEach((person, i) => {
+  // Without the manager, so every other desk keeps the extras it had before there was
+  // one: the manager's card is its clipboard, and it has no monitor to put a command on.
+  roster.people.filter((p) => !p.manager).forEach((person, i) => {
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });

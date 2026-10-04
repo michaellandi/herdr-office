@@ -250,6 +250,8 @@ export const HIRES = [
   ['it went wrong', { kinds: KINDS, index: 0, pending: null, error: 'could not hire claude: timed out waiting for it to come up. The tab it opened is still there.' }],
   // The worktree half: a branch name, one being typed, an empty field mid-edit,
   // and a name far longer than the row it sits in.
+  // A manager hire: a plain tab, so no where-row and no branch.
+  ['hiring a manager', { kinds: KINDS, index: 0, pending: null, error: null, manager: true }],
   ['into a worktree', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: 'office/claude-0914-1502' }],
   ['naming the branch', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: 'office/claude-0914-1502', editing: true }],
   ['an empty branch field', { kinds: KINDS, index: 0, pending: null, error: null, worktree: true, branch: '', editing: true }],
@@ -283,6 +285,8 @@ export const COMPOSES = [
   ['a broadcast to nobody', { scope: 'all', id: null, name: null, text: 'standup', to: [], skipped: { blocked: 3, working: 2 }, confirm: false, sending: false, error: null }],
   ['confirming a broadcast', { scope: 'all', id: null, name: null, text: 'standup: what are you on?', to: SOME, skipped: { blocked: 2, working: 1 }, confirm: true, sending: false, error: null }],
   ['confirming to a crowd', { scope: 'all', id: null, name: null, text: LONG, to: CROWD, skipped: { blocked: 0, working: 0 }, confirm: true, sending: false, error: null }],
+  // The brief is the office's own text, far past what the field takes, read from the top.
+  ['briefing the manager', { scope: 'brief', id: 'w1:p9', name: 'Manager', text: `${LONG} ${LONG} ${LONG}`, to: [{ id: 'w1:p9', name: 'Manager', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: true, sending: false, error: null }],
   ['sending', { scope: 'one', id: 'w1:p3', name: 'Cass', text: 'rebase onto main', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: true, error: null }],
   ['nothing typed yet', { scope: 'one', id: 'w1:p3', name: 'Cass', text: '', to: [SOME[0]], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: 'nothing typed yet' }],
   ['a very long name', { scope: 'one', id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', text: 'go', to: [{ id: 'w1:p3', name: 'a-really-long-agent-name-nobody-would-pick', status: 'idle' }], skipped: { blocked: 0, working: 0 }, confirm: false, sending: false, error: null }],

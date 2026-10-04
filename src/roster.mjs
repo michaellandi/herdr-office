@@ -2,6 +2,7 @@
 // "people" the floor plan draws, and remembers how long each one has been in
 // its current state (the API reports state, not when it was entered).
 import { sanitize } from './text.mjs';
+import { pickManager, managerFirst, MANAGER_NAME } from './manager.mjs';
 
 // Who gets hired. Short, generic, and deliberately nobody in particular: a desk
 // labelled with a real colleague's name invites you to read something into what
@@ -110,6 +111,9 @@ export class Roster {
     // than about the checkout it is sitting in. Kept as the parse returned it, `session`
     // and all, because the previous reading is what turns the next one into news.
     this.heads = new Map(); // pane_id -> { gauge: { used, model, session } | null, at }
+    // A pane named as the manager by id (`--manager=`), for an agent whose tab cannot
+    // be renamed. Empty means the tab label decides (see src/manager.mjs).
+    this.managerPin = '';
   }
 
   setWorkspaces(workspaces = []) {
@@ -344,13 +348,27 @@ export class Roster {
           head: this.heads.get(id)?.gauge || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
+          manager: false, // settled below, with the names
         };
       })
       .sort((x, y) => seatKey(x, this.seats).localeCompare(seatKey(y, this.seats)));
 
-    this.people.forEach((person, i) => {
-      person.name = nickname(i);
-    });
+    // The manager goes to the front of the floor whatever seat its pane is in, and is
+    // called the manager rather than taking a name off the pool, so the people doing
+    // the work keep the names they would have had without it: the front row is still
+    // Ada, Bo, Cass.
+    const managerId = pickManager(this.people, this.managerPin);
+    this.people = managerFirst(this.people, managerId);
+    let seatNo = 0;
+    for (const person of this.people) {
+      if (person.id === managerId) {
+        person.manager = true;
+        person.name = MANAGER_NAME;
+      } else {
+        person.name = nickname(seatNo);
+        seatNo += 1;
+      }
+    }
 
     // Settle the reopening, once, on the first look after it. Anything still flagged as
     // restored was in the book and is not on the floor, so that desk went while the
@@ -374,6 +392,10 @@ export class Roster {
     const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
     for (const p of this.people) tally[p.status] = (tally[p.status] ?? 0) + 1;
     return tally;
+  }
+
+  manager() {
+    return this.people.find((p) => p.manager) || null;
   }
 
   find(id) {

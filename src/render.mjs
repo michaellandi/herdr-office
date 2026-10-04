@@ -8,6 +8,7 @@ import { terms } from './filter.mjs';
 import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
 import { pressure, headBadge, headWords } from './head.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
+import { officeBrief } from './manager.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
 // rounding contest.
@@ -456,6 +457,114 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   return rows;
 }
 
+// The manager's desk. Same frame and footprint as everybody else's, so walking,
+// clicking and paging need no special case, but where a desk has a person and a
+// monitor this one has a clipboard: the rest of the floor, in the order it needs
+// you, one line each. The agent behind it is real and can still be opened, focused,
+// briefed and answered; the clipboard is what the office already knows, drawn
+// before anybody has asked the agent anything.
+const CLIP_ROWS = 7;
+const CLIP_NAME = 7;
+
+// The brief the manager's desk draws. office.mjs hands one in, built from the whole
+// roster so a filter cannot hide a raised hand from the manager; a test rendering a
+// bare view gets one built from whoever is on the floor.
+const briefOf = (view) => view.brief || officeBrief(view.people, { now: view.now });
+
+function clipLine(item, i, total) {
+  const b = cells();
+  if (!item) return b.gap(INNER).out();
+  // The last line says how many did not fit rather than silently dropping them.
+  if (i === CLIP_ROWS - 1 && total > CLIP_ROWS) {
+    b.add(`  +${total - i} more`, { fg: P.dim });
+    return b.gap(INNER).out();
+  }
+  const p = item.person;
+  const st = status(p.status);
+  b.add('▌', { fg: st.fg });
+  b.add(' ');
+  b.add(padEnd(truncate(p.name, CLIP_NAME - 1), CLIP_NAME), { fg: P.ink, bold: p.status === 'blocked' });
+  b.add(truncate(item.why, INNER - b.w), { fg: p.status === 'blocked' ? st.fg : P.soft });
+  return b.gap(INNER).out();
+}
+
+function managerTile(person, brief, { selected, frame, now, lifted = false, dropTarget = false }) {
+  const st = status(person.status);
+  const alert = person.status === 'blocked' && frame % 4 < 2;
+  // The same precedence as a desk, with the manager's own paper colour where a desk
+  // would take its room's: the manager works for the whole office, not one room.
+  const borderFg = dropTarget
+    ? P.accent
+    : lifted
+      ? P.faint
+      : selected
+        ? P.accent
+        : person.status === 'blocked'
+          ? (alert && st.hot) || st.fg
+          : P.manager;
+  const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)) };
+  const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
+  const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
+
+  const plate = cells();
+  plate.add('▌', { fg: P.manager });
+  plate.add(' ');
+  plate.add(truncate(person.name, 12), { fg: P.ink, bold: true });
+  if (person.focused) plate.add(' *', { fg: P.accent, bold: true });
+  const kind = truncate(person.kind, 10);
+  plate.gap(INNER - width(kind));
+  plate.add(kind, { fg: P.dim });
+  plate.gap(INNER);
+
+  // The headline sits where a desk's tab card would, on the manager's paper. A
+  // raised hand still takes the row, exactly as it does on a desk: the manager
+  // being stuck matters more than anything it has to say about everybody else.
+  const top = person.status === 'blocked'
+    ? speechBubble(person.ask || 'needs your OK')
+    : {
+      text: ' '.repeat(CARD_TEXT_X) + padEnd(truncate(brief.headline, CARD_W - 2), CARD_W - 1),
+      spans: [
+        { from: CARD_X, to: INNER, bg: P.manager },
+        { from: CARD_TEXT_X, to: INNER, fg: P.clipboard, bold: true },
+      ],
+    };
+
+  const clip = [];
+  for (let i = 0; i < CLIP_ROWS; i += 1) {
+    const line = clipLine(brief.items[i], i, brief.items.length);
+    clip.push(row(line.text, line.spans, P.clipboard));
+  }
+
+  const bar = cells();
+  const dur = (person.assumedSince ? '~' : '') + formatDuration(now - person.since);
+  bar.add('▌ ', { fg: st.fg });
+  bar.add(st.label, { fg: st.fg, bold: alert || person.status === 'blocked' });
+  bar.gap(INNER - width(dur));
+  bar.add(dur, { fg: P.dim });
+  bar.gap(INNER);
+
+  const foot = cells();
+  foot.add('office manager', { fg: P.dim });
+  foot.gap(INNER - 7);
+  foot.add('m brief', { fg: P.soft });
+  foot.gap(INNER);
+
+  const rows = [
+    edge('╭', '╮', TILE_W, chrome),
+    blank(),
+    row(plate.out().text, plate.out().spans),
+    blank(),
+    row(top.text, top.spans),
+    ...clip,
+    blank(),
+    row(bar.out().text, bar.out().spans),
+    row(foot.out().text, foot.out().spans),
+    edge('╰', '╯', TILE_W, chrome),
+  ];
+  if (rows.length !== TILE_H) throw new Error(`the manager's desk is ${rows.length} rows, want TILE_H ${TILE_H}`);
+  return rows;
+}
+
 // The empty desk at the end of the row. Same frame, same footprint, nobody in
 // the chair: an office with a spare desk in it invites you to fill it, which is
 // a better affordance than a key nobody knows about.
@@ -607,6 +716,8 @@ function keyHints(view) {
   if (view.compose) {
     if (view.compose.sending) return [['', 'sending']];
     if (view.compose.confirm) {
+      // A brief was never typed, so there is no text to go back to.
+      if (view.compose.scope === 'brief') return [['enter', `brief ${view.compose.name || 'the manager'}`], ['esc', 'drop it']];
       const n = (view.compose.to || []).length;
       return [['enter', `send it to ${n} ${n === 1 ? 'person' : 'people'}`], ['esc', 'back to the text']];
     }
@@ -628,7 +739,7 @@ function keyHints(view) {
     return [
       ['hjkl', 'pick an agent'],
       ['enter', view.hire.worktree ? 'hire into a worktree' : 'hire them'],
-      ...(view.hire.worktree ? [['e', 'name the branch'], ['t', 'no worktree']] : [['w', 'in a new worktree']]),
+      ...(view.hire.manager ? [] : view.hire.worktree ? [['e', 'name the branch'], ['t', 'no worktree']] : [['w', 'in a new worktree']]),
       ['esc', 'never mind'],
     ];
   }
@@ -664,6 +775,8 @@ function keyHints(view) {
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
+    // One key for the manager either way: brief the one there is, or hire one.
+    view.people.some((p) => p.manager) ? ['m', 'brief the manager'] : ['M', 'hire a manager'],
     ['b', 'next raised hand'],
     ...(view.following ? [['F', 'stop following']] : [['F', 'follow hands']]),
     // The hint names what the key will do next rather than where you are, because
@@ -1026,12 +1139,16 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     // The last thing it was heard saying, when there is no pane title to use. Some agents
     // set no title at all, and this column used to fall all the way through to the pane id,
     // which is a row that tells you where a thing is and nothing about what it is doing.
+    // The manager's row carries the headline off its clipboard, which is the one
+    // line of the brief that fits on one line.
     const tail =
       person.status === 'blocked'
         ? person.ask || 'needs your OK'
-        : news
-          ? news.label
-          : person.title || person.said || person.id;
+        : person.manager
+          ? briefOf(view).headline
+          : news
+            ? news.label
+            : person.title || person.said || person.id;
     // The tab name says which job this is, so it beats the agent's brand name to
     // the remaining space even though it is drawn after it. Both tests reserve a
     // fixed 16 cells for the tail rather than measuring this row's, so every row
@@ -1176,7 +1293,9 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
   // should be able to create one without the screen having said so.
   const subtitle = hire.pending
     ? ` · starting ${hire.pending}`
-    : hire.worktree
+    : hire.manager
+      ? ' · who should run the office?'
+      : hire.worktree
       ? ' · into a new worktree'
       : ' · who do you want at that desk?';
   const head = cells();
@@ -1194,7 +1313,9 @@ function hirePanel(view, panelRows, hitboxes, startRow) {
   // Drawn over a failed hire too, because "not a trusted repository" and "that
   // branch already exists" are both fixed from this row, and hiding it would mean
   // starting the whole hire again to change one word.
-  if (!hire.pending && panelRows >= 6) {
+  // Not for a manager, which is a plain tab: it reads the whole office rather than
+  // working in one checkout, so a branch of its own would be a branch for nothing.
+  if (!hire.pending && !hire.manager && panelRows >= 6) {
     const b = cells();
     const button = (label, action, style) => {
       const from = b.w;
@@ -1326,7 +1447,7 @@ function composePanel(view, panelRows) {
 
   const who = compose.scope === 'all'
     ? `standup · ${to.length} ${to.length === 1 ? 'person' : 'people'}`
-    : `${compose.scope === 'reply' ? 'answer' : 'assign'} · ${compose.name || compose.id}`;
+    : `${compose.scope === 'reply' ? 'answer' : compose.scope === 'brief' ? 'brief' : 'assign'} · ${compose.name || compose.id}`;
   const head = cells();
   head.add('╭─ ');
   head.add(truncate(who, Math.max(0, PW - 6)), { fg: P.ink, bold: true });
@@ -1351,7 +1472,11 @@ function composePanel(view, panelRows) {
   // The field. Three rows at most, and only as many as the panel can spare, with
   // the end of what you typed always visible because that is where the cursor is.
   const fieldRows = Math.max(1, Math.min(3, panelRows - 4 - (asking ? 1 : 0)));
-  const lines = wrapField(compose.text, TEXT - 2, fieldRows);
+  // A brief is read from the top, because nobody typed it and its first line is the
+  // headline; everything else is typed, so it shows the end where the cursor is.
+  const lines = compose.scope === 'brief'
+    ? wrapField(compose.text, TEXT - 2, Infinity).slice(0, fieldRows)
+    : wrapField(compose.text, TEXT - 2, fieldRows);
   lines.forEach((text, i) => {
     const b = cells();
     b.add(' ');
@@ -1385,8 +1510,10 @@ function composePanel(view, panelRows) {
   if (body.length < panelRows - 1) {
     const hint = compose.sending
       ? 'sending'
-      : compose.confirm
-        ? `enter to send this to ${to.length} ${to.length === 1 ? 'person' : 'people'} · esc to go back`
+      : compose.confirm && compose.scope === 'brief'
+        ? `enter sends the whole office brief to ${compose.name || 'the manager'} · esc to drop it`
+        : compose.confirm
+          ? `enter to send this to ${to.length} ${to.length === 1 ? 'person' : 'people'} · esc to go back`
         : compose.scope === 'all'
           ? 'type it out · enter to review who gets it · esc to drop it'
           : compose.scope === 'reply'
@@ -1726,12 +1853,7 @@ export function renderFrame(view) {
         }
         const person = slot.person;
         hitboxes.push({ id: person.id, x, y, w: TILE_W, h: TILE_H });
-        // The [y] and [n] on their monitor take clicks in their own right, so a
-        // raised hand can be dealt with without opening anything.
-        if (person.status === 'blocked') {
-          for (const btn of BUTTONS) hitboxes.push({ id: person.id, action: btn.action, x: x + btn.x, y: y + btn.y, w: btn.w, h: btn.h });
-        }
-        return tile(person, {
+        const drag = {
           selected: person.id === view.selectedId,
           frame: view.frame,
           now: view.now,
@@ -1739,8 +1861,16 @@ export function renderFrame(view) {
           // it, so the room never looks settled while it is still moving.
           lifted: (Boolean(view.drag?.active) && person.id === view.drag.id) || Boolean(view.busy?.has(person.id)),
           dropTarget: Boolean(view.drag?.active) && person.id === view.drag.overId && person.id !== view.drag.id,
-          wall: roomWall(view.rooms, person),
-        });
+        };
+        // The manager has a clipboard where the monitor would be, so there are no
+        // [y] and [n] on it to click; y and n still answer it from the keyboard.
+        if (person.manager) return managerTile(person, briefOf(view), drag);
+        // The [y] and [n] on their monitor take clicks in their own right, so a
+        // raised hand can be dealt with without opening anything.
+        if (person.status === 'blocked') {
+          for (const btn of BUTTONS) hitboxes.push({ id: person.id, action: btn.action, x: x + btn.x, y: y + btn.y, w: btn.w, h: btn.h });
+        }
+        return tile(person, { ...drag, wall: roomWall(view.rooms, person) });
       });
       const span = rendered.length * TILE_W + (rendered.length - 1) * GAP_X;
       for (let k = 0; k < TILE_H; k += 1) {

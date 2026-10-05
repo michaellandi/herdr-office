@@ -791,3 +791,35 @@ test('B briefs the manager once, after an enter, and esc sends nothing', async (
     await office.stop();
   }
 });
+
+test('a hired manager does not take the notices key away from m', async () => {
+  // The guard for a bug that merged without a conflict. Two features arrived separately
+  // and both wanted `m`: one to walk what the office has noticed, one to brief the
+  // manager. Each tested its own key on a floor the other feature was absent from, so
+  // both suites passed while the first handler in onInput silently won and the other key
+  // became dead code.
+  //
+  // Asserted on the brief panel rather than on the notice counter, because the counter
+  // only renders once there are two notices and it shares the footer slot with any
+  // message, so keying the test to it would make it fail for reasons that are not this
+  // bug. Under the bug `m` opens the brief, which is unambiguous.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'idle', 2)],
+    args: ['--manager=w1:p3'],
+    screenText: 'Working on it\n  Opus | Context: 94% | session: 19h 03m',
+    cols: 200,
+  });
+  try {
+    await office.ready('Manager');
+    office.type('m');
+    await settle();
+    assert.ok(!office.onScreen('enter sends the whole office brief'), 'm opened the brief');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'm briefed the manager');
+    // And the key the brief did move to still works, so this is a rebind and not a
+    // feature quietly dropped to resolve the clash.
+    office.type('B');
+    await office.until('the brief', () => office.onScreen('enter sends the whole office brief'));
+  } finally {
+    await office.stop();
+  }
+});

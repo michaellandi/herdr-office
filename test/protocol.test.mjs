@@ -98,8 +98,14 @@ function variants(defPath) {
 
 /* ------------------------------------------ what the office actually sends */
 
+// `scripts/` is in here for a reason worth keeping. This used to scan office.mjs and
+// src/ only, and so it sat green through the 0.9.2 port while scripts/graphics-doctor.mjs
+// went on calling three methods the server had stopped having. A diagnostic that cannot
+// run is worse than no diagnostic, because you reach for it exactly when something else
+// is already wrong. Anything in this repository that talks to the socket gets checked.
 function sources() {
-  const files = ['office.mjs', ...readdirSync(join(ROOT, 'src')).filter((f) => f.endsWith('.mjs')).map((f) => join('src', f))];
+  const mjs = (dir) => readdirSync(join(ROOT, dir)).filter((f) => f.endsWith('.mjs')).map((f) => join(dir, f));
+  const files = ['office.mjs', ...mjs('src'), ...mjs('scripts')];
   return files.map((rel) => ({ rel, text: readFileSync(join(ROOT, rel), 'utf8') }));
 }
 

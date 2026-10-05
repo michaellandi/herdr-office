@@ -53,7 +53,11 @@ const CHUNK = 4096;
 
 // Image ids are a small integer namespace shared with anything else drawing in this
 // pane. Nothing else is, in practice, but starting well away from 1 costs nothing.
-const ID_BASE = 7311;
+//
+// Exported for scripts/graphics-doctor.mjs, which has to name an id in a run that drew
+// nothing: taking down a layer left up by an earlier run is a delete and no more. The
+// alternative was writing 7311 in two files and hoping.
+export const ID_BASE = 7311;
 
 // What a cell is, in pixels, when nothing has said otherwise.
 //

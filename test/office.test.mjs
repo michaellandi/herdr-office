@@ -757,3 +757,69 @@ test('the first press takes you to the notice on screen rather than past it', as
     await office.stop();
   }
 });
+
+test('B briefs the manager once, after an enter, and esc sends nothing', async () => {
+  // Pinned by id, since this fake herdr has one tab and it is not called office-manager.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'blocked', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'idle', 2)],
+    args: ['--manager=w1:p3'],
+    screenText: 'Do you want me to apply the patch? (y/n)',
+  });
+  try {
+    await office.ready('Manager');
+    office.type('B');
+    await office.until('the confirm', () => office.onScreen('enter sends the whole office brief'));
+    office.type('\x1b');
+    await settle();
+    assert.deepEqual(office.sent('agent.prompt'), [], 'esc on a brief sent it anyway');
+
+    office.type('B');
+    await office.until('the confirm again', () => office.onScreen('brief · Manager'));
+    office.type('\r');
+    await office.until('the brief', () => office.sent('agent.prompt').length >= 1);
+    await settle();
+    const prompts = office.sent('agent.prompt');
+    assert.equal(prompts.length, 1, 'the brief went more than once');
+    assert.equal(prompts[0].params.target, 'w1:p3', 'the brief went to somebody other than the manager');
+    const text = prompts[0].params.text;
+    assert.ok(text.includes('office manager') && text.includes('1 needs you'), text);
+    // One line on the wire, and nothing read off the stuck desk's screen.
+    assert.ok(!text.includes('\n'), 'the brief went out as more than one line');
+    assert.ok(!text.includes('apply the patch'), 'an ask went into the brief');
+    assert.deepEqual(office.sent('agent.send_keys'), [], 'a brief typed keys at somebody');
+  } finally {
+    await office.stop();
+  }
+});
+
+test('a hired manager does not take the notices key away from m', async () => {
+  // The guard for a bug that merged without a conflict. Two features arrived separately
+  // and both wanted `m`: one to walk what the office has noticed, one to brief the
+  // manager. Each tested its own key on a floor the other feature was absent from, so
+  // both suites passed while the first handler in onInput silently won and the other key
+  // became dead code.
+  //
+  // Asserted on the brief panel rather than on the notice counter, because the counter
+  // only renders once there are two notices and it shares the footer slot with any
+  // message, so keying the test to it would make it fail for reasons that are not this
+  // bug. Under the bug `m` opens the brief, which is unambiguous.
+  const office = await openOffice({
+    agents: [desk('w1:p1', 'working', 0), desk('w1:p2', 'working', 1), desk('w1:p3', 'idle', 2)],
+    args: ['--manager=w1:p3'],
+    screenText: 'Working on it\n  Opus | Context: 94% | session: 19h 03m',
+    cols: 200,
+  });
+  try {
+    await office.ready('Manager');
+    office.type('m');
+    await settle();
+    assert.ok(!office.onScreen('enter sends the whole office brief'), 'm opened the brief');
+    assert.deepEqual(office.sent('agent.prompt'), [], 'm briefed the manager');
+    // And the key the brief did move to still works, so this is a rebind and not a
+    // feature quietly dropped to resolve the clash.
+    office.type('B');
+    await office.until('the brief', () => office.onScreen('enter sends the whole office brief'));
+  } finally {
+    await office.stop();
+  }
+});

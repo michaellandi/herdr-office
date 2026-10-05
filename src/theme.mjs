@@ -60,6 +60,10 @@ export const P = {
   dim: '#6b7789',
   faint: '#4a5566',
   accent: '#5ec8f5',
+  // The manager's cubicle and its clipboard. Paper-coloured on purpose: every hue in
+  // the room already means a status, and the manager is a role, not a state.
+  manager: '#d6d0c4',
+  clipboard: '#262d3a',
 };
 
 // News over a desk: the tests went green, the build broke, a rebase hit a

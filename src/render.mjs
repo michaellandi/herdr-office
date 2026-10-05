@@ -665,6 +665,11 @@ function keyHints(view) {
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
     ['b', 'next raised hand'],
+    // Only offered when there is something to read, which is most of the point: the
+    // hint appearing in the footer is itself the signal that the manager has noticed
+    // something, on a floor where the notice line may have scrolled past under a
+    // four second message.
+    ...((view.notices?.length ?? 0) > 1 ? [['m', 'next notice']] : view.notices?.length ? [['m', 'go to the notice']] : []),
     ...(view.following ? [['F', 'stop following']] : [['F', 'follow hands']]),
     // The hint names what the key will do next rather than where you are, because
     // one key cycling three states is only learnable if it tells you the next one.
@@ -676,6 +681,25 @@ function keyHints(view) {
   ];
 }
 
+// What the office manager has noticed, as one line (see src/notices.mjs). It shares
+// the message slot rather than taking a row of its own, and it deliberately loses to
+// anything in that slot, because the two are different kinds of statement: a message
+// is the answer to a key you just pressed and it lasts four seconds, and a notice was
+// true before you touched anything and will still be true afterwards. So a keystroke's
+// answer is never buried under a standing fact, and the standing fact comes back by
+// itself when the answer has been read.
+//
+// `n/total` rather than a count of the rest, because it is also the only way to tell
+// that the key is doing anything on a floor where two notices happen to be the same
+// length. The number is 1-based: it is being read by a person, not indexing anything.
+function noticeLine(view) {
+  const list = Array.isArray(view.notices) ? view.notices : [];
+  if (!list.length) return '';
+  const at = Math.min(Math.max(0, Math.floor(view.noticeAt) || 0), list.length - 1);
+  const of = list.length > 1 ? `   ${at + 1}/${list.length}` : '';
+  return `! ${list[at].text}${of}`;
+}
+
 function footerLines(view) {
   const { size } = view;
   const b = cells();
@@ -684,7 +708,7 @@ function footerLines(view) {
   // aside BEFORE the hints fill the row. A footer that ran out of space used to
   // truncate the message to nothing, which meant a refusal ("Cass has a hand up:
   // answer that first") was a keystroke that visibly did nothing at all.
-  const msg = view.message ? truncate(view.message, Math.max(0, size.cols - 8)) : '';
+  const msg = truncate(view.message || noticeLine(view), Math.max(0, size.cols - 8));
   const room = size.cols - 2 - (msg ? width(msg) + 2 : 0);
   for (const [key, label] of keyHints(view)) {
     if (b.w + width(key) + width(label) + 4 > room) break;

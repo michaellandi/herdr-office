@@ -1613,7 +1613,10 @@ function onInput(chunk) {
     return;
   }
 
-  if (str === '\x03' || str === 'q') return quit(0);
+  // `q` is only "leave" while no field has the keyboard: typed into the assign
+  // field, the filter or a branch name it is a letter, not a way out of the office.
+  const typing = compose || filtering || hire?.editing;
+  if (str === '\x03' || (str === 'q' && !typing)) return quit(0);
   // esc closes the panel. Enter no longer does: the panel shares the pane with
   // the floor now, so enter still means "show me this desk" even while one is
   // open, which is what walking to a new desk and hitting it should do.

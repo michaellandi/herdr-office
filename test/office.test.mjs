@@ -311,6 +311,33 @@ test('dropping a standup writes to nobody', async () => {
   }
 });
 
+test('a q typed into a field is a letter, not a way out of the office', async () => {
+  // Typed one key at a time, the way a person types, because a chunk that is
+  // exactly `q` is the case that used to reach quit before any field saw it.
+  const office = await openOffice({ agents: [desk('w1:p1', 'idle', 0)] });
+  try {
+    await office.ready('1 desk');
+    office.type('/');
+    await office.until('the filter field', () => office.onScreen('to narrow the floor'));
+    office.type('q');
+    await office.until('the q in the filter', () => office.onScreen('/q_'));
+    office.type('\x1b');
+    await office.until('the filter to close', () => office.onScreen('1 desk '));
+    office.type('a');
+    await office.until('the assign field', () => office.onScreen('enter to send it'));
+    for (const key of 'fix the query') {
+      office.type(key);
+      await settle();
+    }
+    await office.until('the typed text', () => office.onScreen('fix the query'));
+    office.type('\r');
+    await office.until('the prompt', () => office.sent('agent.prompt').length >= 1);
+    assert.equal(office.sent('agent.prompt')[0].params.text, 'fix the query', 'the q never made it into the prompt');
+  } finally {
+    await office.stop();
+  }
+});
+
 // A prompt that offers a standing permission, with the always option deliberately
 // at 3 rather than 2, so a test that passed against a hardcoded digit fails here.
 const MENU_WITH_ALWAYS = [

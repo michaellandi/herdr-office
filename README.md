@@ -17,6 +17,8 @@ which job without opening anything. When someone gets stuck, a **speech bubble**
 appears over their head with the actual thing they are waiting on, and `y` / `n`
 answers it from right here without walking over to their pane.
 
+Prefer a native window? [herdr-office-layout](https://github.com/michaellandi/herdr-office-layout) is the same office as a Herdr app layout: a GPU-drawn floor above your live tab, with the approval cards, a lounge, and the helpers each agent starts.
+
 ## Install
 
 ```sh
